@@ -1,0 +1,35 @@
+{
+  "name": "Argos ROS 2 Humble",
+  "dockerComposeFile": "../docker-compose.yaml",
+  "service": "argos-ros2",
+  "workspaceFolder": "/workspace",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-iot.vscode-ros",
+        "redhat.vscode-yaml",
+        "twxs.cmake",
+        "ms-vscode.cmake-tools",
+        "smilerobotics.urdf",
+        "eamodio.gitlens"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/bin/python3",
+        "terminal.integrated.defaultProfile.linux": "bash",
+        "ros.distro": "humble",
+        "editor.formatOnSave": true,
+        "files.trimTrailingWhitespace": true
+      }
+    }
+  },
+  "remoteEnv": {
+    "ROS_DOMAIN_ID": "42",
+    "ROS_LOCALHOST_ONLY": "0"
+  },
+  "postCreateCommand": "bash /workspace/.devcontainer/post_create.sh",
+  "shutdownAction": "stopCompose",
+  "overrideCommand": true
+}

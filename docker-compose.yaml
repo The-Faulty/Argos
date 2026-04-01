@@ -1,0 +1,20 @@
+services:
+  argos-ros2:
+    image: argos-ros2-humble
+    build:
+      context: .
+      dockerfile: Dockerfile
+    network_mode: "host"
+    privileged: true
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - seccomp:unconfined
+    volumes:
+      # Mount the entire Argos project into the container
+      - .:/workspace
+    environment:
+      - DISPLAY=${DISPLAY:-}
+      - ROS_DOMAIN_ID=42
+    # Keep container alive
+    command: /bin/sh -c "while sleep 1000; do :; done"
