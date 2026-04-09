@@ -1,0 +1,17 @@
+# Argos udev rules for the Raspberry Pi.
+# Replace these with serial-number-specific rules once the final hardware is on hand.
+#
+# Install on the Pi:
+#   sudo cp 99-argos-devices.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload-rules
+#   sudo udevadm trigger
+#
+# Check devices:
+#   udevadm info -a -n /dev/ttyUSB0
+#   udevadm info -a -n /dev/ttyACM0
+
+# RPLiDAR A1M8 via CP2102 USB-UART bridge
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="ttyLIDAR", GROUP="dialout", MODE="0660"
+
+# Teensy 4.0 running micro-ROS
+SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="0483", SYMLINK+="ttyTEENSY", GROUP="dialout", MODE="0660"

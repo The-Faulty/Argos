@@ -16,5 +16,7 @@ services:
     environment:
       - DISPLAY=${DISPLAY:-}
       - ROS_DOMAIN_ID=42
-    # Keep container alive
+      - ROS_LOCALHOST_ONLY=0
+    tty: true
+    stdin_open: true
     command: /bin/sh -c "while sleep 1000; do :; done"
