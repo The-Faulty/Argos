@@ -1,12 +1,11 @@
-"""ROS 2 command multiplexer for teleop and navigation inputs."""
+"""Pick the freshest motion command from teleop, nav, or e-stop."""
 
 import rclpy
 from geometry_msgs.msg import Twist
 from rclpy.node import Node
 from std_msgs.msg import Bool, String
 
-from .ros_contract import TOPICS
-from .ros_helpers import copy_twist, zero_twist
+from .ros_support import TOPICS, copy_twist, zero_twist
 
 
 class CommandMuxNode(Node):

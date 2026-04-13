@@ -1,4 +1,4 @@
-"""Launch the micro-ROS agent for the Teensy bridge."""
+"""Launch the micro-ROS agent for the ESP32-C6 bridge."""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -9,8 +9,8 @@ from launch_ros.actions import Node
 def generate_launch_description():
     serial_device_arg = DeclareLaunchArgument(
         "serial_device",
-        default_value="/dev/ttyTEENSY",
-        description="Serial device used by the Teensy.",
+        default_value="/dev/ttyESP32",
+        description="Serial device used by the ESP32-C6.",
     )
     baudrate_arg = DeclareLaunchArgument(
         "baudrate",

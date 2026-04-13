@@ -1,4 +1,4 @@
-"""Safety filter for Argos joint commands."""
+"""Clamp and rate-limit joint targets before they reach the MCU."""
 
 import numpy as np
 import rclpy
@@ -7,12 +7,12 @@ from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 
 from .Config import Configuration
-from .ros_contract import TOPICS
-from .ros_helpers import (
+from .ros_support import (
+    TOPICS,
+    crouch_joint_matrix,
     joint_limit_vectors,
     joint_state_from_positions,
     positions_from_joint_state,
-    stand_joint_matrix,
     matrix_to_ordered_positions,
 )
 
@@ -41,10 +41,12 @@ class SafetyNode(Node):
 
         self.config = Configuration()
         self.min_limits, self.max_limits = joint_limit_vectors(self.config)
-        self.stand_positions = matrix_to_ordered_positions(stand_joint_matrix(self.config))
+        self.crouch_positions = matrix_to_ordered_positions(
+            crouch_joint_matrix(self.config)
+        )
 
-        self.current_positions = self.stand_positions.copy()
-        self.target_positions = self.stand_positions.copy()
+        self.current_positions = self.crouch_positions.copy()
+        self.target_positions = self.crouch_positions.copy()
         self.last_raw_time = None
         self.estop_active = False
         self.update_period_s = 1.0 / update_rate_hz
@@ -77,7 +79,7 @@ class SafetyNode(Node):
 
     def _update(self):
         if self.estop_active or self._target_is_stale():
-            desired = self.stand_positions
+            desired = self.crouch_positions
         else:
             desired = self.target_positions
 

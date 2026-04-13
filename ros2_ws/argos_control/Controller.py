@@ -1,15 +1,9 @@
-"""Main gait controller for the Argos quadruped."""
+"""Legacy ROS 1 controller kept around for reference."""
 
 try:
-    from .Gaits import GaitController
-    from .StanceController import StanceController
-    from .SwingLegController import SwingController
-    from .State import BehaviorState
+    from .control_core import BehaviorState, GaitController, StanceController, SwingController
 except ImportError:
-    from Gaits import GaitController
-    from StanceController import StanceController
-    from SwingLegController import SwingController
-    from State import BehaviorState
+    from control_core import BehaviorState, GaitController, StanceController, SwingController
 
 from argos_utilities.Utilities import clipped_first_order_filter
 

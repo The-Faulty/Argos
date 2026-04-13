@@ -1,16 +1,16 @@
-"""Publish the safe joint command at a steady rate for the Teensy bridge."""
+"""Republish the latest safe joint target at a fixed rate."""
 
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
 
 from .Config import Configuration
-from .ros_contract import TOPICS
-from .ros_helpers import (
+from .ros_support import (
+    TOPICS,
+    crouch_joint_matrix,
     joint_state_from_positions,
     matrix_to_ordered_positions,
     positions_from_joint_state,
-    stand_joint_matrix,
 )
 
 
@@ -33,7 +33,7 @@ class JointCommandPublisherNode(Node):
         )
 
         config = Configuration()
-        self.latest_positions = matrix_to_ordered_positions(stand_joint_matrix(config))
+        self.latest_positions = matrix_to_ordered_positions(crouch_joint_matrix(config))
 
         self.command_pub = self.create_publisher(JointState, joint_command_topic, 10)
         self.joint_state_pub = self.create_publisher(JointState, joint_states_topic, 10)

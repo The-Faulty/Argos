@@ -3,7 +3,7 @@
 ## Device mapping
 
 - RPLiDAR A1M8: `/dev/ttyLIDAR`
-- Teensy 4.0 micro-ROS client: `/dev/ttyTEENSY`
+- ESP32-C6 micro-ROS client: `/dev/ttyESP32`
 - RealSense D435/D455: USB 3.0 camera device
 - MLX90640: I2C address `0x33`
 
@@ -24,13 +24,13 @@ sudo udevadm trigger
 1. Confirm the serial aliases exist:
 
 ```bash
-ls -l /dev/ttyLIDAR /dev/ttyTEENSY
+ls -l /dev/ttyLIDAR /dev/ttyESP32
 ```
 
 2. Start the micro-ROS agent:
 
 ```bash
-ros2 launch quadruped_bringup teensy_bridge.launch.py
+ros2 launch quadruped_bringup esp32_bridge.launch.py
 ```
 
 3. Start the robot description and control stack:
@@ -49,11 +49,11 @@ ros2 launch quadruped_bringup sensors.launch.py
 5. Or launch the full bench stack:
 
 ```bash
-ros2 launch quadruped_bringup full_system.launch.py enable_teensy:=true start_rviz:=true
+ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true start_rviz:=true
 ```
 
 ## Notes
 
 - The control stack currently mirrors commanded joints to `/joint_states` for bench visualization.
-- Once the Teensy publishes real `/joint_states`, disable the preview publisher in `control_stack.launch.py`.
+- Once the ESP32-C6 publishes real `/joint_states`, disable the preview publisher in `control_stack.launch.py`.
 - The RPLiDAR launch defaults to `frame_id:=lidar_link` to match the robot description.

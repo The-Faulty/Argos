@@ -1,4 +1,4 @@
-"""ROS 2 gait planner that turns body commands into joint targets."""
+"""Turn body commands into joint targets for crouch, stand, crawl, and trot."""
 
 from dataclasses import dataclass
 
@@ -11,13 +11,16 @@ from std_msgs.msg import Bool, String
 from transforms3d.euler import euler2mat
 
 from .Config import Configuration
-from .Gaits import GaitController
 from .Kinematics import four_legs_inverse_kinematics
-from .State import State
-from .StanceController import StanceController
-from .SwingLegController import SwingController
-from .ros_contract import TOPICS
-from .ros_helpers import clamp, euler_from_imu, joint_state_from_matrix, zero_twist
+from .control_core import GaitController, State, StanceController, SwingController
+from .ros_support import (
+    TOPICS,
+    clamp,
+    crouch_joint_matrix,
+    euler_from_imu,
+    joint_state_from_matrix,
+    zero_twist,
+)
 
 
 @dataclass
@@ -39,9 +42,19 @@ class GaitPlannerNode(Node):
         self.declare_parameter("imu_topic", TOPICS.imu_raw)
         self.declare_parameter("estop_topic", TOPICS.estop)
         self.declare_parameter("update_rate_hz", 50.0)
-        self.declare_parameter("default_mode", "stand")
+        self.declare_parameter("default_mode", "crouch")
         self.declare_parameter("max_height_offset_m", 0.08)
         self.declare_parameter("use_imu_stabilization", True)
+        self.declare_parameter("imu_filter_alpha", 0.15)
+        self.declare_parameter("stabilization_roll_gain", 0.6)
+        self.declare_parameter("stabilization_pitch_gain", 0.6)
+        self.declare_parameter("stabilization_max_correction_rad", 0.25)
+        self.declare_parameter("enable_push_recovery", True)
+        self.declare_parameter("push_recovery_tilt_threshold_rad", 0.18)
+        self.declare_parameter("push_recovery_hold_s", 1.0)
+        self.declare_parameter("recovery_stance_scale_x", 1.05)
+        self.declare_parameter("recovery_stance_scale_y", 1.12)
+        self.declare_parameter("recovery_height_offset_m", -0.01)
 
         command_topic = self.get_parameter("command_topic").value
         gait_mode_topic = self.get_parameter("gait_mode_topic").value
@@ -56,6 +69,36 @@ class GaitPlannerNode(Node):
         self.use_imu_stabilization = bool(
             self.get_parameter("use_imu_stabilization").value
         )
+        self.imu_filter_alpha = clamp(
+            float(self.get_parameter("imu_filter_alpha").value), 0.0, 1.0
+        )
+        self.stabilization_roll_gain = max(
+            0.0, float(self.get_parameter("stabilization_roll_gain").value)
+        )
+        self.stabilization_pitch_gain = max(
+            0.0, float(self.get_parameter("stabilization_pitch_gain").value)
+        )
+        self.stabilization_max_correction_rad = max(
+            0.0, float(self.get_parameter("stabilization_max_correction_rad").value)
+        )
+        self.enable_push_recovery = bool(
+            self.get_parameter("enable_push_recovery").value
+        )
+        self.push_recovery_tilt_threshold_rad = max(
+            0.0, float(self.get_parameter("push_recovery_tilt_threshold_rad").value)
+        )
+        self.push_recovery_hold_ns = int(
+            max(0.0, float(self.get_parameter("push_recovery_hold_s").value)) * 1e9
+        )
+        self.recovery_stance_scale_x = max(
+            1.0, float(self.get_parameter("recovery_stance_scale_x").value)
+        )
+        self.recovery_stance_scale_y = max(
+            1.0, float(self.get_parameter("recovery_stance_scale_y").value)
+        )
+        self.recovery_height_offset_m = float(
+            self.get_parameter("recovery_height_offset_m").value
+        )
 
         self.config = Configuration()
         self.state = State()
@@ -66,7 +109,10 @@ class GaitPlannerNode(Node):
         self.current_twist = zero_twist()
         self.current_mode = str(self.get_parameter("default_mode").value).strip().lower()
         self.estop_active = False
-        self.imu_euler = (0.0, 0.0, 0.0)
+        self.imu_euler = np.zeros(3, dtype=float)
+        self.imu_received = False
+        self.push_recovery_until_ns = 0
+        self.push_recovery_active = False
 
         self.state.foot_locations = (
             self.config.default_stance
@@ -91,7 +137,7 @@ class GaitPlannerNode(Node):
         mode = msg.data.strip().lower()
         if not mode:
             return
-        if mode not in {"stand", "crawl", "trot"}:
+        if mode not in {"crouch", "stand", "crawl", "trot"}:
             self.get_logger().warning(f"Ignoring unsupported gait mode '{mode}'")
             return
         if mode != self.current_mode:
@@ -104,7 +150,15 @@ class GaitPlannerNode(Node):
         self.estop_active = bool(msg.data)
 
     def _imu_callback(self, msg: Imu):
-        self.imu_euler = euler_from_imu(msg)
+        sample = np.asarray(euler_from_imu(msg), dtype=float)
+        if not self.imu_received:
+            self.imu_euler = sample
+            self.imu_received = True
+            return
+        self.imu_euler = (
+            (1.0 - self.imu_filter_alpha) * self.imu_euler
+            + self.imu_filter_alpha * sample
+        )
 
     def _apply_gait_profile(self, mode: str):
         if mode == "crawl":
@@ -137,8 +191,12 @@ class GaitPlannerNode(Node):
             self.config.overlap_time = 0.0
             self.config.z_clearance = 0.04
 
-    def _build_command(self) -> MotionCommand:
-        twist = zero_twist() if self.estop_active else self.current_twist
+    def _build_command(self, push_recovery_active: bool) -> MotionCommand:
+        twist = (
+            zero_twist()
+            if self.estop_active or push_recovery_active
+            else self.current_twist
+        )
         return MotionCommand(
             horizontal_velocity=np.array(
                 [
@@ -158,16 +216,59 @@ class GaitPlannerNode(Node):
             roll=clamp(twist.angular.x, -self.config.max_pitch, self.config.max_pitch),
         )
 
+    def _update_push_recovery(self) -> bool:
+        if not (self.enable_push_recovery and self.imu_received):
+            self.push_recovery_active = False
+            return False
+
+        now_ns = self.get_clock().now().nanoseconds
+        roll, pitch, _ = self.imu_euler
+        tilt_exceeded = (
+            abs(roll) >= self.push_recovery_tilt_threshold_rad
+            or abs(pitch) >= self.push_recovery_tilt_threshold_rad
+        )
+        if tilt_exceeded:
+            self.push_recovery_until_ns = now_ns + self.push_recovery_hold_ns
+
+        active = now_ns < self.push_recovery_until_ns
+        if active and not self.push_recovery_active:
+            self.get_logger().warning(
+                "Push recovery active: holding a widened stand until tilt settles."
+            )
+        elif self.push_recovery_active and not active:
+            self.get_logger().info("Push recovery cleared; resuming requested gait.")
+        self.push_recovery_active = active
+        return active
+
     def _stabilise_with_imu(self, foot_locations: np.ndarray) -> np.ndarray:
-        _, pitch, roll = self.imu_euler
-        correction_factor = 0.5
-        max_tilt = 0.4
+        if not self.imu_received:
+            return foot_locations
+
+        roll, pitch, _ = self.imu_euler
         rmat = euler2mat(
-            correction_factor * clamp(-roll, -max_tilt, max_tilt),
-            correction_factor * clamp(-pitch, -max_tilt, max_tilt),
+            clamp(
+                -roll * self.stabilization_roll_gain,
+                -self.stabilization_max_correction_rad,
+                self.stabilization_max_correction_rad,
+            ),
+            clamp(
+                -pitch * self.stabilization_pitch_gain,
+                -self.stabilization_max_correction_rad,
+                self.stabilization_max_correction_rad,
+            ),
             0.0,
         )
         return rmat.T @ foot_locations
+
+    def _stand_foot_locations(
+        self, height: float, push_recovery_active: bool
+    ) -> np.ndarray:
+        stance = self.config.default_stance.copy()
+        if push_recovery_active:
+            stance[0, :] *= self.recovery_stance_scale_x
+            stance[1, :] *= self.recovery_stance_scale_y
+            height += self.recovery_height_offset_m
+        return stance + np.array([0.0, 0.0, height])[:, np.newaxis]
 
     def _step_gait(self, command: MotionCommand) -> np.ndarray:
         contact_modes = self.gait_controller.contacts(self.state.ticks)
@@ -191,22 +292,32 @@ class GaitPlannerNode(Node):
         return new_foot_locations
 
     def _update(self):
-        command = self._build_command()
+        push_recovery_active = self._update_push_recovery()
+        command = self._build_command(push_recovery_active)
 
         try:
-            if self.current_mode == "stand" or self.estop_active:
-                planned = (
-                    self.config.default_stance
-                    + np.array([0.0, 0.0, command.height])[:, np.newaxis]
+            if self.current_mode == "crouch":
+                angles = crouch_joint_matrix(self.config)
+                # Keep the nominal stand footprint in state so the next standing
+                # or walking mode starts from a known body-frame reference.
+                planned = self._stand_foot_locations(
+                    self.config.default_z_ref,
+                    push_recovery_active=False,
                 )
+                rotated = planned.copy()
             else:
-                planned = self._step_gait(command)
+                if self.current_mode == "stand" or self.estop_active or push_recovery_active:
+                    planned = self._stand_foot_locations(
+                        command.height,
+                        push_recovery_active=push_recovery_active,
+                    )
+                else:
+                    planned = self._step_gait(command)
 
-            rotated = euler2mat(command.roll, command.pitch, 0.0) @ planned
-            if self.use_imu_stabilization:
-                rotated = self._stabilise_with_imu(rotated)
-
-            angles = four_legs_inverse_kinematics(rotated, self.config)
+                rotated = euler2mat(command.roll, command.pitch, 0.0) @ planned
+                if self.use_imu_stabilization:
+                    rotated = self._stabilise_with_imu(rotated)
+                angles = four_legs_inverse_kinematics(rotated, self.config)
         except ValueError as exc:
             self.get_logger().warning(f"Skipping gait update: {exc}")
             return

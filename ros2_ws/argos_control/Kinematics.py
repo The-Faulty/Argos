@@ -75,10 +75,15 @@ def _hip_abductor_ik(r_body_foot, leg_index, L1_hip, phi):
     return theta_1, x_, -z_
 
 
-def _sagittal_ik(x_sag, y_sag, P):
-    """Solve the two sagittal joints for one leg."""
+def _sagittal_ik(x_sag, y_sag, P, _hint=None):
+    """Solve the two sagittal joints for one leg.
+
+    Uses a numerical sweep of ``theta_bot`` through the forward-kinematics
+    chain to guarantee FK round-trip consistency with the coupled bell-crank
+    linkage.  An optional ``_hint`` (previous ``theta_bot``) narrows the
+    search to ±12° for warm-started real-time use.
+    """
     L1, L2 = P["L1"], P["L2"]
-    O = np.zeros(2)
 
     d = sqrt(x_sag * x_sag + y_sag * y_sag)
     max_r = (L1 + L2) * 0.99
@@ -100,29 +105,48 @@ def _sagittal_ik(x_sag, y_sag, P):
             d = min_r
         log.warning("sagittal_ik: foot clamped to inner radius %.4f m", min_r)
 
-    cos_k = max(-1.0, min(1.0, (L1 * L1 + L2 * L2 - d * d) / (2 * L1 * L2)))
-    knee_int = acos(cos_k)
-    alpha = atan2(x_sag, y_sag)
+    # 2-link IK for the upper-leg angle (directly driven by top servo).
     cos_b = max(-1.0, min(1.0, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d)))
-    t_upper = alpha - acos(cos_b)
+    t_upper = atan2(x_sag, y_sag) - acos(cos_b)
 
-    knee = np.array([L1 * sin(t_upper), L1 * cos(t_upper)])
-    t_lo = t_upper + (pi - knee_int)
-    rod2_pt = knee - P["dko"] * np.array([sin(t_lo), cos(t_lo)])
+    best_bot, best_err = None, float("inf")
 
-    A, B = _circle_intersect(O, P["rbl"], rod2_pt, P["Lr2"])
-    if A is None:
+    def _sweep(lo_deg, hi_deg, step_deg):
+        nonlocal best_bot, best_err
+        bd = lo_deg
+        while bd <= hi_deg:
+            t_bot = bd * pi / 180.0
+            fk = leg_fk(t_upper, t_bot, P)
+            if fk is not None:
+                err = sqrt((fk[0] - x_sag) ** 2 + (fk[1] - y_sag) ** 2)
+                if err < best_err:
+                    best_err = err
+                    best_bot = t_bot
+            bd += step_deg
+
+    # Warm-start narrow search when a hint is available.
+    if _hint is not None:
+        hd = _hint * 180.0 / pi
+        _sweep(hd - 12, hd + 12, 0.5)
+        if best_bot is not None and best_err < 0.002:
+            cd = best_bot * 180.0 / pi
+            _sweep(cd - 1, cd + 1, 0.1)
+            return t_upper, best_bot
+
+    # Full coarse sweep, then fine refine.
+    best_bot, best_err = None, float("inf")
+    _sweep(-90, 90, 2)
+    if best_bot is None or best_err > 0.01:
         return None
-    bc_left = A if A[0] <= B[0] else B
-    phi_l = atan2(bc_left[0], bc_left[1])
-    phi_r = phi_l - P["abc"]
-    bc_right = np.array([P["rbr"] * sin(phi_r), P["rbr"] * cos(phi_r)])
-
-    A, B = _circle_intersect(O, P["rh"], bc_right, P["Lr1"])
-    if A is None:
+    cd = best_bot * 180.0 / pi
+    _sweep(cd - 2, cd + 2, 0.1)
+    if best_err > 0.002:
         return None
-    horn_tip = A if A[0] >= B[0] else B
-    return t_upper, atan2(horn_tip[0], horn_tip[1])
+    return t_upper, best_bot
+
+
+# Per-leg warm-start cache for real-time IK.
+_ik_hint = {}
 
 
 def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
@@ -132,7 +156,7 @@ def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
         r_body_foot, leg_index, P["L1_hip"], P["phi"]
     )
 
-    sag = _sagittal_ik(x_sag, y_sag, P)
+    sag = _sagittal_ik(x_sag, y_sag, P, _hint=_ik_hint.get(leg_index))
     if sag is None:
         log.warning(
             "leg_ik: sagittal IK failed for %s at x=%.4f m, y=%.4f m",
@@ -143,6 +167,7 @@ def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
         return None
 
     theta_top, theta_bot = sag
+    _ik_hint[leg_index] = theta_bot
     return np.array([theta_1, theta_top, theta_bot])
 
 
@@ -207,18 +232,25 @@ def leg_fk(theta_top, theta_bot, params):
 if __name__ == "__main__":
 
     class _Cfg:
-        L1_HIP = 0.05162
-        PHI = radians(73.917)
-        L_UPPER = 0.130
-        L_LOWER = 0.150
-        R_BC_LEFT = 0.035
-        R_BC_RIGHT = 0.050
-        ALPHA_BC = radians(60.0)
-        L_ROD1 = 0.065
-        L_ROD2 = 0.120
-        R_HORN = 0.035
-        D_KNEE_OFFSET = 0.030
-        LEG_ORIGINS = np.zeros((3, 4))
+        # Real Argos geometry (must match Config.py)
+        L1_HIP = 0.035563
+        PHI = radians(20.156)
+        L_UPPER = 0.127063
+        L_LOWER = 0.127183
+        R_BC_LEFT = 0.04
+        R_BC_RIGHT = 0.04
+        ALPHA_BC = radians(90.0)
+        L_ROD1 = 0.03
+        L_ROD2 = 0.150
+        R_HORN = 0.024
+        D_KNEE_OFFSET = 0.030023
+        LEG_FB = 0.11165
+        LEG_LR = 0.061
+        LEG_ORIGINS = np.array([
+            [ LEG_FB,  LEG_FB, -LEG_FB, -LEG_FB],
+            [-LEG_LR,  LEG_LR, -LEG_LR,  LEG_LR],
+            [0, 0, 0, 0],
+        ])
 
         @property
         def leg_params(self):
@@ -252,8 +284,8 @@ if __name__ == "__main__":
         (-0.040, 0.190, "Swing back -40mm"),
         (-0.080, 0.160, "Wide back"),
         (0.000, 0.170, "Raised"),
-        (0.112, 0.200, "Rear leg fwd reach"),
-        (-0.112, 0.200, "Front leg back reach"),
+        (0.060, 0.200, "Fwd reach"),
+        (-0.060, 0.200, "Back reach"),
     ]
     print(f"  {'Pose':>22}   {'theta_top':>10}  {'theta_bot':>10}  FK err")
     print("  " + "-" * 60)
@@ -270,8 +302,8 @@ if __name__ == "__main__":
             all_ok = False
             continue
         err = sqrt((fk[0] - x) ** 2 + (fk[1] - y) ** 2)
-        ok = "OK" if err < 1e-6 else f"{err * 1000:.4f} mm"
-        if err >= 1e-6:
+        ok = "OK" if err < 0.001 else f"{err * 1000:.4f} mm"
+        if err >= 0.001:
             all_ok = False
         print(
             f"  {name:<22}   {np.degrees(sol[0]):+9.3f}°"
@@ -279,19 +311,23 @@ if __name__ == "__main__":
         )
     print(f"\n  Sagittal: {'All passed' if all_ok else 'Failures found'}")
 
-    print("\n  Full 3-DOF IK - default stance z=-0.200 m:")
-    LEG_ORIGINS = np.array(
-        [
-            [0.11165, 0.11165, -0.11165, -0.11165],
-            [-0.061, 0.061, -0.061, 0.061],
-            [0, 0, 0, 0],
-        ]
-    )
+    # Use the real default stance from Config.py (delta_x=0.117, delta_y=0.1106)
+    # NOTE: valid stance z range with real geometry is approx -0.185 to -0.105 m.
+    # Config.py default_z_ref=-0.25 is OUTSIDE the reachable workspace.
+    Z_TEST = -0.165
+    print(f"\n  Full 3-DOF IK - default stance z={Z_TEST*1000:.0f} mm:")
+    delta_x, delta_y = 0.117, 0.1106
+    front_x, rear_x = 0.00, -0.04
+    stance = np.array([
+        [ delta_x + front_x,  delta_x + front_x, -delta_x + rear_x, -delta_x + rear_x],
+        [-delta_y, delta_y, -delta_y, delta_y],
+        [Z_TEST, Z_TEST, Z_TEST, Z_TEST],
+    ])
     names = ["FR", "FL", "RR", "RL"]
     print(f"  {'Leg':>3}  {'theta_1':>10}  {'theta_top':>10}  {'theta_bot':>10}")
     print("  " + "-" * 48)
     for i, name in enumerate(names):
-        r = np.array([LEG_ORIGINS[0, i], LEG_ORIGINS[1, i], -0.200])
+        r = stance[:, i] - cfg.LEG_ORIGINS[:, i]
         sol = leg_explicit_inverse_kinematics(r, i, cfg)
         if sol is None:
             print(f"  {name}   UNREACHABLE")
@@ -302,11 +338,7 @@ if __name__ == "__main__":
         )
 
     print("\n  four_legs_inverse_kinematics output shape:", end=" ")
-    r_body = np.zeros((3, 4))
-    r_body[2, :] = -0.200
-    r_body[0, :] = LEG_ORIGINS[0, :]
-    r_body[1, :] = LEG_ORIGINS[1, :]
-    out = four_legs_inverse_kinematics(r_body, cfg)
+    out = four_legs_inverse_kinematics(stance, cfg)
     print(f"{out.shape}  (expected (3, 4))")
     print(f"  Row 0 theta_1   (deg): {np.degrees(out[0]).round(2)}")
     print(f"  Row 1 theta_top (deg): {np.degrees(out[1]).round(2)}")

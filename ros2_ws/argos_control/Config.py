@@ -1,21 +1,7 @@
-"""
-Config.py  —  Argos SAR Quadruped Configuration
-================================================
-All physical dimensions are in METRES.
+"""Geometry and gait settings for the Argos quadruped.
 
-╔══════════════════════════════════════════════════════════════════╗
-║  IF YOUR LEG HAS DIFFERENT DIMENSIONS — EDIT THIS SECTION ONLY  ║
-╚══════════════════════════════════════════════════════════════════╝
-
-Everything that affects the kinematics lives in the
-"ARGOS LEG GEOMETRY" block below (search for ▼▼▼).
-All other parameters (gait timing, stance width, body geometry)
-are unchanged from Dingo and can be left alone for a single-leg test.
-
-Joint angle matrix  (3, 4)  — columns: [FR, FL, RR, RL]
-    Row 0:  theta_1    hip abductor    (lateral swing)
-    Row 1:  theta_top  upper leg       (top servo, direct drive)
-    Row 2:  theta_bot  lower leg       (bottom servo, via bell crank)
+All distances are in meters. If the hardware changes, the leg geometry section
+is the main place to update.
 """
 
 import numpy as np
@@ -47,7 +33,9 @@ class Configuration:
         self.rear_leg_x_shift  = -0.04
         self.front_leg_x_shift =  0.00
         self.delta_y           = 0.1106
-        self.default_z_ref     = -0.25
+        self.default_z_ref     = -0.165  # Valid range: ~-0.185 to -0.105 m
+        # NOTE: previous value of -0.25 is outside the IK workspace
+        # for the real Argos bell-crank geometry.
 
         # ── Swing params ──────────────────────────────────────────────────
         self.z_clearance = 0.07
@@ -75,76 +63,44 @@ class Configuration:
             [0, 0, 0, 0],
         ])
 
-        # ──────────────────────────────────────────────────────────────────
-        # ▼▼▼  ARGOS LEG GEOMETRY  —  EDIT ALL DIMENSIONS HERE  ▼▼▼
-        # ──────────────────────────────────────────────────────────────────
-        #
-        # How to measure each value:
-        #
-        #  HIP ABDUCTOR
-        #  ┌─────────────────────────────────────────────────────────────┐
-        #  │ L1_HIP  The distance from the body pivot (hip centre) to    │
-        #  │         the point where the leg hangs down.  Measure from   │
-        #  │         the coxa servo output shaft to the femur servo      │
-        #  │         output shaft along the coxa link.                   │
-        #  │                                                             │
-        #  │ PHI     The angle (radians) that the hip abductor link      │
-        #  │         makes with the horizontal when in the neutral       │
-        #  │         position.  From CAD: measure the angle between the  │
-        #  │         coxa link and the robot's lateral axis.             │
-        #  └─────────────────────────────────────────────────────────────┘
+        # Leg geometry. Update these values if the printed parts or linkage
+        # dimensions change.
 
-        self.L1_HIP = 0.05162   # m  Hip abductor link length (coxa)
-        self.PHI    = m.radians(73.917)
-        #              ^^^^ degrees — convert with m.radians()
+        # Hip abductor geometry:
+        # L1_HIP = coxa servo shaft to femur pivot.
+        # PHI = neutral coxa angle measured from the body lateral axis.
 
-        # ─── SAGITTAL LEG GEOMETRY ────────────────────────────────────────
-        #
-        #  L_UPPER  Upper leg (femur): measure from the TOP SERVO OUTPUT
-        #           SHAFT (= bell crank pivot) to the KNEE HINGE PIN.
-        #
-        #  L_LOWER  Lower leg (tibia): measure from the KNEE HINGE PIN
-        #           to the FOOT CONTACT POINT (tip of foot).
-        #
-        #  BELL CRANK  (1/6-circle piece, free bearing on top servo shaft)
-        #    R_BC_LEFT   distance from pivot to LEFT  arm tip  (→ Rod 2)
-        #    R_BC_RIGHT  distance from pivot to RIGHT arm tip  (← Rod 1)
-        #    ALPHA_BC    angle between the two arms in degrees
-        #                (right arm is ALPHA_BC degrees CLOCKWISE from left)
-        #
-        #  RODS
-        #    L_ROD1  Rod 1: bottom servo horn tip → bell crank RIGHT arm
-        #    L_ROD2  Rod 2: bell crank LEFT arm   → lower leg pivot
-        #
-        #  R_HORN  Bottom servo horn: shaft centre → Rod 1 pin hole.
-        #          This is the length of the servo horn arm itself.
-        #
-        #  D_KNEE_OFFSET  Distance from the KNEE HINGE to the ROD 2 PIVOT
-        #                 measured along the lower leg TOWARD the hip.
-        #                 The Rod 2 attachment is ABOVE the knee, so this
-        #                 value is subtracted (see Kinematics.py Step 3).
+        self.L1_HIP = 0.035563   # m  Hip abductor link length (coxa)
+        self.PHI    = m.radians(20.156)
 
-        self.L_UPPER = 0.130        # m  top servo shaft → knee hinge
-        self.L_LOWER = 0.150        # m  knee hinge → foot tip
+        # Sagittal linkage geometry:
+        # L_UPPER = top servo shaft to knee hinge.
+        # L_LOWER = knee hinge to foot tip.
+        # R_BC_LEFT / R_BC_RIGHT / ALPHA_BC describe the bell crank.
+        # L_ROD1 / L_ROD2 / R_HORN describe the lower linkage drive.
+        # D_KNEE_OFFSET is the rod-2 pickup point above the knee.
 
-        self.R_BC_LEFT   = 0.035    # m  bell crank left  arm (→ Rod 2)
-        self.R_BC_RIGHT  = 0.050    # m  bell crank right arm (← Rod 1)
-        self.ALPHA_BC    = m.radians(60.0)
-        #                     ^^^^ degrees
+        self.L_UPPER = 0.127063        # m  top servo shaft → knee hinge
+        self.L_LOWER = 0.127183        # m  knee hinge → foot tip
 
-        self.L_ROD1 = 0.065         # m  Rod 1 length
-        self.L_ROD2 = 0.120         # m  Rod 2 length
+        self.R_BC_LEFT   = 0.04    # m  bell crank left  arm (→ Rod 2)
+        self.R_BC_RIGHT  = 0.04    # m  bell crank right arm (← Rod 1)
+        self.ALPHA_BC    = m.radians(90.0)
 
-        self.R_HORN = 0.035         # m  bottom servo horn arm length
+        self.L_ROD1 = 0.03         # m  Rod 1 length
+        self.L_ROD2 = 0.150         # m  Rod 2 length
 
-        self.D_KNEE_OFFSET = 0.030  # m  Rod 2 pivot: above knee along lower leg
+        self.R_HORN = 0.024         # m  bottom servo horn arm length
+
+        self.D_KNEE_OFFSET = 0.030023  # m  Rod 2 pivot: above knee along lower leg
 
         # Global joint limits (radians) in row order [theta_1, theta_top, theta_bot].
-        # Keep these as a fallback/compatibility format.
+        # Tightened to match the coupled bell-crank workspace (validated via
+        # numerical IK sweep — see Kinematics.py self-test).
         self.JOINT_LIMITS_RAD = np.array([
-            [m.radians(-90.0),  m.radians(90.0)],    # hip abductor
-            [m.radians(-120.0), m.radians(120.0)],   # upper leg
-            [m.radians(-120.0), m.radians(120.0)],   # lower leg
+            [m.radians(-45.0),  m.radians(45.0)],    # hip abductor
+            [m.radians(-75.0),  m.radians(10.0)],    # upper leg (theta_top)
+            [m.radians(-20.0),  m.radians(80.0)],    # lower servo (theta_bot)
         ])
 
         # Per-leg joint limits (radians) with shape (3, 4, 2):
@@ -156,11 +112,7 @@ class Configuration:
             self.JOINT_LIMITS_RAD[:, np.newaxis, :], 4, axis=1
         )
 
-        # ▲▲▲  END OF DIMENSIONS TO EDIT  ▲▲▲
-        # ──────────────────────────────────────────────────────────────────
-
-        # ── Compatibility aliases ─────────────────────────────────────────
-        # Some downstream code from Dingo may still reference .L1 / .L2 / .L3
+        # Compatibility aliases for older code paths.
         self.L1 = self.L1_HIP
         self.L2 = self.L_UPPER
         self.L3 = self.L_LOWER

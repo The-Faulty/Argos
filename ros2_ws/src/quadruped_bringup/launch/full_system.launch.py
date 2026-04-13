@@ -1,4 +1,4 @@
-"""Launch the Argos description, control stack, sensors, and Teensy bridge."""
+"""Launch the Argos description, control stack, sensors, and ESP32 bridge."""
 
 import os
 
@@ -23,10 +23,15 @@ def generate_launch_description():
         default_value="true",
         description="Launch the LiDAR and RealSense bring-up.",
     )
-    enable_teensy_arg = DeclareLaunchArgument(
-        "enable_teensy",
+    enable_esp32_arg = DeclareLaunchArgument(
+        "enable_esp32",
         default_value="false",
         description="Launch the micro-ROS serial agent.",
+    )
+    enable_mission_arg = DeclareLaunchArgument(
+        "enable_mission",
+        default_value="false",
+        description="Launch the mission/perception bench nodes.",
     )
     start_rviz_arg = DeclareLaunchArgument(
         "start_rviz",
@@ -63,22 +68,33 @@ def generate_launch_description():
         }.items(),
     )
 
-    teensy_launch = IncludeLaunchDescription(
+    esp32_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(bringup_dir, "launch", "teensy_bridge.launch.py")
+            os.path.join(bringup_dir, "launch", "esp32_bridge.launch.py")
         ),
-        condition=IfCondition(LaunchConfiguration("enable_teensy")),
+        condition=IfCondition(LaunchConfiguration("enable_esp32")),
+    )
+    mission_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(bringup_dir, "launch", "mission_stack.launch.py")
+        ),
+        condition=IfCondition(LaunchConfiguration("enable_mission")),
+        launch_arguments={
+            "use_sim_time": LaunchConfiguration("use_sim_time"),
+        }.items(),
     )
 
     return LaunchDescription(
         [
             use_sim_time_arg,
             enable_sensors_arg,
-            enable_teensy_arg,
+            enable_esp32_arg,
+            enable_mission_arg,
             start_rviz_arg,
             state_publisher_launch,
             control_stack_launch,
             sensors_launch,
-            teensy_launch,
+            esp32_launch,
+            mission_launch,
         ]
     )

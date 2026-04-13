@@ -13,5 +13,8 @@
 # RPLiDAR A1M8 via CP2102 USB-UART bridge
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="ttyLIDAR", GROUP="dialout", MODE="0660"
 
-# Teensy 4.0 running micro-ROS
-SUBSYSTEM=="tty", ATTRS{idVendor}=="16c0", ATTRS{idProduct}=="0483", SYMLINK+="ttyTEENSY", GROUP="dialout", MODE="0660"
+# ESP32-C6 running micro-ROS
+# Replace idVendor/idProduct with the values reported by your exact ESP32-C6 USB interface.
+# Common boards expose native USB CDC or a separate USB-UART bridge, so the IDs vary.
+# Example format:
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="ttyESP32", GROUP="dialout", MODE="0660"

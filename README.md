@@ -2,14 +2,27 @@
 
 Argos is a low-cost search and rescue quadruped being built for Georgia Tech
 Senior Design in Spring 2026. The system is split between a Raspberry Pi 4
-running ROS 2 Humble and a Teensy 4.0 handling the fast control loop.
+running ROS 2 Humble and an ESP32-C6 handling the fast control loop.
+
+## Current expo focus
+
+The current design expo target is intentionally narrow:
+
+- stable stand and walk
+- live RPLiDAR + RealSense bring-up
+- real-time mapping in RViz
+
+Gazebo, thermal, gas mapping, and higher-level mission logic are optional
+future work, not the current critical path.
 
 ## Current workspace
 
 - `ros2_ws/src/argos_control`: ROS 2 package wrapper and node entry points
+- `ros2_ws/src/argos_mission`: ROS 2 package wrapper for mission/perception bench nodes
 - `ros2_ws/src/quadruped_bringup`: launch files and sensor bring-up assets
 - `ros2_ws/src/quadruped_description`: robot description, frames, and RViz assets
 - `ros2_ws/argos_control`: leg math, control helpers, and single-leg bench tools
+- `ros2_ws/argos_mission`: mission state, gas hazard map, and thermal demo nodes
 - `firmware`: embedded code and MCU-facing work
 - `simulation`: Gazebo and robot model work
 
@@ -65,14 +78,29 @@ ros2 launch quadruped_bringup control_stack.launch.py
 Full stack:
 
 ```bash
-ros2 launch quadruped_bringup full_system.launch.py enable_teensy:=true start_rviz:=true
+ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true start_rviz:=true
+```
+
+Mission stack only:
+
+```bash
+ros2 launch quadruped_bringup mission_stack.launch.py
+```
+
+Full stack with mission nodes:
+
+```bash
+ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_mission:=true start_rviz:=true
 ```
 
 ## Notes
 
-- `ROS_DOMAIN_ID` is set to `42` to match the Pi/Teensy design.
-- On the Pi, the intended serial aliases are `/dev/ttyLIDAR` and `/dev/ttyTEENSY`.
+- `ROS_DOMAIN_ID` is set to `42` to match the Pi/ESP32-C6 design.
+- On the Pi, the intended serial aliases are `/dev/ttyLIDAR` and `/dev/ttyESP32`.
 - The single-leg tester can be run without ROS from `argos_control`.
 - The control library is now wrapped as a ROS 2 package so `colcon` can see it.
+- The mission bench stack is optional and not part of the current expo-critical path.
 - The ROS 2 topic contract is documented in `docs/ros2_topic_contract.md`.
 - The Pi device and bring-up contract is documented in `docs/pi_hardware_contract.md`.
+- The recommended expo-critical execution order is documented in `docs/expo_execution_plan.md`.
+- The single source-of-truth expo checklist is documented in `docs/expo_master_todo.md`.

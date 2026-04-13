@@ -1,0 +1,48 @@
+thermal_node:
+  ros__parameters:
+    image_topic: /thermal/image_raw
+    camera_info_topic: /thermal/camera_info
+    frame_id: thermal_link
+    publish_rate_hz: 4.0
+    ambient_temperature_c: 22.0
+    hot_spot_temperature_c: 36.0
+    enable_hot_spot: true
+    animate_hot_spot: true
+
+victim_detector_node:
+  ros__parameters:
+    image_topic: /thermal/image_raw
+    detections_topic: /victim_detections
+    detection_count_topic: /mission/detection_count
+    relative_threshold_c: 8.0
+    min_cluster_pixels: 3
+    min_victim_temp_c: 30.0
+    max_victim_temp_c: 42.0
+    assumed_range_m: 1.2
+
+gas_mapping_node:
+  ros__parameters:
+    gas_topic: /gas
+    odometry_topic: /odometry/filtered
+    hazard_map_topic: /hazard_map
+    map_frame: map
+    publish_rate_hz: 1.0
+    grid_width_m: 10.0
+    grid_height_m: 10.0
+    resolution_m: 0.10
+    gas_baseline: 0.0
+    gas_alert_threshold: 1.0
+    kernel_radius_cells: 2
+    decay_per_publish: 0.99
+
+mission_orchestrator_node:
+  ros__parameters:
+    estop_topic: /estop
+    gait_mode_topic: /gait_mode
+    state_topic: /mission/state
+    detection_count_topic: /mission/detection_count
+    publish_rate_hz: 5.0
+    autostart_explore: true
+    detection_hold_s: 2.0
+    report_hold_s: 3.0
+    continue_hold_s: 1.0
