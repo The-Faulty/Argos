@@ -12,6 +12,12 @@ from .mission_contract import TOPICS
 
 
 class ThermalNode(Node):
+    """Simulated thermal camera — generates a 32×24 float32 image with an animated hot spot.
+
+    Use this when no real MLX90640 is attached.  The victim_detector_node will
+    find the hot spot and publish markers just as it would on real hardware.
+    """
+
     def __init__(self):
         super().__init__("thermal_node")
 
@@ -37,12 +43,8 @@ class ThermalNode(Node):
         self.publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
         self.width = int(self.get_parameter("width").value)
         self.height = int(self.get_parameter("height").value)
-        self.ambient_temperature_c = float(
-            self.get_parameter("ambient_temperature_c").value
-        )
-        self.hot_spot_temperature_c = float(
-            self.get_parameter("hot_spot_temperature_c").value
-        )
+        self.ambient_temperature_c = float(self.get_parameter("ambient_temperature_c").value)
+        self.hot_spot_temperature_c = float(self.get_parameter("hot_spot_temperature_c").value)
         self.hot_spot_radius_px = float(self.get_parameter("hot_spot_radius_px").value)
         self.hot_spot_center_x = float(self.get_parameter("hot_spot_center_x").value)
         self.hot_spot_center_y = float(self.get_parameter("hot_spot_center_y").value)
@@ -60,12 +62,14 @@ class ThermalNode(Node):
         self.create_timer(1.0 / self.publish_rate_hz, self._publish_frame)
 
     def _camera_info(self, stamp) -> CameraInfo:
+        """Build a CameraInfo message from the configured FOV."""
         info = CameraInfo()
         info.header.stamp = stamp
         info.header.frame_id = self.frame_id
         info.width = self.width
         info.height = self.height
 
+        # Pinhole camera intrinsics derived from FOV
         fx = self.width / (2.0 * math.tan(self.horizontal_fov_rad / 2.0))
         fy = self.height / (2.0 * math.tan(self.vertical_fov_rad / 2.0))
         cx = (self.width - 1) / 2.0
@@ -77,6 +81,7 @@ class ThermalNode(Node):
         return info
 
     def _build_thermal_image(self) -> np.ndarray:
+        """Generate one frame of simulated thermal data."""
         thermal = np.full(
             (self.height, self.width),
             self.ambient_temperature_c,
@@ -89,6 +94,9 @@ class ThermalNode(Node):
         center_x = self.hot_spot_center_x
         center_y = self.hot_spot_center_y
         if self.animate_hot_spot:
+            # Move the hot spot along a Lissajous path using ROS clock time.
+            # NOTE: this uses wall-clock nanoseconds, so animation will differ
+            # between live runs and bag-file replays.
             time_s = self.get_clock().now().nanoseconds / 1e9
             center_x += 4.0 * math.sin(time_s * 0.35)
             center_y += 2.0 * math.cos(time_s * 0.25)
@@ -98,6 +106,7 @@ class ThermalNode(Node):
         mask = dist <= self.hot_spot_radius_px
         thermal[mask] = self.hot_spot_temperature_c
 
+        # Warm ring around the hot spot to simulate thermal spread
         ring_mask = np.logical_and(
             dist > self.hot_spot_radius_px,
             dist <= self.hot_spot_radius_px + 1.5,
@@ -109,6 +118,7 @@ class ThermalNode(Node):
         stamp = self.get_clock().now().to_msg()
         thermal = self._build_thermal_image()
 
+        # 32FC1 = 32-bit float, single channel — same format as the real MLX90640 driver
         image = Image()
         image.header.stamp = stamp
         image.header.frame_id = self.frame_id

@@ -145,7 +145,9 @@ def _sagittal_ik(x_sag, y_sag, P, _hint=None):
     return t_upper, best_bot
 
 
-# Per-leg warm-start cache for real-time IK.
+# Per-leg warm-start cache: stores the last solved theta_bot for each leg index so
+# the next solve can start a narrow search instead of a full sweep.
+# Not thread-safe, but ROS 2 nodes are single-threaded by default so this is fine.
 _ik_hint = {}
 
 

@@ -15,6 +15,12 @@ from .ros_support import (
 
 
 class JointCommandPublisherNode(Node):
+    """Buffers the latest safe joint command and re-publishes it at a fixed 100 Hz.
+
+    Decouples the safety node's update rate from the MCU's expected packet rate.
+    Also mirrors commands to /joint_states for RViz preview.
+    """
+
     def __init__(self):
         super().__init__("joint_command_publisher_node")
 
@@ -32,14 +38,13 @@ class JointCommandPublisherNode(Node):
             self.get_parameter("publish_joint_states_preview").value
         )
 
+        # Default to crouch so the robot holds still until the safety node sends something
         config = Configuration()
         self.latest_positions = matrix_to_ordered_positions(crouch_joint_matrix(config))
 
         self.command_pub = self.create_publisher(JointState, joint_command_topic, 10)
         self.joint_state_pub = self.create_publisher(JointState, joint_states_topic, 10)
-        self.create_subscription(
-            JointState, safe_command_topic, self._safe_command_callback, 10
-        )
+        self.create_subscription(JointState, safe_command_topic, self._safe_command_callback, 10)
         self.create_timer(1.0 / output_rate_hz, self._publish)
 
     def _safe_command_callback(self, msg: JointState):

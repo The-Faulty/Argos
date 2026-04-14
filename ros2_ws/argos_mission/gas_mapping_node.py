@@ -12,6 +12,8 @@ from .mission_contract import TOPICS
 
 
 class GasMappingNode(Node):
+    """Builds a top-down hazard map from gas concentration and robot odometry."""
+
     def __init__(self):
         super().__init__("gas_mapping_node")
 
@@ -26,6 +28,7 @@ class GasMappingNode(Node):
         self.declare_parameter("gas_baseline", 0.0)
         self.declare_parameter("gas_alert_threshold", 1.0)
         self.declare_parameter("kernel_radius_cells", 2)
+        # Decay factor applied every publish cycle (0.99 = slow fade, 0.9 = fast fade)
         self.declare_parameter("decay_per_publish", 0.99)
 
         gas_topic = self.get_parameter("gas_topic").value
@@ -38,21 +41,20 @@ class GasMappingNode(Node):
         self.grid_height_m = float(self.get_parameter("grid_height_m").value)
         self.resolution_m = float(self.get_parameter("resolution_m").value)
         self.gas_baseline = float(self.get_parameter("gas_baseline").value)
-        self.gas_alert_threshold = float(
-            self.get_parameter("gas_alert_threshold").value
-        )
-        self.kernel_radius_cells = int(
-            self.get_parameter("kernel_radius_cells").value
-        )
+        self.gas_alert_threshold = float(self.get_parameter("gas_alert_threshold").value)
+        self.kernel_radius_cells = int(self.get_parameter("kernel_radius_cells").value)
         self.decay_per_publish = float(self.get_parameter("decay_per_publish").value)
 
         self.width_cells = max(1, int(round(self.grid_width_m / self.resolution_m)))
         self.height_cells = max(1, int(round(self.grid_height_m / self.resolution_m)))
+        # Grid origin is at the center of the map
         self.origin_x = -self.grid_width_m / 2.0
         self.origin_y = -self.grid_height_m / 2.0
         self.grid = np.zeros((self.height_cells, self.width_cells), dtype=np.float32)
         self.latest_pose_xy = None
 
+        # NOTE: assumes odometry is already in the map frame.
+        # If your nav stack outputs odom in a different frame, add a TF lookup here.
         self.map_pub = self.create_publisher(OccupancyGrid, hazard_map_topic, 10)
         self.create_subscription(Float32, gas_topic, self._gas_callback, 10)
         self.create_subscription(Odometry, odometry_topic, self._odometry_callback, 10)
@@ -65,6 +67,7 @@ class GasMappingNode(Node):
         )
 
     def _world_to_grid(self, x_m: float, y_m: float):
+        """Convert world coordinates to grid (row, col), or None if out of bounds."""
         col = int(math.floor((x_m - self.origin_x) / self.resolution_m))
         row = int(math.floor((y_m - self.origin_y) / self.resolution_m))
         if 0 <= row < self.height_cells and 0 <= col < self.width_cells:
@@ -72,10 +75,17 @@ class GasMappingNode(Node):
         return None
 
     def _reading_to_intensity(self, reading: float) -> float:
+        """Normalize a gas reading to [0, 1] between baseline and alert threshold."""
         span = max(1e-6, self.gas_alert_threshold - self.gas_baseline)
         return float(np.clip((reading - self.gas_baseline) / span, 0.0, 1.0))
 
     def _deposit(self, row: int, col: int, intensity: float):
+        """Spread one reading across a circular kernel of nearby cells.
+
+        Uses max() not addition — two overlapping readings keep only the peak,
+        not their sum.  This is intentional: we want to show where the highest
+        concentration was, not accumulate over time.
+        """
         radius = max(0, self.kernel_radius_cells)
         for delta_row in range(-radius, radius + 1):
             for delta_col in range(-radius, radius + 1):
@@ -94,18 +104,19 @@ class GasMappingNode(Node):
 
     def _gas_callback(self, msg: Float32):
         if self.latest_pose_xy is None:
-            return
+            return  # No pose yet — can't place the reading on the map
 
         intensity = self._reading_to_intensity(float(msg.data))
         if intensity <= 0.0:
-            return
+            return  # Below baseline — nothing to deposit
 
         cell = self._world_to_grid(*self.latest_pose_xy)
         if cell is None:
-            return
+            return  # Robot is outside the mapped area
         self._deposit(cell[0], cell[1], intensity)
 
     def _publish_map(self):
+        # Slowly fade old readings so the map stays relevant as the robot moves
         self.grid *= self.decay_per_publish
         occupancy = np.clip(np.rint(self.grid * 100.0), 0.0, 100.0).astype(np.int8)
 
