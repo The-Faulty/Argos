@@ -1,4 +1,4 @@
-"""Inverse and forward kinematics for the Argos leg."""
+"""Inverse and forward kinematics for the Argos 3-DOF leg."""
 
 import logging
 from math import pi, acos, atan2, sqrt, sin, cos, fmod, asin, radians
@@ -10,7 +10,7 @@ LEG_NAMES = ("FR", "FL", "RR", "RL")
 
 
 def _point_to_rad(p1, p2):
-    """Wrap atan2(p2, p1) into [0, 2*pi]."""
+    """atan2(p2, p1) wrapped into [0, 2*pi]."""
     return (atan2(p2, p1) + 2 * pi) % (2 * pi)
 
 
@@ -21,7 +21,11 @@ def _rotx(angle):
 
 
 def _circle_intersect(P1, r1, P2, r2):
-    """Intersect two circles. Returns (A, B) or (None, None)."""
+    """Find the two intersection points of two circles.
+
+    Returns (A, B) or (None, None) if the circles don't intersect.
+    Used to solve the bell-crank and rod geometry in leg_fk.
+    """
     dx, dy = P2[0] - P1[0], P2[1] - P1[1]
     d = sqrt(dx * dx + dy * dy)
     if d < 1e-9 or d > r1 + r2 + 1e-9 or d < abs(r1 - r2) - 1e-9:
@@ -85,14 +89,18 @@ def _sagittal_fk_state(theta_top, theta_bot, params):
 
 
 def _hip_abductor_ik(r_body_foot, leg_index, L1_hip, phi):
-    """Solve the hip abductor and return (theta_1, x_sag, y_sag)."""
-    is_right = leg_index in (0, 2)
+    """Solve the lateral hip joint. Returns (theta_1, x_sag, y_sag).
 
+    theta_1 is in radians; x_sag, y_sag are the foot coords projected
+    into the sagittal plane for the next stage of the IK chain.
+    """
+    # Right legs (FR=0, RR=2) have a mirrored Y axis
+    is_right = leg_index in (0, 2)
     x, y, z = float(r_body_foot[0]), float(r_body_foot[1]), float(r_body_foot[2])
     if is_right:
         y = -y
 
-    # Rotate into the coxa frame before solving the lateral joint.
+    # Rotate into the coxa frame before solving the lateral joint
     R1 = pi / 2 - phi
     rf = _rotx(-R1) @ np.array([x, y, z])
     x, y, z = rf
@@ -102,16 +110,16 @@ def _hip_abductor_ik(r_body_foot, leg_index, L1_hip, phi):
         log.warning("hip_abductor_ik: near-singular lateral projection; clamping")
         len_A = 1e-9
 
+    # Solve the triangle formed by the coxa link and the foot projection
     a_1 = _point_to_rad(y, z)
-    asin_arg = sin(phi) * L1_hip / len_A
-    asin_arg = max(-1.0, min(1.0, asin_arg))
+    asin_arg = max(-1.0, min(1.0, sin(phi) * L1_hip / len_A))
     a_2 = asin(asin_arg)
     a_3 = pi - a_2 - phi
     theta_1 = a_1 + a_3
     if theta_1 >= 2 * pi:
         theta_1 = fmod(theta_1, 2 * pi)
 
-    # Shift to the femur origin, then project into the sagittal plane.
+    # Shift to the femur origin, then project into the sagittal plane
     offset = np.array([0.0, L1_hip * cos(theta_1), L1_hip * sin(theta_1)])
     translated = np.array([x, y, z]) - offset
     R2 = theta_1 + phi - pi / 2
@@ -122,15 +130,15 @@ def _hip_abductor_ik(r_body_foot, leg_index, L1_hip, phi):
 
 
 def _sagittal_ik(x_sag, y_sag, P, _hint=None):
-    """Solve the two sagittal joints for one leg.
+    """Solve the upper and lower leg joints for a sagittal-plane foot target.
 
-    Uses a numerical sweep of ``theta_bot`` through the forward-kinematics
-    chain to guarantee FK round-trip consistency with the coupled bell-crank
-    linkage.  An optional ``_hint`` (previous ``theta_bot``) narrows the
-    search to ±12° for warm-started real-time use.
+    Uses a numerical sweep of theta_bot through the FK chain to stay consistent
+    with the coupled bell-crank linkage.  If a hint (previous theta_bot) is
+    given, the search is narrowed to ±12° for faster real-time use.
     """
     L1, L2 = P["L1"], P["L2"]
 
+    # Clamp foot to reachable range before solving
     d = sqrt(x_sag * x_sag + y_sag * y_sag)
     max_r = (L1 + L2) * 0.99
     if d > max_r:
@@ -151,13 +159,14 @@ def _sagittal_ik(x_sag, y_sag, P, _hint=None):
             d = min_r
         log.warning("sagittal_ik: foot clamped to inner radius %.4f m", min_r)
 
-    # 2-link IK for the upper-leg angle (directly driven by top servo).
+    # 2-link IK for theta_top (upper leg, directly driven by the top servo)
     cos_b = max(-1.0, min(1.0, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d)))
     t_upper = atan2(x_sag, y_sag) - acos(cos_b)
 
     best_bot, best_err = None, float("inf")
 
     def _sweep(lo_deg, hi_deg, step_deg):
+        """Try every theta_bot in [lo, hi] and keep the one with the smallest FK error."""
         nonlocal best_bot, best_err
         bd = lo_deg
         while bd <= hi_deg:
@@ -170,16 +179,16 @@ def _sagittal_ik(x_sag, y_sag, P, _hint=None):
                     best_bot = t_bot
             bd += step_deg
 
-    # Warm-start narrow search when a hint is available.
+    # If we have a previous solution nearby, search there first (much faster)
     if _hint is not None:
         hd = _hint * 180.0 / pi
         _sweep(hd - 12, hd + 12, 0.5)
         if best_bot is not None and best_err < 0.002:
             cd = best_bot * 180.0 / pi
-            _sweep(cd - 1, cd + 1, 0.1)
+            _sweep(cd - 1, cd + 1, 0.1)   # fine-tune around the best candidate
             return t_upper, best_bot
 
-    # Full coarse sweep, then fine refine.
+    # No hint — do a full coarse sweep then refine
     best_bot, best_err = None, float("inf")
     _sweep(-90, 90, 2)
     if best_bot is None or best_err > 0.01:
@@ -191,12 +200,14 @@ def _sagittal_ik(x_sag, y_sag, P, _hint=None):
     return t_upper, best_bot
 
 
-# Per-leg warm-start cache for real-time IK.
+# Per-leg warm-start cache: stores the last solved theta_bot for each leg index so
+# the next solve can start a narrow search instead of a full sweep.
+# Not thread-safe, but ROS 2 nodes are single-threaded by default so this is fine.
 _ik_hint = {}
 
 
 def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
-    """Full 3-DOF IK for one leg. Returns None when the solve fails."""
+    """Full 3-DOF IK for one leg. Returns [theta_1, theta_top, theta_bot] or None."""
     P = config.leg_params
     theta_1, x_sag, y_sag = _hip_abductor_ik(
         r_body_foot, leg_index, P["L1_hip"], P["phi"]
@@ -206,21 +217,20 @@ def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
     if sag is None:
         log.warning(
             "leg_ik: sagittal IK failed for %s at x=%.4f m, y=%.4f m",
-            LEG_NAMES[leg_index],
-            x_sag,
-            y_sag,
+            LEG_NAMES[leg_index], x_sag, y_sag,
         )
         return None
 
     theta_top, theta_bot = sag
-    _ik_hint[leg_index] = theta_bot
+    _ik_hint[leg_index] = theta_bot   # save for next call's warm start
     return np.array([theta_1, theta_top, theta_bot])
 
 
 def four_legs_inverse_kinematics(r_body_foot, config):
-    """Solve IK for all four legs."""
+    """Solve IK for all four legs. Raises ValueError if any leg is out of reach."""
     angles = np.zeros((3, 4))
     for i in range(4):
+        # Foot position relative to the hip origin, not the body center
         r_leg = r_body_foot[:, i] - config.LEG_ORIGINS[:, i]
         leg_angles = leg_explicit_inverse_kinematics(r_leg, i, config)
         if leg_angles is None:
@@ -263,6 +273,7 @@ if __name__ == "__main__":
     print("  theta_1 = hip abductor | theta_top = upper leg | theta_bot = bell-crank")
     print("=" * 66)
 
+    # Sagittal IK/FK round-trip — each pose should recover within 1 mm
     print("\n  Sagittal IK/FK round-trip:")
     sag_tests = [
         (0.000, 0.200, "Nominal"),

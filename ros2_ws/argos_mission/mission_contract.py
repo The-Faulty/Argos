@@ -1,16 +1,20 @@
 """Shared topic names and mission states for the Argos mission stack."""
 
 from dataclasses import dataclass
+from enum import Enum
 
 
-MISSION_STATES = (
-    "IDLE",
-    "EXPLORE",
-    "DETECT",
-    "REPORT",
-    "CONTINUE",
-    "ESTOP",
-)
+class MissionState(str, Enum):
+    """All possible mission states.
+
+    Inherits from str so comparisons like state == "IDLE" still work.
+    """
+    IDLE = "IDLE"
+    EXPLORE = "EXPLORE"
+    DETECT = "DETECT"
+    REPORT = "REPORT"
+    CONTINUE = "CONTINUE"
+    ESTOP = "ESTOP"
 
 
 @dataclass(frozen=True)

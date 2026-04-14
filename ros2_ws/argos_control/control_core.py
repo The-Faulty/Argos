@@ -41,6 +41,7 @@ class GaitController:
         self.config = config
 
     def phase_index(self, ticks: int) -> int:
+        """Which phase (0 to num_phases-1) the given tick falls in."""
         phase_time = ticks % self.config.phase_length
         phase_sum = 0
         for phase_index in range(self.config.num_phases):
@@ -50,6 +51,7 @@ class GaitController:
         raise RuntimeError("Could not resolve gait phase from controller ticks.")
 
     def subphase_ticks(self, ticks: int) -> int:
+        """Ticks elapsed since the start of the current phase."""
         phase_time = ticks % self.config.phase_length
         phase_sum = 0
         for phase_index in range(self.config.num_phases):
@@ -59,6 +61,7 @@ class GaitController:
         raise RuntimeError("Could not resolve gait subphase from controller ticks.")
 
     def contacts(self, ticks: int) -> np.ndarray:
+        """Contact mask for all four legs at the given tick (1 = grounded)."""
         return self.config.contact_phases[:, self.phase_index(ticks)]
 
 
@@ -69,11 +72,13 @@ class StanceController:
         self.config = config
 
     def position_delta(self, leg_index: int, state: State, command) -> tuple[np.ndarray, np.ndarray]:
+        """Compute translation and rotation to apply to a grounded foot this tick."""
         z = state.foot_locations[2, leg_index]
         velocity = np.array(
             [
                 -command.horizontal_velocity[0],
                 -command.horizontal_velocity[1],
+                # Slowly bring the foot to the commanded height
                 (state.height - z) / self.config.z_time_constant,
             ]
         )
@@ -82,6 +87,7 @@ class StanceController:
         return delta_position, delta_rotation
 
     def next_foot_location(self, leg_index: int, state: State, command) -> np.ndarray:
+        """Return the stance foot position after applying one tick of body motion."""
         foot_location = state.foot_locations[:, leg_index]
         delta_position, delta_rotation = self.position_delta(leg_index, state, command)
         return delta_rotation @ foot_location + delta_position
@@ -94,6 +100,7 @@ class SwingController:
         self.config = config
 
     def raibert_touchdown_location(self, leg_index: int, command) -> np.ndarray:
+        """Predict where the foot should land using the Raibert heuristic."""
         delta_xy = (
             self.config.alpha
             * self.config.stance_ticks
@@ -110,6 +117,7 @@ class SwingController:
         return euler2mat(0.0, 0.0, yaw) @ self.config.default_stance[:, leg_index] + delta_position
 
     def swing_height(self, swing_phase: float) -> float:
+        """Triangle height profile: rises to z_clearance at mid-swing, back to 0 at touchdown."""
         if swing_phase < 0.5:
             return swing_phase / 0.5 * self.config.z_clearance
         return self.config.z_clearance * (1.0 - (swing_phase - 0.5) / 0.5)
@@ -122,6 +130,7 @@ class SwingController:
         command,
         touchdown_override: np.ndarray | None = None,
     ) -> np.ndarray:
+        """Interpolate the foot toward the predicted touchdown point."""
         if not 0.0 <= swing_phase <= 1.0:
             raise ValueError("Swing phase must stay between 0 and 1.")
 
@@ -132,6 +141,7 @@ class SwingController:
             else self.raibert_touchdown_location(leg_index, command)
         )
         time_left = self.config.dt * self.config.swing_ticks * (1.0 - swing_phase)
+        # XY moves toward touchdown; Z is driven by the swing height profile
         swing_velocity = (touchdown - foot_location) / time_left * np.array([1.0, 1.0, 0.0])
         delta_foot_location = swing_velocity * self.config.dt
         z_vector = np.array([0.0, 0.0, self.swing_height(swing_phase) + command.height])

@@ -1,7 +1,7 @@
 """Single-leg bench test for Argos.
 
-This script talks straight to the PCA9685 from a Raspberry Pi so you can
-check one leg without bringing up ROS.
+Talks straight to the PCA9685 over I2C so you can check one leg without
+bringing up ROS.  Run with --sim if no hardware is attached.
 """
 
 import argparse
@@ -19,7 +19,7 @@ except ImportError:
 
 PCA9685_I2C_ADDRESS = 0x40
 
-# PCA9685 channel assignments.
+# PCA9685 channel assignments for this test leg.
 HIP_CH = 2
 TOP_CH = 1
 BOT_CH = 0
@@ -70,6 +70,10 @@ MOCK_WALK_SERVO_WAYPOINTS = [
     STARTUP_SERVO_DEG,
 ]
 
+
+# ── Unit-converting wrappers around Kinematics.py ─────────────────────────────
+# The ROS nodes work in radians and meters.  This script uses degrees and
+# millimeters so the interactive REPL stays easy to read.
 
 def _point_to_rad(p1, p2):
     return (atan2(p2, p1) + 2 * pi) % (2 * pi)
@@ -199,8 +203,10 @@ def sag_fk(theta_top_deg, theta_bot_deg, params):
     return foot[0] * 1000, foot[1] * 1000
 
 
+# ── Composite helpers ─────────────────────────────────────────────────────────
+
 def full_ik_from_sag(x_mm, y_mm, lateral_m=None):
-    """Solve the full 3-DOF IK from a sagittal target."""
+    """Full 3-DOF IK from a sagittal plane target in mm."""
     if lateral_m is None:
         lateral_m = LEG_LATERAL_OFFSET
     r_foot = np.array([x_mm / 1000.0, lateral_m, -y_mm / 1000.0])
@@ -212,7 +218,7 @@ def full_ik_from_sag(x_mm, y_mm, lateral_m=None):
 
 
 def solve_body_target(bx, by, bz):
-    """Solve IK for a body-frame target."""
+    """Full 3-DOF IK from a body-frame target in meters."""
     r_foot = np.array([bx, by, bz])
     t1_deg, x_sag, y_sag = hip_ik(r_foot, LEG_INDEX, PARAMS)
     sol = sag_ik(x_sag, y_sag, PARAMS)
@@ -275,7 +281,7 @@ def _servo_us_to_ik(pulse_us, offset_deg, multiplier):
 
 
 def _us_to_duty(pulse_us):
-    """Convert pulse width in microseconds to PCA9685 duty cycle."""
+    """Convert pulse width in microseconds to PCA9685 duty cycle (0–65535)."""
     period_us = 1_000_000.0 / PWM_FREQ
     return int(round(pulse_us / period_us * 65535))
 
@@ -290,7 +296,7 @@ _pca = None
 
 
 def init_hardware():
-    """Initialize the PCA9685. Returns True on success."""
+    """Initialize the PCA9685. Returns True on success, False in sim mode."""
     global _pca
     try:
         import board
@@ -332,7 +338,7 @@ def send_angles(t1_deg, tt_deg, tb_deg, verbose=True):
 
 
 def move_to_angles(target_angles, from_angles=None, verbose=True):
-    """Move to a known angle triplet, interpolating when hardware is active."""
+    """Move to an angle triplet, interpolating when hardware is active."""
     t1_target, tt_target, tb_target = target_angles
 
     if from_angles is None or _pca is None:
@@ -371,7 +377,7 @@ def move_to_servo_degrees(target_servo_deg, from_angles=None, verbose=True):
 
 
 def move_to_sag(x_mm, y_mm, from_angles=None, verbose=True):
-    """Move the foot to a sagittal target."""
+    """Move the foot to a sagittal target in mm."""
     sol = full_ik_from_sag(x_mm, y_mm)
     if sol is None:
         print(f"  [WARN] ({x_mm:.0f}, {y_mm:.0f}) mm unreachable - skipped")
@@ -387,6 +393,7 @@ def move_to_sag(x_mm, y_mm, from_angles=None, verbose=True):
 
 
 def release():
+    """Zero all servo duty cycles (lets the servos go limp)."""
     if _pca is None:
         return
     for channel in [HIP_CH, TOP_CH, BOT_CH]:
@@ -394,7 +401,12 @@ def release():
     print("  Servos released.")
 
 
+# ── Self-tests ────────────────────────────────────────────────────────────────
+
 def test_math():
+    """Run IK/FK round-trip checks and print results. Returns True if all pass."""
+    from math import sqrt
+
     print("\n-- IK/FK self-test ---------------------------------------------")
     print("  Sagittal IK/FK:")
     nominal_y_m = abs(DEFAULT_BODY_Z_M)
@@ -447,6 +459,9 @@ def test_math():
 
 
 def test_sweep(sim_only=False):
+    """Sweep the foot through an arc of waypoints and check each IK solution."""
+    from math import sqrt
+
     print("\n-- Sweep test --------------------------------------------------")
     nominal_y_mm = STARTUP_SAG[1]
     waypoints = [
@@ -538,7 +553,6 @@ def test_mock_walk(sim_only=False, cycles=2, from_angles=None):
 
 def interactive(sim_only=False):
     global HIP_OFFSET, TOP_OFFSET, BOT_OFFSET
-
     print("\n-- Interactive mode -------------------------------------------")
     stand = stand_reference_angles()
     hip_us = _servo_deg_to_us(STARTUP_SERVO_DEG[0])
@@ -622,9 +636,7 @@ def interactive(sim_only=False):
                     f"  theta_top={tt_deg:+.2f} deg  theta_bot={tb_deg:+.2f} deg"
                 )
                 current = move_to_angles(
-                    (t1_deg, tt_deg, tb_deg),
-                    from_angles=current,
-                    verbose=True,
+                    (t1_deg, tt_deg, tb_deg), from_angles=current, verbose=True
                 )
             except ValueError:
                 print("  Usage: body <x_m> <y_m> <z_m>")
@@ -632,15 +644,9 @@ def interactive(sim_only=False):
 
         if cmd == "raw" and len(parts) == 4:
             try:
-                t1_deg, tt_deg, tb_deg = (
-                    float(parts[1]),
-                    float(parts[2]),
-                    float(parts[3]),
-                )
+                t1_deg, tt_deg, tb_deg = float(parts[1]), float(parts[2]), float(parts[3])
                 current = move_to_angles(
-                    (t1_deg, tt_deg, tb_deg),
-                    from_angles=current,
-                    verbose=True,
+                    (t1_deg, tt_deg, tb_deg), from_angles=current, verbose=True
                 )
                 fk = sag_fk(tt_deg, tb_deg, PARAMS)
                 if fk:
@@ -709,6 +715,7 @@ def interactive(sim_only=False):
                     f"  theta_top={tt_deg:+.2f} deg  theta_bot={tb_deg:+.2f} deg"
                 )
                 if fk:
+                    from math import sqrt
                     err = sqrt((fk[0] - x_mm) ** 2 + (fk[1] - y_mm) ** 2)
                     print(f"  FK check: ({fk[0]:.4f}, {fk[1]:.4f})mm  err={err:.6f}mm")
             except ValueError:
@@ -775,30 +782,23 @@ def interactive(sim_only=False):
         release()
 
 
+# ── Entry point ───────────────────────────────────────────────────────────────
+
 def main():
     parser = argparse.ArgumentParser(description="Argos 3-DOF single-leg test")
     parser.add_argument("--sim", action="store_true", help="Simulation only (no I2C)")
     parser.add_argument("--math", action="store_true", help="Run the IK/FK self-test and exit")
     parser.add_argument("--sweep", action="store_true", help="Run the arc sweep and exit")
     parser.add_argument(
-        "--sag",
-        nargs=2,
-        type=float,
-        metavar=("X", "Y"),
-        help="Move the sagittal foot target to (X Y) mm and exit",
+        "--sag", nargs=2, type=float, metavar=("X", "Y"),
+        help="Move foot to sagittal (X Y) mm and exit",
     )
     parser.add_argument(
-        "--goto",
-        nargs=3,
-        type=float,
-        metavar=("X", "Y", "Z"),
-        help="Move the body-frame foot target to (X Y Z) m and exit",
+        "--goto", nargs=3, type=float, metavar=("X", "Y", "Z"),
+        help="Move foot to body-frame (X Y Z) m and exit",
     )
     parser.add_argument(
-        "--raw",
-        nargs=3,
-        type=float,
-        metavar=("T1", "TT", "TB"),
+        "--raw", nargs=3, type=float, metavar=("T1", "TT", "TB"),
         help="Send raw angles (theta_1 theta_top theta_bot in degrees) and exit",
     )
     parser.add_argument(

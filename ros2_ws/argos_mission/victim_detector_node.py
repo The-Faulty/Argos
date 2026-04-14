@@ -13,6 +13,16 @@ from .mission_contract import TOPICS
 
 
 class VictimDetectorNode(Node):
+    """Finds warm clusters in the thermal image and projects them into 3D space.
+
+    Detection pipeline:
+      1. Threshold pixels above median + relative_threshold_c
+      2. Connected-components to find blobs
+      3. Filter blobs smaller than min_cluster_pixels
+      4. Project each centroid to 3D using assumed_range_m and camera FOV
+      5. Publish RViz sphere markers and a detection count
+    """
+
     def __init__(self):
         super().__init__("victim_detector_node")
 
@@ -23,6 +33,7 @@ class VictimDetectorNode(Node):
         self.declare_parameter("min_cluster_pixels", 3)
         self.declare_parameter("min_victim_temp_c", 30.0)
         self.declare_parameter("max_victim_temp_c", 42.0)
+        # assumed_range_m is tunable — increase if the robot operates farther from victims
         self.declare_parameter("assumed_range_m", 1.2)
         self.declare_parameter("horizontal_fov_deg", 110.0)
         self.declare_parameter("vertical_fov_deg", 75.0)
@@ -32,9 +43,7 @@ class VictimDetectorNode(Node):
         detections_topic = self.get_parameter("detections_topic").value
         detection_count_topic = self.get_parameter("detection_count_topic").value
 
-        self.relative_threshold_c = float(
-            self.get_parameter("relative_threshold_c").value
-        )
+        self.relative_threshold_c = float(self.get_parameter("relative_threshold_c").value)
         self.min_cluster_pixels = int(self.get_parameter("min_cluster_pixels").value)
         self.min_victim_temp_c = float(self.get_parameter("min_victim_temp_c").value)
         self.max_victim_temp_c = float(self.get_parameter("max_victim_temp_c").value)
@@ -52,6 +61,7 @@ class VictimDetectorNode(Node):
         self.create_subscription(Image, image_topic, self._image_callback, 10)
 
     def _connected_components(self, mask: np.ndarray):
+        """4-connectivity flood fill to find all hot blobs in the mask."""
         visited = np.zeros_like(mask, dtype=bool)
         height, width = mask.shape
         components = []
@@ -61,6 +71,7 @@ class VictimDetectorNode(Node):
                 if not mask[row, col] or visited[row, col]:
                     continue
 
+                # BFS from this unvisited hot pixel
                 queue = [(row, col)]
                 visited[row, col] = True
                 pixels = []
@@ -85,6 +96,7 @@ class VictimDetectorNode(Node):
         return components
 
     def _cluster_to_marker(self, cluster, image: np.ndarray, stamp, frame_id: str, marker_id: int):
+        """Project a pixel cluster's centroid into 3D and build an RViz sphere marker."""
         rows = np.array([pixel[0] for pixel in cluster], dtype=float)
         cols = np.array([pixel[1] for pixel in cluster], dtype=float)
         centroid_row = float(rows.mean())
@@ -92,9 +104,11 @@ class VictimDetectorNode(Node):
 
         width = image.shape[1]
         height = image.shape[0]
+        # Normalize centroid to [-1, 1] in both axes
         x_norm = ((centroid_col + 0.5) / width - 0.5) * 2.0
         y_norm = ((centroid_row + 0.5) / height - 0.5) * 2.0
 
+        # Project to 3D using pinhole geometry at the assumed victim range
         lateral = math.tan(self.horizontal_fov_rad / 2.0) * self.assumed_range_m
         vertical = math.tan(self.vertical_fov_rad / 2.0) * self.assumed_range_m
 
@@ -105,9 +119,9 @@ class VictimDetectorNode(Node):
         marker.id = marker_id
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
-        marker.pose.position.x = self.assumed_range_m
-        marker.pose.position.y = -x_norm * lateral
-        marker.pose.position.z = -y_norm * vertical
+        marker.pose.position.x = self.assumed_range_m   # straight ahead
+        marker.pose.position.y = -x_norm * lateral       # left/right
+        marker.pose.position.z = -y_norm * vertical      # up/down
         marker.pose.orientation.w = 1.0
         marker.scale.x = self.marker_scale_m
         marker.scale.y = self.marker_scale_m
@@ -116,6 +130,7 @@ class VictimDetectorNode(Node):
         marker.color.g = 0.25
         marker.color.b = 0.1
         marker.color.a = 0.85
+        # Label with the peak temperature at the centroid pixel
         marker.text = f"{float(image[int(round(centroid_row)), int(round(centroid_col))]):.1f}C"
         return marker
 
@@ -127,6 +142,8 @@ class VictimDetectorNode(Node):
 
         thermal = thermal.reshape((msg.height, msg.width))
         ambient = float(np.median(thermal))
+        # Threshold: pixel must be both warmer than ambient by relative_threshold_c
+        # and within the human-body temperature range
         threshold = max(self.min_victim_temp_c, ambient + self.relative_threshold_c)
         mask = np.logical_and(
             thermal >= threshold,
@@ -140,6 +157,7 @@ class VictimDetectorNode(Node):
 
         markers = MarkerArray()
 
+        # Send a DELETEALL first so stale markers from the previous frame don't linger
         delete_all = Marker()
         delete_all.header.stamp = msg.header.stamp
         delete_all.header.frame_id = msg.header.frame_id or "thermal_link"

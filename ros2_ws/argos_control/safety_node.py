@@ -18,6 +18,8 @@ from .ros_support import (
 
 
 class SafetyNode(Node):
+    """Last gate before the MCU: enforces joint limits, velocity cap, and e-stop."""
+
     def __init__(self):
         super().__init__("safety_node")
 
@@ -41,10 +43,11 @@ class SafetyNode(Node):
 
         self.config = Configuration()
         self.min_limits, self.max_limits = joint_limit_vectors(self.config)
-        self.crouch_positions = matrix_to_ordered_positions(
-            crouch_joint_matrix(self.config)
-        )
+        self.crouch_positions = matrix_to_ordered_positions(crouch_joint_matrix(self.config))
 
+        # Start tracking from the crouch (all-zeros) pose.
+        # The rate limiter will ramp smoothly to whatever the gait planner sends first,
+        # so the robot transitions gradually rather than snapping.
         self.current_positions = self.crouch_positions.copy()
         self.target_positions = self.crouch_positions.copy()
         self.last_raw_time = None
@@ -52,9 +55,7 @@ class SafetyNode(Node):
         self.update_period_s = 1.0 / update_rate_hz
 
         self.safe_pub = self.create_publisher(JointState, safe_command_topic, 10)
-        self.create_subscription(
-            JointState, raw_command_topic, self._raw_command_callback, 10
-        )
+        self.create_subscription(JointState, raw_command_topic, self._raw_command_callback, 10)
         self.create_subscription(Bool, estop_topic, self._estop_callback, 10)
         self.create_timer(self.update_period_s, self._update)
 
@@ -65,6 +66,7 @@ class SafetyNode(Node):
             self.get_logger().warning(f"Ignoring malformed joint command: {exc}")
             return
 
+        # Hard-clamp incoming targets to joint limits before storing them
         self.target_positions = np.clip(positions, self.min_limits, self.max_limits)
         self.last_raw_time = self.get_clock().now()
 
@@ -72,17 +74,20 @@ class SafetyNode(Node):
         self.estop_active = bool(msg.data)
 
     def _target_is_stale(self) -> bool:
+        """True if no command has arrived within the timeout window."""
         if self.last_raw_time is None:
             return True
         age_ns = (self.get_clock().now() - self.last_raw_time).nanoseconds
         return age_ns > self.raw_command_timeout_ns
 
     def _update(self):
+        # Fall back to crouch on e-stop or if the gait planner goes silent
         if self.estop_active or self._target_is_stale():
             desired = self.crouch_positions
         else:
             desired = self.target_positions
 
+        # Rate-limit: move no faster than max_joint_velocity_rad_s per second
         max_step = self.max_joint_velocity_rad_s * self.update_period_s
         delta = np.clip(desired - self.current_positions, -max_step, max_step)
         self.current_positions = np.clip(

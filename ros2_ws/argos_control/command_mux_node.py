@@ -9,6 +9,11 @@ from .ros_support import TOPICS, copy_twist, zero_twist
 
 
 class CommandMuxNode(Node):
+    """Arbitrates between teleop, autonomous nav, and e-stop commands.
+
+    Priority order: e-stop > teleop (250 ms timeout) > nav (500 ms timeout) > idle zero.
+    """
+
     def __init__(self):
         super().__init__("command_mux_node")
 
@@ -28,6 +33,7 @@ class CommandMuxNode(Node):
         estop_topic = self.get_parameter("estop_topic").value
         publish_rate_hz = float(self.get_parameter("publish_rate_hz").value)
 
+        # Store timeouts in nanoseconds for direct comparison with ROS clock
         self.teleop_timeout_ns = int(
             float(self.get_parameter("teleop_timeout_s").value) * 1e9
         )
@@ -50,6 +56,7 @@ class CommandMuxNode(Node):
         self.create_timer(1.0 / publish_rate_hz, self._publish_muxed_command)
 
     def _teleop_callback(self, msg: Twist):
+        # Copy the message so later mutations to msg don't affect what we stored
         self.teleop_msg = copy_twist(msg)
         self.teleop_time = self.get_clock().now()
 
@@ -61,6 +68,7 @@ class CommandMuxNode(Node):
         self.estop_active = bool(msg.data)
 
     def _is_fresh(self, stamp, timeout_ns: int) -> bool:
+        """True if stamp is recent enough to still be trusted."""
         if stamp is None:
             return False
         age_ns = (self.get_clock().now() - stamp).nanoseconds
@@ -72,6 +80,7 @@ class CommandMuxNode(Node):
 
         if self.estop_active:
             source = "estop"
+            # selected stays zero — safety node will command crouch
         elif self._is_fresh(self.teleop_time, self.teleop_timeout_ns):
             selected = copy_twist(self.teleop_msg)
             source = "teleop"
