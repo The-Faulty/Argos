@@ -4,12 +4,13 @@ from dataclasses import dataclass
 from math import atan2, sqrt
 
 import numpy as np
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import Pose, PoseArray, Twist
 from sensor_msgs.msg import JointState
+from std_msgs.msg import Int32MultiArray
 from transforms3d.euler import quat2euler
 
 from .Config import Configuration
-from .Kinematics import four_legs_inverse_kinematics
+from .Kinematics import four_legs_inverse_kinematics, lower_leg_angle
 
 
 LEG_ORDER = ("FR", "FL", "RR", "RL")
@@ -35,6 +36,12 @@ class Topics:
     joint_states: str = "/joint_states"
     imu_raw: str = "/imu/data_raw"
     gas: str = "/gas"
+    foothold_candidates: str = "/foothold/candidates"
+    foothold_contact_modes: str = "/foothold/contact_modes"
+    foothold_adjusted: str = "/foothold/adjusted"
+    foothold_status: str = "/foothold/status"
+    foothold_safe: str = "/foothold/safe"
+    foothold_markers: str = "/foothold/markers"
 
 
 TOPICS = Topics()
@@ -69,6 +76,22 @@ def crouch_joint_matrix(_config: Configuration) -> np.ndarray:
 
 def stand_joint_matrix(config: Configuration) -> np.ndarray:
     return four_legs_inverse_kinematics(default_foot_locations(config), config)
+
+
+def urdf_joint_matrix(angle_matrix: np.ndarray, config: Configuration) -> np.ndarray:
+    """Convert control-space joint angles into the URDF's simple revolute joints."""
+    urdf_matrix = np.array(angle_matrix, dtype=float, copy=True)
+    params = config.leg_params
+    for leg_index in range(4):
+        theta_top = float(angle_matrix[1, leg_index])
+        theta_bot = float(angle_matrix[2, leg_index])
+        lower_angle = lower_leg_angle(theta_top, theta_bot, params)
+        if lower_angle is None:
+            raise ValueError(
+                f"Could not convert tibia preview angle for leg {LEG_ORDER[leg_index]}"
+            )
+        urdf_matrix[2, leg_index] = lower_angle - theta_top
+    return urdf_matrix
 
 
 def matrix_to_ordered_positions(angle_matrix: np.ndarray) -> np.ndarray:
@@ -108,6 +131,55 @@ def joint_state_from_matrix(stamp, angle_matrix: np.ndarray, frame_id="base_link
         matrix_to_ordered_positions(angle_matrix),
         frame_id=frame_id,
     )
+
+
+def pose_array_from_matrix(
+    stamp,
+    position_matrix: np.ndarray,
+    frame_id="base_link",
+) -> PoseArray:
+    matrix = np.asarray(position_matrix, dtype=float)
+    if matrix.shape != (3, len(LEG_ORDER)):
+        raise ValueError(
+            f"Expected a (3, {len(LEG_ORDER)}) position matrix, got {matrix.shape}"
+        )
+
+    msg = PoseArray()
+    msg.header.stamp = stamp
+    msg.header.frame_id = frame_id
+    for leg_index in range(len(LEG_ORDER)):
+        pose = Pose()
+        pose.position.x = float(matrix[0, leg_index])
+        pose.position.y = float(matrix[1, leg_index])
+        pose.position.z = float(matrix[2, leg_index])
+        pose.orientation.w = 1.0
+        msg.poses.append(pose)
+    return msg
+
+
+def matrix_from_pose_array(msg: PoseArray) -> np.ndarray:
+    if len(msg.poses) != len(LEG_ORDER):
+        raise ValueError(f"Expected {len(LEG_ORDER)} poses, got {len(msg.poses)}")
+
+    matrix = np.zeros((3, len(LEG_ORDER)), dtype=float)
+    for leg_index, pose in enumerate(msg.poses):
+        matrix[0, leg_index] = float(pose.position.x)
+        matrix[1, leg_index] = float(pose.position.y)
+        matrix[2, leg_index] = float(pose.position.z)
+    return matrix
+
+
+def int32_multiarray_from_values(values) -> Int32MultiArray:
+    msg = Int32MultiArray()
+    msg.data = [int(value) for value in values]
+    return msg
+
+
+def values_from_int32_multiarray(msg: Int32MultiArray, expected_size=None) -> np.ndarray:
+    values = np.asarray(msg.data, dtype=int)
+    if expected_size is not None and values.size != expected_size:
+        raise ValueError(f"Expected {expected_size} values, got {values.size}")
+    return values
 
 
 def positions_from_joint_state(msg: JointState) -> np.ndarray:

@@ -11,6 +11,11 @@ from math import pi, acos, atan2, sqrt, sin, cos, fmod, asin, radians, degrees
 
 import numpy as np
 
+try:
+    from .Config import Configuration
+except ImportError:
+    from Config import Configuration
+
 
 PCA9685_I2C_ADDRESS = 0x40
 
@@ -23,11 +28,13 @@ BOT_CH = 0
 PWM_MIN_US = 370
 PWM_MAX_US = 2400
 PWM_FREQ = 50
+SERVO_RANGE_DEG = 270.0
+SERVO_CENTER_DEG = SERVO_RANGE_DEG / 2.0
 
 # Flip a multiplier if a servo runs backward.
 # Adjust an offset if neutral is not centered.
 HIP_OFFSET = 0.0
-HIP_MULTIPLIER = +1
+HIP_MULTIPLIER = -1
 
 TOP_OFFSET = 0.0
 TOP_MULTIPLIER = +1
@@ -37,28 +44,31 @@ BOT_MULTIPLIER = +1
 
 # 0=FR, 1=FL, 2=RR, 3=RL
 LEG_INDEX = 0
+LEG_NAMES = ("FR", "FL", "RR", "RL")
 
-# All distances are in meters. See Config.py for measurement notes.
-PARAMS = dict(
-    L1_hip=0.05162,
-    phi=radians(73.917),
-    L1=0.130,
-    L2=0.150,
-    rbl=0.035,
-    rbr=0.050,
-    abc=radians(60.0),
-    Lr1=0.065,
-    Lr2=0.120,
-    rh=0.035,
-    dko=0.030,
-)
-
-LEG_LATERAL_OFFSET = -0.061
+# Pull the bench geometry from Config.py so the script stays aligned with the
+# latest measured linkage values.
+_CONFIG = Configuration()
+PARAMS = dict(_CONFIG.leg_params)
+LEG_LATERAL_OFFSET = float(_CONFIG.LEG_ORIGINS[1, LEG_INDEX])
+DEFAULT_BODY_Z_M = float(_CONFIG.default_z_ref)
 
 # Motion settings.
 STEPS_PER_MOVE = 30
 STEP_DELAY_S = 0.018
-STARTUP_SAG = (0, 200)
+STARTUP_SAG = (0, int(round(abs(DEFAULT_BODY_Z_M) * 1000.0)))
+STARTUP_SERVO_DEG = (90.0, 90.0, 90.0)
+MOCK_WALK_DWELL_S = 0.12
+MOCK_WALK_SERVO_WAYPOINTS = [
+    STARTUP_SERVO_DEG,
+    (94.0, 82.0, 76.0),
+    (100.0, 80.0, 72.0),
+    (96.0, 86.0, 82.0),
+    STARTUP_SERVO_DEG,
+    (84.0, 98.0, 104.0),
+    (80.0, 94.0, 100.0),
+    STARTUP_SERVO_DEG,
+]
 
 
 def _point_to_rad(p1, p2):
@@ -211,17 +221,69 @@ def solve_body_target(bx, by, bz):
     return t1_deg, sol[0], sol[1]
 
 
+def crouch_reference_angles():
+    """Return the actual IK angles for the startup crouch pose."""
+    sol = full_ik_from_sag(*STARTUP_SAG)
+    if sol is None:
+        raise RuntimeError(
+            f"Startup sag {STARTUP_SAG} mm is unreachable for leg {LEG_NAMES[LEG_INDEX]}"
+        )
+    return sol
+
+
+def _servo_deg_to_us(servo_deg):
+    """Convert a direct servo angle in degrees into pulse width."""
+    servo_deg = max(0.0, min(SERVO_RANGE_DEG, float(servo_deg)))
+    return PWM_MIN_US + (servo_deg / SERVO_RANGE_DEG) * (PWM_MAX_US - PWM_MIN_US)
+
+
+def _us_to_servo_deg(pulse_us):
+    """Reverse of _servo_deg_to_us."""
+    return (pulse_us - PWM_MIN_US) / (PWM_MAX_US - PWM_MIN_US) * SERVO_RANGE_DEG
+
+
+def _servo_deg_to_ik(servo_deg, offset_deg, multiplier):
+    """Convert a direct servo angle into the script's control-space angle."""
+    servo_deg = max(0.0, min(SERVO_RANGE_DEG, float(servo_deg)))
+    return (servo_deg - SERVO_CENTER_DEG - offset_deg) / multiplier
+
+
+def servo_degrees_to_angles(hip_deg, top_deg, bot_deg):
+    """Map direct servo angles into the script's control-space angle triplet."""
+    return (
+        _servo_deg_to_ik(hip_deg, HIP_OFFSET, HIP_MULTIPLIER),
+        _servo_deg_to_ik(top_deg, TOP_OFFSET, TOP_MULTIPLIER),
+        _servo_deg_to_ik(bot_deg, BOT_OFFSET, BOT_MULTIPLIER),
+    )
+
+
+def stand_reference_angles():
+    """Return the standing startup pose expressed in control-space angles."""
+    return servo_degrees_to_angles(*STARTUP_SERVO_DEG)
+
+
 def _ik_to_servo_us(joint_angle_deg, offset_deg, multiplier):
     """Convert an IK angle into a pulse width in microseconds."""
-    cmd = 90.0 + multiplier * joint_angle_deg + offset_deg
-    cmd = max(0.0, min(180.0, cmd))
-    return PWM_MIN_US + (cmd / 180.0) * (PWM_MAX_US - PWM_MIN_US)
+    cmd = SERVO_CENTER_DEG + multiplier * joint_angle_deg + offset_deg
+    return _servo_deg_to_us(cmd)
+
+
+def _servo_us_to_ik(pulse_us, offset_deg, multiplier):
+    """Reverse of _ik_to_servo_us: pulse width -> IK angle in degrees."""
+    cmd = _us_to_servo_deg(pulse_us)
+    return (cmd - SERVO_CENTER_DEG - offset_deg) / multiplier
 
 
 def _us_to_duty(pulse_us):
     """Convert pulse width in microseconds to PCA9685 duty cycle."""
     period_us = 1_000_000.0 / PWM_FREQ
     return int(round(pulse_us / period_us * 65535))
+
+
+def _duty_to_us(duty_16):
+    """Reverse of _us_to_duty: 16-bit duty cycle -> pulse width in microseconds."""
+    period_us = 1_000_000.0 / PWM_FREQ
+    return duty_16 * period_us / 65535.0
 
 
 _pca = None
@@ -293,6 +355,21 @@ def move_to_angles(target_angles, from_angles=None, verbose=True):
     return t1_target, tt_target, tb_target
 
 
+def move_to_servo_degrees(target_servo_deg, from_angles=None, verbose=True):
+    """Move using direct servo angles in degrees."""
+    hip_deg, top_deg, bot_deg = [float(v) for v in target_servo_deg]
+    if verbose:
+        print(
+            f"\n  Servo target: hip={hip_deg:.1f} deg"
+            f"  top={top_deg:.1f} deg  bot={bot_deg:.1f} deg"
+        )
+    return move_to_angles(
+        servo_degrees_to_angles(hip_deg, top_deg, bot_deg),
+        from_angles=from_angles,
+        verbose=verbose,
+    )
+
+
 def move_to_sag(x_mm, y_mm, from_angles=None, verbose=True):
     """Move the foot to a sagittal target."""
     sol = full_ik_from_sag(x_mm, y_mm)
@@ -320,14 +397,15 @@ def release():
 def test_math():
     print("\n-- IK/FK self-test ---------------------------------------------")
     print("  Sagittal IK/FK:")
+    nominal_y_m = abs(DEFAULT_BODY_Z_M)
     sag_tests = [
-        (0.000, 0.200, "Nominal"),
-        (0.040, 0.190, "Fwd +40mm"),
-        (0.080, 0.170, "Wide fwd"),
-        (-0.040, 0.190, "Back -40mm"),
-        (-0.080, 0.160, "Wide back"),
-        (0.000, 0.170, "Raised"),
-        (0.000, 0.230, "Extended"),
+        (0.000, nominal_y_m, "Nominal"),
+        (0.025, nominal_y_m - 0.005, "Fwd +25mm"),
+        (0.050, nominal_y_m - 0.015, "Wide fwd"),
+        (-0.025, nominal_y_m - 0.005, "Back -25mm"),
+        (-0.040, nominal_y_m - 0.010, "Wide back"),
+        (0.000, nominal_y_m - 0.020, "Raised"),
+        (0.000, nominal_y_m + 0.010, "Extended"),
     ]
     print(f"  {'Pose':>16}   {'theta_top':>10}  {'theta_bot':>10}  FK err")
     print("  " + "-" * 60)
@@ -336,11 +414,16 @@ def test_math():
         sol = sag_ik(x_m, y_m, PARAMS)
         if sol is None:
             print(f"  {name:<16}  UNREACHABLE")
+            all_ok = False
             continue
         tt, tb = sol
         fk = sag_fk(tt, tb, PARAMS)
+        if fk is None:
+            print(f"  {name:<16}   {tt:+9.3f} deg  {tb:+9.3f} deg  FK failed")
+            all_ok = False
+            continue
         x_mm, y_mm = x_m * 1000, y_m * 1000
-        err = sqrt((fk[0] - x_mm) ** 2 + (fk[1] - y_mm) ** 2) if fk else float("nan")
+        err = sqrt((fk[0] - x_mm) ** 2 + (fk[1] - y_mm) ** 2)
         ok = "OK" if err < 0.001 else f"{err:.4f} mm"
         if err >= 0.001:
             all_ok = False
@@ -348,9 +431,9 @@ def test_math():
 
     print(f"\n  Hip abductor IK for leg {LEG_INDEX}:")
     hip_tests = [
-        (0.000, -0.061, -0.200, "Nominal, FR"),
-        (0.050, -0.061, -0.190, "Fwd 50mm, FR"),
-        (-0.040, -0.061, -0.190, "Back 40mm, FR"),
+        (0.000, LEG_LATERAL_OFFSET, DEFAULT_BODY_Z_M, f"Nominal, {LEG_NAMES[LEG_INDEX]}"),
+        (0.030, LEG_LATERAL_OFFSET, DEFAULT_BODY_Z_M + 0.005, f"Fwd 30mm, {LEG_NAMES[LEG_INDEX]}"),
+        (-0.030, LEG_LATERAL_OFFSET, DEFAULT_BODY_Z_M + 0.005, f"Back 30mm, {LEG_NAMES[LEG_INDEX]}"),
     ]
     print(f"  {'Pose':>18}   {'theta_1':>9}  {'x_sag':>10}  {'y_sag':>10}")
     print("  " + "-" * 60)
@@ -365,18 +448,19 @@ def test_math():
 
 def test_sweep(sim_only=False):
     print("\n-- Sweep test --------------------------------------------------")
+    nominal_y_mm = STARTUP_SAG[1]
     waypoints = [
-        (0, 200),
-        (40, 190),
-        (80, 170),
-        (80, 200),
-        (40, 210),
-        (0, 210),
-        (-40, 210),
-        (-80, 200),
-        (-80, 170),
-        (-40, 190),
-        (0, 200),
+        (0, nominal_y_mm),
+        (20, nominal_y_mm - 5),
+        (40, nominal_y_mm - 10),
+        (40, nominal_y_mm),
+        (20, nominal_y_mm + 10),
+        (0, nominal_y_mm + 10),
+        (-20, nominal_y_mm + 10),
+        (-40, nominal_y_mm),
+        (-40, nominal_y_mm - 10),
+        (-20, nominal_y_mm - 5),
+        (0, nominal_y_mm),
     ]
     current = None
     if not sim_only and _pca is not None:
@@ -411,25 +495,96 @@ def test_sweep(sim_only=False):
         release()
 
 
+def test_mock_walk(sim_only=False, cycles=2, from_angles=None):
+    """Run a small direct-servo stepping pattern around the standing pose."""
+    cycles = max(1, int(cycles))
+    print("\n-- Mock walk ---------------------------------------------------")
+    current = from_angles
+    step = 1
+
+    if current is None:
+        current = stand_reference_angles()
+
+    for cycle in range(cycles):
+        print(f"  Cycle {cycle + 1}/{cycles}")
+        for servo_target in MOCK_WALK_SERVO_WAYPOINTS:
+            hip_deg, top_deg, bot_deg = servo_target
+            target_angles = servo_degrees_to_angles(*servo_target)
+            print(
+                f"    step {step:>2}: servo=({hip_deg:5.1f}, {top_deg:5.1f}, {bot_deg:5.1f}) deg"
+                f"  cmd=({target_angles[0]:+6.1f}, {target_angles[1]:+6.1f}, {target_angles[2]:+6.1f})"
+            )
+            if not sim_only and _pca is not None:
+                current = move_to_servo_degrees(
+                    servo_target,
+                    from_angles=current,
+                    verbose=False,
+                )
+                time.sleep(MOCK_WALK_DWELL_S)
+            else:
+                current = target_angles
+            step += 1
+
+    if not sim_only and _pca is not None:
+        current = move_to_servo_degrees(
+            STARTUP_SERVO_DEG,
+            from_angles=current,
+            verbose=False,
+        )
+        print("\n  Mock walk done. Standing at startup pose.")
+
+    return current
+
+
 def interactive(sim_only=False):
+    global HIP_OFFSET, TOP_OFFSET, BOT_OFFSET
+
     print("\n-- Interactive mode -------------------------------------------")
-    print("  Commands:")
+    stand = stand_reference_angles()
+    hip_us = _servo_deg_to_us(STARTUP_SERVO_DEG[0])
+    top_us = _servo_deg_to_us(STARTUP_SERVO_DEG[1])
+    bot_us = _servo_deg_to_us(STARTUP_SERVO_DEG[2])
+
+    print("  Servos are PASSIVE (no PWM). Position the leg at the standing")
+    print("  startup pose, then type 'hold' to lock.")
+    print()
+    print("  Startup stand servo angles and pulse widths:")
+    print(
+        f"    hip  (ch{HIP_CH}): {STARTUP_SERVO_DEG[0]:6.1f} deg  ->  {hip_us:.0f} us"
+    )
+    print(
+        f"    top  (ch{TOP_CH}): {STARTUP_SERVO_DEG[1]:6.1f} deg  ->  {top_us:.0f} us"
+    )
+    print(
+        f"    bot  (ch{BOT_CH}): {STARTUP_SERVO_DEG[2]:6.1f} deg  ->  {bot_us:.0f} us"
+    )
+    print("  Equivalent control-space angles:")
+    print(f"    theta_1={stand[0]:+7.2f}  theta_top={stand[1]:+7.2f}  theta_bot={stand[2]:+7.2f}")
+    print()
+    print("  If 'hold' causes a servo to jump the wrong way:")
+    print("    - flip its MULTIPLIER to -1 in the code")
+    print("  If a servo is off by a few degrees:")
+    print("    - use 'offset hip|top|bot <deg>' to adjust live")
+    print("    - use 'show_offsets' to print values to hard-code")
+
+    current = None  # No position locked yet.
+
+    print("\n  Commands:")
+    print("    hold                 lock servos at startup stand (first command!)")
+    print("    servo <h> <t> <b>    move by direct servo angles in degrees")
+    print("    raw <t1> <tt> <tb>   move by control-space angles")
     print("    sag <x> <y>         sagittal target in mm")
     print("    body <x> <y> <z>    body-frame target in meters")
-    print("    raw <t1> <tt> <tb>  raw angles in degrees")
+    print("    offset <hip|top|bot> <deg>   adjust offset & re-send")
+    print("    show_offsets         print current offsets for code")
     print("    ik <x> <y>          print IK only")
     print("    fk <tt> <tb>        print FK only")
-    print("    sweep               run the arc sweep")
-    print("    neutral             return to nominal (0, 200)")
-    print("    release             let the servos go limp")
-    print("    q / quit            exit")
+    print("    sweep                run the arc sweep")
+    print("    mockwalk [n]         run the direct-servo mock walk for n cycles")
+    print("    stand / neutral      return to startup stand")
+    print("    release              let the servos go limp")
+    print("    q / quit             exit")
     print()
-
-    current = None
-    if not sim_only and _pca is not None:
-        print("  Moving to neutral ...")
-        current = move_to_sag(*STARTUP_SAG, verbose=True)
-        time.sleep(0.5)
 
     while True:
         try:
@@ -494,6 +649,52 @@ def interactive(sim_only=False):
                 print("  Usage: raw <t1_deg> <tt_deg> <tb_deg>")
             continue
 
+        if cmd == "servo" and len(parts) == 4:
+            try:
+                hip_deg, top_deg, bot_deg = (
+                    float(parts[1]),
+                    float(parts[2]),
+                    float(parts[3]),
+                )
+                current = move_to_servo_degrees(
+                    (hip_deg, top_deg, bot_deg),
+                    from_angles=current,
+                    verbose=True,
+                )
+            except ValueError:
+                print("  Usage: servo <hip_deg> <top_deg> <bot_deg>")
+            continue
+
+        if cmd == "offset" and len(parts) == 3:
+            try:
+                which = parts[1].lower()
+                val = float(parts[2])
+                if which == "hip":
+                    HIP_OFFSET = val
+                elif which == "top":
+                    TOP_OFFSET = val
+                elif which == "bot":
+                    BOT_OFFSET = val
+                else:
+                    print("  Usage: offset <hip|top|bot> <deg>")
+                    continue
+                print(f"  {which.upper()}_OFFSET = {val:+.1f} deg")
+                # Re-send current position with new offset.
+                if current is not None:
+                    send_angles(*current, verbose=True)
+                    print("  Re-sent current angles with updated offset.")
+            except ValueError:
+                print("  Usage: offset <hip|top|bot> <deg>")
+            continue
+
+        if cmd == "show_offsets":
+            print(f"\n  Copy these into the script header:")
+            print(f"    HIP_OFFSET = {HIP_OFFSET}")
+            print(f"    TOP_OFFSET = {TOP_OFFSET}")
+            print(f"    BOT_OFFSET = {BOT_OFFSET}")
+            print()
+            continue
+
         if cmd == "ik" and len(parts) == 3:
             try:
                 x_mm, y_mm = float(parts[1]), float(parts[2])
@@ -534,8 +735,32 @@ def interactive(sim_only=False):
             current = None
             continue
 
-        if cmd == "neutral":
-            current = move_to_sag(*STARTUP_SAG, from_angles=current, verbose=True)
+        if cmd == "mockwalk":
+            try:
+                cycles = 2 if len(parts) == 1 else int(parts[1])
+                current = test_mock_walk(
+                    sim_only=sim_only,
+                    cycles=cycles,
+                    from_angles=current,
+                )
+            except ValueError:
+                print("  Usage: mockwalk [cycles]")
+            continue
+
+        if cmd in ("neutral", "stand"):
+            current = move_to_servo_degrees(
+                STARTUP_SERVO_DEG,
+                from_angles=current,
+                verbose=True,
+            )
+            continue
+
+        if cmd == "hold":
+            if current is None:
+                # First hold — send the standing startup pose to lock servos.
+                current = stand_reference_angles()
+            send_angles(*current, verbose=True)
+            print("  Servos locked.")
             continue
 
         if cmd == "release":
@@ -576,14 +801,49 @@ def main():
         metavar=("T1", "TT", "TB"),
         help="Send raw angles (theta_1 theta_top theta_bot in degrees) and exit",
     )
+    parser.add_argument(
+        "--servo",
+        nargs=3,
+        type=float,
+        metavar=("HIP", "TOP", "BOT"),
+        help="Send direct servo angles in degrees and exit",
+    )
+    parser.add_argument(
+        "--mock-walk",
+        nargs="?",
+        const=2,
+        type=int,
+        metavar="CYCLES",
+        help="Run the direct-servo mock walk routine and exit",
+    )
     args = parser.parse_args()
 
-    leg_name = "FR" if LEG_INDEX == 0 else "FL" if LEG_INDEX == 1 else "RR" if LEG_INDEX == 2 else "RL"
+    leg_name = LEG_NAMES[LEG_INDEX]
+    crouch_t1_deg, crouch_tt_deg, crouch_tb_deg = crouch_reference_angles()
+    stand_t1_deg, stand_tt_deg, stand_tb_deg = stand_reference_angles()
 
     print("=" * 62)
     print("  Argos 3-DOF Single-Leg Test")
     print(f"  Leg index   : {LEG_INDEX} ({leg_name})")
     print(f"  Channels    : hip={HIP_CH}  top={TOP_CH}  bot={BOT_CH}")
+    print(f"  Servo travel: {SERVO_RANGE_DEG:.0f} deg  center={SERVO_CENTER_DEG:.1f} deg")
+    print(
+        "  Startup stand servo: "
+        f"hip={STARTUP_SERVO_DEG[0]:.1f}  top={STARTUP_SERVO_DEG[1]:.1f}  bot={STARTUP_SERVO_DEG[2]:.1f}"
+    )
+    print(
+        "  Startup stand cmd : "
+        f"theta_1={stand_t1_deg:+.2f}  "
+        f"theta_top={stand_tt_deg:+.2f}  "
+        f"theta_bot={stand_tb_deg:+.2f}"
+    )
+    print(f"  Startup sag : ({STARTUP_SAG[0]}, {STARTUP_SAG[1]}) mm")
+    print(
+        "  IK ref pose : "
+        f"theta_1={crouch_t1_deg:+.2f}  "
+        f"theta_top={crouch_tt_deg:+.2f}  "
+        f"theta_bot={crouch_tb_deg:+.2f}"
+    )
     print(
         f"  L1_hip={PARAMS['L1_hip'] * 1000:.1f}mm"
         f"  L_upper={PARAMS['L1'] * 1000:.1f}mm"
@@ -647,8 +907,23 @@ def main():
             release()
         return
 
+    if args.servo:
+        hip_deg, top_deg, bot_deg = args.servo
+        move_to_servo_degrees((hip_deg, top_deg, bot_deg), verbose=True)
+        if not sim_only:
+            time.sleep(2)
+            release()
+        return
+
     if args.sweep:
         test_sweep(sim_only=sim_only)
+        return
+
+    if args.mock_walk is not None:
+        test_mock_walk(sim_only=sim_only, cycles=args.mock_walk)
+        if not sim_only:
+            time.sleep(2)
+            release()
         return
 
     interactive(sim_only=sim_only)
