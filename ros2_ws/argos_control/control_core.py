@@ -128,13 +128,18 @@ class SwingController:
         leg_index: int,
         state: State,
         command,
+        touchdown_override: np.ndarray | None = None,
     ) -> np.ndarray:
         """Interpolate the foot toward the predicted touchdown point."""
         if not 0.0 <= swing_phase <= 1.0:
             raise ValueError("Swing phase must stay between 0 and 1.")
 
         foot_location = state.foot_locations[:, leg_index]
-        touchdown = self.raibert_touchdown_location(leg_index, command)
+        touchdown = (
+            np.asarray(touchdown_override, dtype=float)
+            if touchdown_override is not None
+            else self.raibert_touchdown_location(leg_index, command)
+        )
         time_left = self.config.dt * self.config.swing_ticks * (1.0 - swing_phase)
         # XY moves toward touchdown; Z is driven by the swing height profile
         swing_velocity = (touchdown - foot_location) / time_left * np.array([1.0, 1.0, 0.0])

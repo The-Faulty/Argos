@@ -8,9 +8,12 @@ from .Config import Configuration
 from .ros_support import (
     TOPICS,
     crouch_joint_matrix,
+    joint_state_from_matrix,
     joint_state_from_positions,
     matrix_to_ordered_positions,
+    ordered_positions_to_matrix,
     positions_from_joint_state,
+    urdf_joint_matrix,
 )
 
 
@@ -38,9 +41,10 @@ class JointCommandPublisherNode(Node):
             self.get_parameter("publish_joint_states_preview").value
         )
 
-        # Default to crouch so the robot holds still until the safety node sends something
-        config = Configuration()
-        self.latest_positions = matrix_to_ordered_positions(crouch_joint_matrix(config))
+        self.config = Configuration()
+        self.latest_positions = matrix_to_ordered_positions(
+            crouch_joint_matrix(self.config)
+        )
 
         self.command_pub = self.create_publisher(JointState, joint_command_topic, 10)
         self.joint_state_pub = self.create_publisher(JointState, joint_states_topic, 10)
@@ -58,7 +62,18 @@ class JointCommandPublisherNode(Node):
         msg = joint_state_from_positions(stamp, self.latest_positions)
         self.command_pub.publish(msg)
         if self.publish_joint_states_preview:
-            self.joint_state_pub.publish(msg)
+            try:
+                preview_matrix = urdf_joint_matrix(
+                    ordered_positions_to_matrix(self.latest_positions),
+                    self.config,
+                )
+                preview_msg = joint_state_from_matrix(stamp, preview_matrix)
+            except ValueError as exc:
+                self.get_logger().warning(
+                    f"Falling back to raw joint preview because conversion failed: {exc}"
+                )
+                preview_msg = msg
+            self.joint_state_pub.publish(preview_msg)
 
 
 def main(args=None):

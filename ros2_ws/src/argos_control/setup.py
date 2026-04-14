@@ -29,6 +29,7 @@ setup(
             "argos-single-leg-test = argos_control.single_leg_test:main",
             "argos-command-mux = argos_control.command_mux_node:main",
             "argos-gait-planner = argos_control.gait_planner_node:main",
+            "argos-foothold-checker = argos_control.foothold_checker_node:main",
             "argos-safety = argos_control.safety_node:main",
             "argos-joint-command-publisher = argos_control.joint_command_publisher_node:main",
         ],

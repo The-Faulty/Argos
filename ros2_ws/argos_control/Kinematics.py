@@ -42,6 +42,52 @@ def _circle_intersect(P1, r1, P2, r2):
     )
 
 
+def _sagittal_fk_state(theta_top, theta_bot, params):
+    """Resolve the lower linkage state for one leg."""
+    L1, L2 = params["L1"], params["L2"]
+    O = np.zeros(2)
+
+    knee = np.array([L1 * sin(theta_top), L1 * cos(theta_top)])
+    horn = np.array([params["rh"] * sin(theta_bot), params["rh"] * cos(theta_bot)])
+
+    A, B = _circle_intersect(O, params["rbr"], horn, params["Lr1"])
+    if A is None:
+        return None
+
+    def _bcl_x(candidate):
+        return sin(atan2(candidate[0], candidate[1]) + params["abc"])
+
+    bc_right = A if _bcl_x(A) < _bcl_x(B) else B
+
+    phi_r = atan2(bc_right[0], bc_right[1])
+    phi_l = phi_r + params["abc"]
+    bc_left = np.array([params["rbl"] * sin(phi_l), params["rbl"] * cos(phi_l)])
+
+    A, B = _circle_intersect(knee, params["dko"], bc_left, params["Lr2"])
+    if A is None:
+        return None
+
+    def _diff(candidate):
+        leg_dir = knee - candidate
+        delta = (atan2(leg_dir[0], leg_dir[1]) - theta_top) % (2 * pi)
+        return delta - 2 * pi if delta > pi else delta
+
+    dA, dB = _diff(A), _diff(B)
+    if 0 < dA < pi:
+        rod2 = A
+    elif 0 < dB < pi:
+        rod2 = B
+    else:
+        rod2 = A if abs(dA - pi / 2) < abs(dB - pi / 2) else B
+
+    lower_dir = (knee - rod2) / np.linalg.norm(knee - rod2)
+    foot = knee + L2 * lower_dir
+    return {
+        "foot": foot,
+        "lower_angle": atan2(lower_dir[0], lower_dir[1]),
+    }
+
+
 def _hip_abductor_ik(r_body_foot, leg_index, L1_hip, phi):
     """Solve the lateral hip joint. Returns (theta_1, x_sag, y_sag).
 
@@ -197,94 +243,29 @@ def four_legs_inverse_kinematics(r_body_foot, config):
 
 
 def leg_fk(theta_top, theta_bot, params):
-    """Sagittal forward kinematics. Returns (x_sag, y_sag) in meters, or None.
-
-    Traces the full bell-crank chain:
-      bottom servo horn → Rod 1 → bell-crank right → bell-crank left → Rod 2 → foot
-    """
-    L1, L2 = params["L1"], params["L2"]
-    O = np.zeros(2)
-
-    # Upper leg knee position from theta_top
-    knee = np.array([L1 * sin(theta_top), L1 * cos(theta_top)])
-    # Bottom servo horn tip position from theta_bot
-    horn = np.array([params["rh"] * sin(theta_bot), params["rh"] * cos(theta_bot)])
-
-    # Rod 1 connects horn to bell-crank right arm
-    A, B = _circle_intersect(O, params["rbr"], horn, params["Lr1"])
-    if A is None:
+    """Sagittal FK for one leg. Returns foot (x_sag, y_sag) in meters, or None."""
+    state = _sagittal_fk_state(theta_top, theta_bot, params)
+    if state is None:
         return None
-
-    # Pick the bell-crank solution where the left arm points in the correct direction
-    def _bcl_x(c):
-        return sin(atan2(c[0], c[1]) + params["abc"])
-    bc_right = A if _bcl_x(A) < _bcl_x(B) else B
-
-    # Bell-crank left arm is fixed angle abc away from the right arm
-    phi_r = atan2(bc_right[0], bc_right[1])
-    phi_l = phi_r + params["abc"]
-    bc_left = np.array([params["rbl"] * sin(phi_l), params["rbl"] * cos(phi_l)])
-
-    # Rod 2 connects bell-crank left arm to the rod-2 pivot above the knee
-    A, B = _circle_intersect(knee, params["dko"], bc_left, params["Lr2"])
-    if A is None:
-        return None
-
-    # Pick the rod-2 anchor on the front side of the lower leg
-    def _diff(c):
-        ld = knee - c
-        d = (atan2(ld[0], ld[1]) - theta_top) % (2 * pi)
-        return d - 2 * pi if d > pi else d
-
-    dA, dB = _diff(A), _diff(B)
-    if 0 < dA < pi:
-        rod2 = A
-    elif 0 < dB < pi:
-        rod2 = B
-    else:
-        rod2 = A if abs(dA - pi / 2) < abs(dB - pi / 2) else B
-
-    # Foot tip is L2 along the lower leg direction from the knee
-    ld = (knee - rod2) / np.linalg.norm(knee - rod2)
-    foot = knee + L2 * ld
+    foot = state["foot"]
     return float(foot[0]), float(foot[1])
 
 
+def lower_leg_angle(theta_top, theta_bot, params):
+    """Return the absolute lower-leg angle implied by the bell-crank linkage."""
+    state = _sagittal_fk_state(theta_top, theta_bot, params)
+    if state is None:
+        return None
+    return float(state["lower_angle"])
+
+
 if __name__ == "__main__":
+    try:
+        from .Config import Configuration
+    except ImportError:
+        from Config import Configuration
 
-    class _Cfg:
-        """Minimal config for running the self-test without importing the full package."""
-        # Must match Config.py — if geometry changes, update both.
-        L1_HIP = 0.035563
-        PHI = radians(20.156)
-        L_UPPER = 0.127063
-        L_LOWER = 0.127183
-        R_BC_LEFT = 0.04
-        R_BC_RIGHT = 0.04
-        ALPHA_BC = radians(90.0)
-        L_ROD1 = 0.03
-        L_ROD2 = 0.150
-        R_HORN = 0.024
-        D_KNEE_OFFSET = 0.030023
-        LEG_FB = 0.11165
-        LEG_LR = 0.061
-        LEG_ORIGINS = np.array([
-            [ LEG_FB,  LEG_FB, -LEG_FB, -LEG_FB],
-            [-LEG_LR,  LEG_LR, -LEG_LR,  LEG_LR],
-            [0, 0, 0, 0],
-        ])
-
-        @property
-        def leg_params(self):
-            return dict(
-                L1_hip=self.L1_HIP, phi=self.PHI,
-                L1=self.L_UPPER, L2=self.L_LOWER,
-                rbl=self.R_BC_LEFT, rbr=self.R_BC_RIGHT, abc=self.ALPHA_BC,
-                Lr1=self.L_ROD1, Lr2=self.L_ROD2,
-                rh=self.R_HORN, dko=self.D_KNEE_OFFSET,
-            )
-
-    cfg = _Cfg()
+    cfg = Configuration()
     P = cfg.leg_params
 
     print("=" * 66)
@@ -328,17 +309,9 @@ if __name__ == "__main__":
         )
     print(f"\n  Sagittal: {'All passed' if all_ok else 'Failures found'}")
 
-    # Full 3-DOF IK at the default standing height
-    # Valid z range for the real geometry is approximately -0.185 to -0.105 m
-    Z_TEST = -0.165
+    Z_TEST = cfg.default_z_ref
     print(f"\n  Full 3-DOF IK - default stance z={Z_TEST*1000:.0f} mm:")
-    delta_x, delta_y = 0.117, 0.1106
-    front_x, rear_x = 0.00, -0.04
-    stance = np.array([
-        [ delta_x + front_x,  delta_x + front_x, -delta_x + rear_x, -delta_x + rear_x],
-        [-delta_y, delta_y, -delta_y, delta_y],
-        [Z_TEST, Z_TEST, Z_TEST, Z_TEST],
-    ])
+    stance = cfg.default_stance + np.array([0.0, 0.0, Z_TEST])[:, np.newaxis]
     names = ["FR", "FL", "RR", "RL"]
     print(f"  {'Leg':>3}  {'theta_1':>10}  {'theta_top':>10}  {'theta_bot':>10}")
     print("  " + "-" * 48)

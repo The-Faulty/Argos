@@ -4,10 +4,10 @@ from dataclasses import dataclass
 
 import numpy as np
 import rclpy
-from geometry_msgs.msg import Twist
+from geometry_msgs.msg import PoseArray, Twist
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Bool, String
+from std_msgs.msg import Bool, Int32MultiArray, String
 from transforms3d.euler import euler2mat
 
 from .Config import Configuration
@@ -18,7 +18,11 @@ from .ros_support import (
     clamp,
     crouch_joint_matrix,
     euler_from_imu,
+    int32_multiarray_from_values,
     joint_state_from_matrix,
+    matrix_from_pose_array,
+    pose_array_from_matrix,
+    values_from_int32_multiarray,
     zero_twist,
 )
 
@@ -58,6 +62,15 @@ class GaitPlannerNode(Node):
         self.declare_parameter("recovery_stance_scale_x", 1.05)
         self.declare_parameter("recovery_stance_scale_y", 1.12)
         self.declare_parameter("recovery_height_offset_m", -0.01)
+        self.declare_parameter("foothold_candidate_topic", TOPICS.foothold_candidates)
+        self.declare_parameter(
+            "foothold_contact_modes_topic", TOPICS.foothold_contact_modes
+        )
+        self.declare_parameter("foothold_adjusted_topic", TOPICS.foothold_adjusted)
+        self.declare_parameter("foothold_status_topic", TOPICS.foothold_status)
+        self.declare_parameter("enable_foothold_adjustments", True)
+        self.declare_parameter("block_on_unsafe_footholds", False)
+        self.declare_parameter("foothold_update_timeout_s", 0.4)
 
         command_topic = self.get_parameter("command_topic").value
         gait_mode_topic = self.get_parameter("gait_mode_topic").value
@@ -97,6 +110,21 @@ class GaitPlannerNode(Node):
         self.recovery_height_offset_m = float(
             self.get_parameter("recovery_height_offset_m").value
         )
+        self.enable_foothold_adjustments = bool(
+            self.get_parameter("enable_foothold_adjustments").value
+        )
+        self.block_on_unsafe_footholds = bool(
+            self.get_parameter("block_on_unsafe_footholds").value
+        )
+        self.foothold_update_timeout_ns = int(
+            max(0.0, float(self.get_parameter("foothold_update_timeout_s").value)) * 1e9
+        )
+        foothold_candidate_topic = self.get_parameter("foothold_candidate_topic").value
+        foothold_contact_modes_topic = self.get_parameter(
+            "foothold_contact_modes_topic"
+        ).value
+        foothold_adjusted_topic = self.get_parameter("foothold_adjusted_topic").value
+        foothold_status_topic = self.get_parameter("foothold_status_topic").value
 
         self.config = Configuration()
         self.state = State()
@@ -111,6 +139,10 @@ class GaitPlannerNode(Node):
         self.imu_received = False
         self.push_recovery_until_ns = 0
         self.push_recovery_active = False
+        self.latest_adjusted_footholds: np.ndarray | None = None
+        self.latest_foothold_status = np.zeros(4, dtype=int)
+        self.latest_foothold_update_ns = 0
+        self.foothold_blocked = False
 
         # Seed foot locations to the default stand height so first IK solve is valid
         self.state.foot_locations = (
@@ -118,11 +150,25 @@ class GaitPlannerNode(Node):
             + np.array([0.0, 0.0, self.config.default_z_ref])[:, np.newaxis]
         )
 
-        self.raw_joint_pub = self.create_publisher(JointState, joint_command_raw_topic, 10)
+        self.raw_joint_pub = self.create_publisher(
+            JointState, joint_command_raw_topic, 10
+        )
+        self.foothold_candidate_pub = self.create_publisher(
+            PoseArray, foothold_candidate_topic, 10
+        )
+        self.foothold_contact_modes_pub = self.create_publisher(
+            Int32MultiArray, foothold_contact_modes_topic, 10
+        )
         self.create_subscription(Twist, command_topic, self._command_callback, 10)
         self.create_subscription(String, gait_mode_topic, self._mode_callback, 10)
         self.create_subscription(Bool, estop_topic, self._estop_callback, 10)
         self.create_subscription(Imu, imu_topic, self._imu_callback, 10)
+        self.create_subscription(
+            PoseArray, foothold_adjusted_topic, self._foothold_adjusted_callback, 10
+        )
+        self.create_subscription(
+            Int32MultiArray, foothold_status_topic, self._foothold_status_callback, 10
+        )
         self.create_timer(1.0 / update_rate_hz, self._update)
 
         self._apply_gait_profile(self.current_mode)
@@ -169,15 +215,35 @@ class GaitPlannerNode(Node):
             + self.imu_filter_alpha * sample
         )
 
+    def _foothold_adjusted_callback(self, msg: PoseArray):
+        try:
+            self.latest_adjusted_footholds = matrix_from_pose_array(msg)
+            self.latest_foothold_update_ns = self.get_clock().now().nanoseconds
+        except ValueError as exc:
+            self.get_logger().warning(
+                f"Ignoring malformed foothold adjustment message: {exc}"
+            )
+
+    def _foothold_status_callback(self, msg: Int32MultiArray):
+        try:
+            self.latest_foothold_status = values_from_int32_multiarray(
+                msg, expected_size=4
+            )
+            self.latest_foothold_update_ns = self.get_clock().now().nanoseconds
+        except ValueError as exc:
+            self.get_logger().warning(
+                f"Ignoring malformed foothold status message: {exc}"
+            )
+
     def _apply_gait_profile(self, mode: str):
         """Set contact phases, timing, and clearance for the requested gait."""
         if mode == "crawl":
-            # Crawl: one foot off at a time (most stable, slowest)
+            # Keep every phase non-zero so each single-leg swing column is reachable.
             self.config.contact_phases = np.array(
                 [[0, 1, 1, 1], [1, 0, 1, 1], [1, 1, 0, 1], [1, 1, 1, 0]]
             )
             self.config.swing_time = 0.25
-            self.config.overlap_time = 0.0
+            self.config.overlap_time = self.config.swing_time
             self.config.z_clearance = 0.04
         elif mode == "trot":
             # Trot: diagonal pairs move together
@@ -243,13 +309,12 @@ class GaitPlannerNode(Node):
         self.push_recovery_active = active
         return active
 
-    def _stabilise_with_imu(self, foot_locations: np.ndarray) -> np.ndarray:
-        """Apply a small corrective rotation based on measured body tilt."""
-        if not self.imu_received:
-            return foot_locations
+    def _imu_stabilisation_matrix(self) -> np.ndarray:
+        if not (self.use_imu_stabilization and self.imu_received):
+            return np.eye(3, dtype=float)
 
         roll, pitch, _ = self.imu_euler
-        rmat = euler2mat(
+        correction = euler2mat(
             clamp(
                 -roll * self.stabilization_roll_gain,
                 -self.stabilization_max_correction_rad,
@@ -262,7 +327,20 @@ class GaitPlannerNode(Node):
             ),
             0.0,
         )
-        return rmat.T @ foot_locations
+        return correction.T
+
+    def _foot_transform_matrix(self, command: MotionCommand) -> np.ndarray:
+        return self._imu_stabilisation_matrix() @ euler2mat(
+            command.roll, command.pitch, 0.0
+        )
+
+    def _apply_foot_transform(
+        self, foot_locations: np.ndarray, command: MotionCommand
+    ) -> np.ndarray:
+        return self._foot_transform_matrix(command) @ foot_locations
+
+    def _stabilise_with_imu(self, foot_locations: np.ndarray) -> np.ndarray:
+        return self._imu_stabilisation_matrix() @ foot_locations
 
     def _stand_foot_locations(self, height: float, push_recovery_active: bool) -> np.ndarray:
         """Compute foot positions for a standing pose, optionally widened for recovery."""
@@ -274,9 +352,84 @@ class GaitPlannerNode(Node):
             height += self.recovery_height_offset_m
         return stance + np.array([0.0, 0.0, height])[:, np.newaxis]
 
-    def _step_gait(self, command: MotionCommand) -> np.ndarray:
-        """Advance all four legs by one tick and return the new foot positions."""
-        contact_modes = self.gait_controller.contacts(self.state.ticks)
+    def _nominal_touchdown_location(
+        self, leg_index: int, command: MotionCommand
+    ) -> np.ndarray:
+        touchdown = self.swing_controller.raibert_touchdown_location(
+            leg_index, command
+        ).copy()
+        touchdown[2] = command.height
+        return touchdown
+
+    def _candidate_touchdown_locations(
+        self, command: MotionCommand, contact_modes: np.ndarray
+    ) -> np.ndarray:
+        candidates = self.state.foot_locations.copy()
+        for leg_index in range(4):
+            if contact_modes[leg_index] == 0:
+                candidates[:, leg_index] = self._nominal_touchdown_location(
+                    leg_index, command
+                )
+        return candidates
+
+    def _publish_foothold_candidates(
+        self,
+        candidate_planned: np.ndarray,
+        contact_modes: np.ndarray,
+        foot_transform: np.ndarray,
+    ) -> None:
+        stamp = self.get_clock().now().to_msg()
+        candidate_base = foot_transform @ candidate_planned
+        self.foothold_candidate_pub.publish(
+            pose_array_from_matrix(stamp, candidate_base)
+        )
+        self.foothold_contact_modes_pub.publish(
+            int32_multiarray_from_values(contact_modes)
+        )
+
+    def _foothold_data_fresh(self) -> bool:
+        if self.latest_adjusted_footholds is None or self.foothold_update_timeout_ns <= 0:
+            return False
+        now_ns = self.get_clock().now().nanoseconds
+        return (now_ns - self.latest_foothold_update_ns) <= self.foothold_update_timeout_ns
+
+    def _set_foothold_blocked(self, blocked: bool) -> None:
+        if blocked and not self.foothold_blocked:
+            self.get_logger().warning(
+                "Foothold checker rejected the active touchdown; holding gait phase."
+            )
+        elif self.foothold_blocked and not blocked:
+            self.get_logger().info("Foothold checker cleared; resuming gait.")
+        self.foothold_blocked = blocked
+
+    def _resolved_touchdown(
+        self,
+        leg_index: int,
+        nominal_touchdown: np.ndarray,
+        foot_transform: np.ndarray,
+    ) -> np.ndarray:
+        if not (self.enable_foothold_adjustments and self._foothold_data_fresh()):
+            return nominal_touchdown
+        if self.latest_adjusted_footholds is None:
+            return nominal_touchdown
+        if self.latest_foothold_status[leg_index] <= 0:
+            return nominal_touchdown
+
+        adjusted_base = self.latest_adjusted_footholds[:, leg_index]
+        return foot_transform.T @ adjusted_base
+
+    def _should_block_unsafe_footholds(self, contact_modes: np.ndarray) -> bool:
+        if not (self.block_on_unsafe_footholds and self._foothold_data_fresh()):
+            return False
+        swing_mask = np.asarray(contact_modes, dtype=int) == 0
+        return bool(np.any(swing_mask) and np.any(self.latest_foothold_status[swing_mask] < 0))
+
+    def _step_gait(
+        self,
+        command: MotionCommand,
+        contact_modes: np.ndarray,
+        foot_transform: np.ndarray,
+    ) -> np.ndarray:
         new_foot_locations = np.zeros((3, 4), dtype=float)
 
         for leg_index in range(4):
@@ -289,8 +442,17 @@ class GaitPlannerNode(Node):
                     self.gait_controller.subphase_ticks(self.state.ticks)
                     / max(1, self.config.swing_ticks)
                 )
+                nominal_touchdown = self._nominal_touchdown_location(
+                    leg_index, command
+                )
                 new_location = self.swing_controller.next_foot_location(
-                    swing_proportion, leg_index, self.state, command
+                    swing_proportion,
+                    leg_index,
+                    self.state,
+                    command,
+                    touchdown_override=self._resolved_touchdown(
+                        leg_index, nominal_touchdown, foot_transform
+                    ),
                 )
             new_foot_locations[:, leg_index] = new_location
 
@@ -300,6 +462,9 @@ class GaitPlannerNode(Node):
         """Main control loop: compute joint targets and publish them."""
         push_recovery_active = self._update_push_recovery()
         command = self._build_command(push_recovery_active)
+        foothold_blocked = False
+        contact_modes = np.ones(4, dtype=int)
+        foot_transform = self._foot_transform_matrix(command)
 
         try:
             if self.current_mode == "crouch":
@@ -309,18 +474,32 @@ class GaitPlannerNode(Node):
                 planned = self._stand_foot_locations(
                     self.config.default_z_ref, push_recovery_active=False
                 )
+                contact_modes = np.ones(4, dtype=int)
+                candidate_planned = planned.copy()
                 rotated = planned.copy()
             else:
                 if self.current_mode == "stand" or self.estop_active or push_recovery_active:
                     planned = self._stand_foot_locations(
                         command.height, push_recovery_active=push_recovery_active
                     )
+                    contact_modes = np.ones(4, dtype=int)
+                    candidate_planned = planned.copy()
                 else:
-                    planned = self._step_gait(command)
+                    contact_modes = self.gait_controller.contacts(self.state.ticks)
+                    candidate_planned = self._candidate_touchdown_locations(
+                        command, contact_modes
+                    )
+                    foothold_blocked = self._should_block_unsafe_footholds(
+                        contact_modes
+                    )
+                    if foothold_blocked:
+                        planned = self.state.foot_locations.copy()
+                    else:
+                        planned = self._step_gait(
+                            command, contact_modes, foot_transform
+                        )
 
-                rotated = euler2mat(command.roll, command.pitch, 0.0) @ planned
-                if self.use_imu_stabilization:
-                    rotated = self._stabilise_with_imu(rotated)
+                rotated = foot_transform @ planned
                 angles = four_legs_inverse_kinematics(rotated, self.config)
 
         except ValueError as exc:
@@ -328,6 +507,8 @@ class GaitPlannerNode(Node):
             self.get_logger().warning(f"Skipping gait update: {exc}")
             return
 
+        self._set_foothold_blocked(foothold_blocked)
+        self._publish_foothold_candidates(candidate_planned, contact_modes, foot_transform)
         self.state.foot_locations = planned
         self.state.rotated_foot_locations = rotated
         self.state.joint_angles = angles
@@ -336,7 +517,8 @@ class GaitPlannerNode(Node):
         self.state.pitch = command.pitch
         self.state.yaw_rate = command.yaw_rate
         self.state.horizontal_velocity = command.horizontal_velocity
-        self.state.ticks += 1
+        if not foothold_blocked:
+            self.state.ticks += 1
 
         msg = joint_state_from_matrix(self.get_clock().now().to_msg(), angles)
         self.raw_joint_pub.publish(msg)
