@@ -1,3 +1,7 @@
+# RViz config for visualizing the Argos robot model and TF tree.
+# Open with: ros2 launch quadruped_bringup state_publisher.launch.py start_rviz:=true
+# Fixed frame: base_link — the robot body center.
+# Shows: robot URDF mesh + TF frames for all joints and links.
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -15,14 +19,14 @@ Visualization Manager:
       Class: rviz_default_plugins/RobotModel
       Description Source: Topic
       Description Topic:
-        Value: /robot_description
+        Value: /robot_description   # robot_state_publisher publishes the URDF here
       Enabled: true
       Name: RobotModel
       Visual Enabled: true
-      Collision Enabled: false
+      Collision Enabled: false      # collision geometry hidden — clutters the view
     - Class: rviz_default_plugins/TF
       Enabled: true
-      Name: TF
+      Name: TF                      # shows all frames — useful for checking leg FK
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
@@ -36,10 +40,10 @@ Visualization Manager:
   Views:
     Current:
       Class: rviz_default_plugins/Orbit
-      Distance: 2.0
+      Distance: 2.0           # 2 meters back — fits the whole robot in frame
       Focal Point:
         X: 0
         Y: 0
         Z: 0
-      Pitch: 0.75
+      Pitch: 0.75             # ~43 degrees down — good angle for seeing all four legs
       Yaw: 0.75

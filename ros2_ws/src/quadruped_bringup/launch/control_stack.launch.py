@@ -1,4 +1,12 @@
-"""Launch the ROS 2 control stack for Argos."""
+"""Launch the four Argos control nodes: command_mux, gait_planner, safety, joint_command_publisher.
+
+Data flow once running:
+  /teleop/cmd_vel or /nav/cmd_vel
+      -> command_mux  -> /cmd_vel
+      -> gait_planner -> /joint_command/raw
+      -> safety_node  -> /joint_command/safe
+      -> joint_command_publisher -> /joint_command  (to MCU via micro-ROS)
+"""
 
 import os
 
@@ -12,6 +20,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     bringup_dir = get_package_share_directory("quadruped_bringup")
+    # Default params live in config/control_stack.yaml — override at launch time if needed
     default_params = os.path.join(bringup_dir, "config", "control_stack.yaml")
 
     params_file_arg = DeclareLaunchArgument(
@@ -22,14 +31,15 @@ def generate_launch_description():
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
         default_value="false",
-        description="Use Gazebo or bag time.",
+        description="Use Gazebo or bag time instead of wall clock.",
     )
     publish_joint_states_preview_arg = DeclareLaunchArgument(
         "publish_joint_states_preview",
         default_value="true",
-        description="Mirror the commanded joints to /joint_states for visualization.",
+        description="Mirror commanded joints to /joint_states so RViz can show the robot pose.",
     )
 
+    # All four control nodes share the same YAML params file
     common_parameters = [
         LaunchConfiguration("params_file"),
         {

@@ -1,4 +1,4 @@
-"""Republish the latest safe joint target at a fixed rate."""
+"""Buffer the latest safe joint command and re-publish it at a steady 100 Hz."""
 
 import rclpy
 from rclpy.node import Node
@@ -18,10 +18,11 @@ from .ros_support import (
 
 
 class JointCommandPublisherNode(Node):
-    """Buffers the latest safe joint command and re-publishes it at a fixed 100 Hz.
+    """Re-publishes the latest safe joint command at a steady 100 Hz.
 
-    Decouples the safety node's update rate from the MCU's expected packet rate.
-    Also mirrors commands to /joint_states for RViz preview.
+    The safety node runs at 50 Hz but the MCU expects 100 Hz packets.
+    This node decouples those rates by holding the last command and repeating it.
+    Also mirrors to /joint_states so RViz shows the live robot pose.
     """
 
     def __init__(self):
@@ -55,13 +56,16 @@ class JointCommandPublisherNode(Node):
         try:
             self.latest_positions = positions_from_joint_state(msg)
         except (KeyError, ValueError) as exc:
+            # Drop malformed messages rather than crashing or sending garbage to the MCU
             self.get_logger().warning(f"Ignoring malformed safe joint command: {exc}")
 
     def _publish(self):
+        # Send the same command every tick — MCU gets a steady stream even when nothing changes
         stamp = self.get_clock().now().to_msg()
         msg = joint_state_from_positions(stamp, self.latest_positions)
         self.command_pub.publish(msg)
         if self.publish_joint_states_preview:
+            # Mirror to /joint_states so RViz shows the current commanded pose
             try:
                 preview_matrix = urdf_joint_matrix(
                     ordered_positions_to_matrix(self.latest_positions),

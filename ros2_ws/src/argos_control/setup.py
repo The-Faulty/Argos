@@ -1,8 +1,12 @@
+# ROS 2 package setup for argos_control.
+# The source files live in ros2_ws/argos_control/ — this file just tells colcon where to find them.
+
 from pathlib import Path
 
 from setuptools import setup
 
 package_name = "argos_control"
+# Source lives two levels up in ros2_ws/argos_control/ rather than inside src/
 package_source = Path(__file__).resolve().parents[2] / package_name
 
 setup(

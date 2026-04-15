@@ -17,22 +17,23 @@ except ImportError:
     from Config import Configuration
 
 
-PCA9685_I2C_ADDRESS = 0x40
+PCA9685_I2C_ADDRESS = 0x40   # default I2C address for the PCA9685 servo driver
 
 # PCA9685 channel assignments for this test leg.
-HIP_CH = 2
-TOP_CH = 1
-BOT_CH = 0
+HIP_CH = 2   # hip abductor servo
+TOP_CH = 1   # upper leg servo
+BOT_CH = 0   # lower/bell-crank servo
 
-# Pulse limits from the servo datasheet.
+# Pulse limits from the servo datasheet (microseconds).
+# Adjust if the servos hit their physical endpoints before these values.
 PWM_MIN_US = 370
 PWM_MAX_US = 2400
 PWM_FREQ = 50
 SERVO_RANGE_DEG = 270.0
 SERVO_CENTER_DEG = SERVO_RANGE_DEG / 2.0
 
-# Flip a multiplier if a servo runs backward.
-# Adjust an offset if neutral is not centered.
+# Flip a multiplier to -1 if a servo runs backward.
+# Adjust an offset (degrees) if the servo neutral doesn't match the IK zero.
 HIP_OFFSET = 0.0
 HIP_MULTIPLIER = -1
 
@@ -42,7 +43,7 @@ TOP_MULTIPLIER = +1
 BOT_OFFSET = 0.0
 BOT_MULTIPLIER = +1
 
-# 0=FR, 1=FL, 2=RR, 3=RL
+# Which leg to test: 0=FR, 1=FL, 2=RR, 3=RL
 LEG_INDEX = 0
 LEG_NAMES = ("FR", "FL", "RR", "RL")
 
@@ -269,7 +270,11 @@ def stand_reference_angles():
 
 
 def _ik_to_servo_us(joint_angle_deg, offset_deg, multiplier):
-    """Convert an IK angle into a pulse width in microseconds."""
+    """Map an IK joint angle to a servo pulse width in microseconds.
+
+    Servos expect 0–270 degrees centered at SERVO_CENTER_DEG. Offset and multiplier
+    correct for mounting direction and neutral position.
+    """
     cmd = SERVO_CENTER_DEG + multiplier * joint_angle_deg + offset_deg
     return _servo_deg_to_us(cmd)
 
@@ -281,7 +286,7 @@ def _servo_us_to_ik(pulse_us, offset_deg, multiplier):
 
 
 def _us_to_duty(pulse_us):
-    """Convert pulse width in microseconds to PCA9685 duty cycle (0–65535)."""
+    """Convert a pulse width in microseconds to a PCA9685 duty-cycle value (0–65535)."""
     period_us = 1_000_000.0 / PWM_FREQ
     return int(round(pulse_us / period_us * 65535))
 

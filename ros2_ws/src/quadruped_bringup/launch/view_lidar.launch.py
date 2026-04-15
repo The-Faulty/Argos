@@ -1,4 +1,11 @@
-"""Launch the RPLiDAR node with RViz."""
+"""Quick debug launch — start the RPLiDAR and open RViz to check the scan.
+
+Useful for verifying the lidar is spinning and seeing data before running the full system.
+
+Usage:
+  ros2 launch quadruped_bringup view_lidar.launch.py
+  ros2 launch quadruped_bringup view_lidar.launch.py serial_port:=/dev/ttyUSB0
+"""
 
 import os
 

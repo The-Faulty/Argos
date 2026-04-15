@@ -1,4 +1,9 @@
-"""Launch the Argos mission and perception bench stack."""
+"""Launch the mission and perception nodes: thermal camera, victim detector, gas mapper, orchestrator.
+
+These nodes are optional — the robot can walk without them.
+Enable with:  ros2 launch quadruped_bringup full_system.launch.py enable_mission:=true
+Or run standalone:  ros2 launch quadruped_bringup mission_stack.launch.py
+"""
 
 import os
 

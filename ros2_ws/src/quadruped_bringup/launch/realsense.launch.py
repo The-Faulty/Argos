@@ -1,5 +1,7 @@
-"""
-realsense.launch.py — Launch the RealSense D435if camera node.
+"""Launch the Intel RealSense D435i depth + color camera.
+
+Streams color and depth at 640x480 @ 30fps with depth aligned to the color frame.
+Point cloud and infrared streams are off by default to keep CPU load down on the Pi.
 
 Usage:
   ros2 launch quadruped_bringup realsense.launch.py
