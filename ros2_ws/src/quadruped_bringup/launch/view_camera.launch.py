@@ -18,6 +18,7 @@ import os
 def generate_launch_description():
 
     bringup_dir = get_package_share_directory('quadruped_bringup')
+    description_dir = get_package_share_directory('quadruped_description')
 
     # Include the realsense launch
     realsense_launch = IncludeLaunchDescription(
@@ -26,8 +27,11 @@ def generate_launch_description():
         ),
     )
 
-    # RViz with a pre-made config (if it exists)
+    # Prefer a camera-specific config when present, otherwise fall back to the
+    # checked-in robot model RViz layout.
     rviz_config = os.path.join(bringup_dir, 'config', 'realsense_view.rviz')
+    if not os.path.isfile(rviz_config):
+        rviz_config = os.path.join(description_dir, 'config', 'robot_model.rviz')
     rviz_node = Node(
         package='rviz2',
         executable='rviz2',

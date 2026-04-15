@@ -1,0 +1,4 @@
+Dockerfile text eol=lf
+docker-compose.yaml text eol=lf
+*.py text eol=lf
+*.xacro text eol=lf

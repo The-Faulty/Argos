@@ -47,6 +47,41 @@ gait_planner_node:
     recovery_stance_scale_y: 1.12     # widen left-right by 12%
     recovery_height_offset_m: -0.01   # lower the body 1 cm for a lower center of gravity
 
+    # Foothold checking — terrain-aware foot placement via depth camera
+    foothold_candidate_topic: /foothold/candidates
+    foothold_contact_modes_topic: /foothold/contact_modes
+    foothold_adjusted_topic: /foothold/adjusted
+    foothold_status_topic: /foothold/status
+    enable_foothold_adjustments: true  # apply adjusted footholds from the checker node
+    block_on_unsafe_footholds: false   # if true, freeze gait when checker rejects a foothold
+    foothold_update_timeout_s: 0.4     # ignore stale foothold data older than this
+
+# ── foothold_checker_node ───────────────────────────────────────────────────
+# Uses depth images to evaluate and adjust planned footholds.
+# Runs at a lower rate than the gait planner since depth processing is heavier.
+foothold_checker_node:
+  ros__parameters:
+    candidate_topic: /foothold/candidates
+    contact_modes_topic: /foothold/contact_modes
+    adjusted_topic: /foothold/adjusted
+    status_topic: /foothold/status
+    safe_topic: /foothold/safe
+    marker_topic: /foothold/markers       # RViz visualization of foothold candidates
+    depth_image_topic: /camera/camera/aligned_depth_to_color/image_raw
+    camera_info_topic: /camera/camera/aligned_depth_to_color/camera_info
+    base_frame: base_link
+    update_rate_hz: 10.0               # lower than gait planner — depth processing is expensive
+    search_radius_m: 0.04              # how far around the nominal foothold to search
+    search_step_m: 0.02                # grid step within the search radius
+    support_radius_m: 0.025            # radius of the support patch under the foot
+    patch_radius_px: 3                 # pixel radius for depth patch sampling
+    min_support_samples: 5             # minimum valid depth pixels in the patch
+    max_height_error_m: 0.03           # reject footholds with >3 cm height mismatch
+    max_height_std_m: 0.012            # reject rough terrain (high height variance)
+    max_height_span_m: 0.03            # reject footholds with >3 cm height span
+    min_depth_m: 0.05                  # ignore depth readings closer than 5 cm
+    max_depth_m: 1.5                   # ignore depth readings farther than 1.5 m
+
 # ── safety_node ──────────────────────────────────────────────────────────────
 # Rate-limits joint commands so servos can't be commanded to jump instantly.
 # Also enforces joint limits and handles e-stop by commanding crouch.

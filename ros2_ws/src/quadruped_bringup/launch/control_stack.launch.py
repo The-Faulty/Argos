@@ -63,6 +63,13 @@ def generate_launch_description():
         parameters=common_parameters,
         output="screen",
     )
+    foothold_checker = Node(
+        package="argos_control",
+        executable="argos-foothold-checker",
+        name="foothold_checker_node",
+        parameters=common_parameters,
+        output="screen",
+    )
     safety_node = Node(
         package="argos_control",
         executable="argos-safety",
@@ -96,6 +103,7 @@ def generate_launch_description():
             publish_joint_states_preview_arg,
             command_mux,
             gait_planner,
+            foothold_checker,
             safety_node,
             joint_command_publisher,
         ]
