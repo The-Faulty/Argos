@@ -81,6 +81,12 @@ Full stack:
 ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true start_rviz:=true
 ```
 
+Expo demo stack:
+
+```bash
+ros2 launch quadruped_bringup expo_demo.launch.py enable_esp32:=true start_demo_commander:=true
+```
+
 Mission stack only:
 
 ```bash
@@ -104,3 +110,5 @@ ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_mi
 - The Pi device and bring-up contract is documented in `docs/pi_hardware_contract.md`.
 - The recommended expo-critical execution order is documented in `docs/expo_execution_plan.md`.
 - The single source-of-truth expo checklist is documented in `docs/expo_master_todo.md`.
+- The repeatable demo launch flow is documented in `docs/expo_demo_runbook.md`.
+- The architecture, safety, terrain, and scope talking points are documented in `docs/expo_story.md`.
