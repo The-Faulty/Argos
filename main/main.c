@@ -14,6 +14,7 @@
 #include <sensor_msgs/msg/imu.h>
 #include <rclc/rclc.h>
 #include <rclc/executor.h>
+#include <sensor_msgs/msg/magnetic_field.h>
 
 #include "lsm9ds0.h"
 
@@ -50,6 +51,10 @@
 
 rcl_publisher_t publisher;
 sensor_msgs__msg__Imu msg;
+
+// magnetometer
+rcl_publisher_t mag_publisher;
+sensor_msgs__msg__MagneticField mag_msg;
 
 // IMU
 static lsm9ds0_am_sensor_t *sensor_am;
@@ -110,6 +115,7 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 	{
 		lsm9ds0_float_a_data_t a = {};
 		lsm9ds0_float_g_data_t g = {};
+		lsm9ds0_float_m_data_t m = {};
 
 		// accelerometer
 		if (lsm9ds0_new_a_data(sensor_am) && lsm9ds0_get_float_a_data(sensor_am, &a))
@@ -127,6 +133,14 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 			msg.angular_velocity.z = g.z * DEG_TO_RAD;
 		}
 
+		// magnetometer
+		if (lsm9ds0_new_m_data(sensor_am) && lsm9ds0_get_float_m_data(sensor_am, &m))
+		{
+			mag_msg.magnetic_field.x = m.mx * 1e-4;
+			mag_msg.magnetic_field.y = m.my * 1e-4;
+			mag_msg.magnetic_field.z = m.mz * 1e-4;
+		}
+
 		// orientation unknown — set covariance[0] = -1 to signal this to ROS
 		msg.orientation_covariance[0] = -1.0;
 
@@ -134,8 +148,11 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 		int64_t now_ns = rmw_uros_epoch_nanos();
 		msg.header.stamp.sec = (int32_t)(now_ns / 1000000000LL);
 		msg.header.stamp.nanosec = (uint32_t)(now_ns % 1000000000LL);
+		mag_msg.header.stamp.sec = (int32_t)(now_ns / 1000000000LL);
+		mag_msg.header.stamp.nanosec = (uint32_t)(now_ns % 1000000000LL);
 
 		RCSOFTCHECK(rcl_publish(&publisher, &msg, NULL));
+		RCSOFTCHECK(rcl_publish(&mag_publisher, &mag_msg, NULL));
 		ESP_LOGI("IMU", "a: x=%+.3f y=%+.3f z=%+.3f | g: x=%+.3f y=%+.3f z=%+.3f",
 				 msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
 				 msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z);
@@ -219,12 +236,34 @@ void micro_ros_task(void *arg)
 	}
 	msg.orientation_covariance[0] = -1.0;
 
+	ESP_LOGI("UROS", "imu magnetometer msg init");
+	if (!rosidl_runtime_c__String__init(&mag_msg.header.frame_id))
+	{
+		ESP_LOGE("UROS", "mag frame_id init failed");
+		vTaskDelete(NULL);
+		return;
+	}
+
+	if (!rosidl_runtime_c__String__assign(&mag_msg.header.frame_id, "imu_link"))
+	{
+		ESP_LOGE("UROS", "mag frame_id assign failed");
+		vTaskDelete(NULL);
+		return;
+	}
+
 	ESP_LOGI("UROS", "publisher init");
 	RCCHECK(rclc_publisher_init_default(
 		&publisher,
 		&node,
 		ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, Imu),
 		"/imu/data_raw"));
+
+	ESP_LOGI("UROS", "mag publisher init");
+	RCCHECK(rclc_publisher_init_default(
+		&mag_publisher,
+		&node,
+		ROSIDL_GET_MSG_TYPE_SUPPORT(sensor_msgs, msg, MagneticField),
+		"/imu/mag"));
 
 	rcl_timer_t timer;
 	ESP_LOGI("UROS", "timer init");
@@ -248,9 +287,12 @@ void micro_ros_task(void *arg)
 	}
 
 	rosidl_runtime_c__String__fini(&msg.header.frame_id);
+	rosidl_runtime_c__String__fini(&mag_msg.header.frame_id);
 
 	RCCHECK(rcl_publisher_fini(&publisher, &node));
+	RCCHECK(rcl_publisher_fini(&mag_publisher, &node));
 	RCCHECK(rcl_node_fini(&node));
+
 	vTaskDelete(NULL);
 }
 
