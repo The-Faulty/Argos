@@ -1,3 +1,7 @@
+# RViz config for visualizing the RPLiDAR A1M8 scan.
+# Open with: ros2 launch quadruped_bringup view_lidar.launch.py
+# Fixed frame: lidar_link — change to base_link once the full URDF TF tree is running.
+# Shows: 2D laser scan points (red) + robot model + TF frames
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -51,7 +55,7 @@ Visualization Manager:
         Durability Policy: Volatile
         Filter size: 10
         History Policy: Keep Last
-        Reliability Policy: Best Effort
+        Reliability Policy: Best Effort  # Best Effort matches the rplidar_ros default QoS
         Value: /scan
       Use rainbow: true
     - Alpha: 1
@@ -69,7 +73,7 @@ Visualization Manager:
   Enabled: true
   Global Options:
     Background Color: 48; 48; 48
-    Fixed Frame: lidar_link
+    Fixed Frame: lidar_link   # switch to base_link when running the full system
     Frame Rate: 30
   Name: root
   Tools:
@@ -94,7 +98,7 @@ Visualization Manager:
         X: 0
         Y: 0
         Z: 0
-      Pitch: 0.785
+      Pitch: 0.785   # ~45 degrees — looking slightly down at the robot
       Yaw: 0.785
 Window Geometry:
   Displays:
