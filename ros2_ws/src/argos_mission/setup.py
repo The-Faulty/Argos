@@ -1,3 +1,6 @@
+# ROS 2 package setup for argos_mission.
+# The source files live in ros2_ws/argos_mission/ — this file just tells colcon where to find them.
+
 from pathlib import Path
 
 from setuptools import setup

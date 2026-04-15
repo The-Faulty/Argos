@@ -1,4 +1,13 @@
-"""Launch robot_state_publisher for the Argos description."""
+"""Publish the robot URDF, TF tree, and optionally open RViz.
+
+Reads quadruped.urdf.xacro, processes it with xacro, and feeds it to
+robot_state_publisher so all TF frames are available to the rest of the stack.
+
+Usage:
+  ros2 launch quadruped_bringup state_publisher.launch.py
+  ros2 launch quadruped_bringup state_publisher.launch.py start_rviz:=true
+  ros2 launch quadruped_bringup state_publisher.launch.py use_joint_state_gui:=true
+"""
 
 import os
 

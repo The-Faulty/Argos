@@ -1,4 +1,15 @@
-"""Launch the Argos description, control stack, sensors, and ESP32 bridge."""
+"""Top-level launch file — brings up the full Argos system.
+
+What gets started:
+  - state_publisher  — URDF + TF tree (always on)
+  - control_stack    — motion pipeline (always on)
+  - sensors          — LiDAR + RealSense (enable_sensors, default true)
+  - esp32_bridge     — micro-ROS serial agent (enable_esp32, default false)
+  - mission_stack    — thermal, gas, victim detection (enable_mission, default false)
+
+Example to start everything:
+  ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_mission:=true
+"""
 
 import os
 

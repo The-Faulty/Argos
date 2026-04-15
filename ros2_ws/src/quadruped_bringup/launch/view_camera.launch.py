@@ -1,7 +1,9 @@
-"""
-view_camera.launch.py — Launch RealSense + RViz to visualize camera output.
+"""Quick debug launch — start the RealSense and open RViz to check the camera feed.
 
-Usage (in dev container or on Pi with display forwarding):
+Useful for verifying the camera is working before running the full system.
+Requires a display (run locally or with X11 forwarding from the Pi).
+
+Usage:
   ros2 launch quadruped_bringup view_camera.launch.py
 """
 

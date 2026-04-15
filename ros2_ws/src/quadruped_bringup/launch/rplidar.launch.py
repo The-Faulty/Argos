@@ -1,4 +1,7 @@
-"""Launch the RPLiDAR A1M8 node.
+"""Launch the RPLiDAR A1M8 2D lidar node.
+
+The lidar publishes LaserScan messages on /scan (remappable via topic_name).
+An optional static TF broadcaster is included for bench testing when no URDF is loaded.
 
 Examples:
   ros2 launch quadruped_bringup rplidar.launch.py

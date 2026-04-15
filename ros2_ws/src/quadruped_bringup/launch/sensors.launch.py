@@ -1,4 +1,13 @@
-"""Launch the RealSense and RPLiDAR bring-up together."""
+"""Launch the RealSense D435i depth camera and RPLiDAR A1M8 together.
+
+Both sensors can be toggled independently via enable_realsense and enable_lidar args.
+An optional static TF for the lidar can be published for bench testing without a URDF.
+
+Usage:
+  ros2 launch quadruped_bringup sensors.launch.py
+  ros2 launch quadruped_bringup sensors.launch.py enable_realsense:=false
+  ros2 launch quadruped_bringup sensors.launch.py publish_static_tf:=true lidar_z:=0.08
+"""
 
 import os
 
