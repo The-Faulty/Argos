@@ -3,32 +3,60 @@
 # Enable with: ros2 launch quadruped_bringup full_system.launch.py enable_mission:=true
 
 # ── thermal_node ─────────────────────────────────────────────────────────────
-# Simulated MLX90640 thermal camera — generates a fake 32x24 float32 image.
-# Replace this node with a real MLX90640 driver when the hardware is available.
+# MLX90640 thermal camera publisher.
+# backend: auto will use the real sensor on the Pi when the Blinka/Adafruit
+# libraries are installed, and fall back to a simulated stream on laptops.
 thermal_node:
   ros__parameters:
+    backend: auto                      # auto | mlx90640 | mock
+    fallback_to_mock: true            # if false, crash when MLX init fails
     image_topic: /thermal/image_raw       # where to publish the thermal image
     camera_info_topic: /thermal/camera_info
     frame_id: thermal_link                # TF frame the camera is mounted to
     publish_rate_hz: 4.0                 # MLX90640 runs at 4 Hz — keep this matched
+    horizontal_fov_deg: 110.0
+    vertical_fov_deg: 75.0
+    rotation_degrees: 0                  # rotate if the board is mounted sideways
+    flip_horizontal: false
+    flip_vertical: false
+    i2c_address: 51                      # 0x33 in decimal
+    i2c_frequency_hz: 800000
+    refresh_rate_hz: 4.0
     ambient_temperature_c: 22.0          # background temperature for the simulation
     hot_spot_temperature_c: 36.0         # simulated victim temperature
+    hot_spot_radius_px: 3.0
+    hot_spot_center_x: 16.0
+    hot_spot_center_y: 12.0
     enable_hot_spot: true                # set false to simulate an empty scene
     animate_hot_spot: true               # moves the hot spot so you can test tracking
+    noise_stddev_c: 0.35                 # mock-stream noise level
 
 # ── victim_detector_node ─────────────────────────────────────────────────────
 # Finds warm blobs in the thermal image that could be people.
-# Detection logic: threshold above median → connected components → filter by size
+# Detection logic:
+# smooth frame → adaptive threshold → connected components → multi-frame tracking
 victim_detector_node:
   ros__parameters:
     image_topic: /thermal/image_raw
+    camera_info_topic: /thermal/camera_info
     detections_topic: /victim_detections  # publishes RViz MarkerArray with sphere markers
     detection_count_topic: /mission/detection_count  # Int32 — how many victims found this frame
-    relative_threshold_c: 8.0            # pixel must be this many degrees above median to count
-    min_cluster_pixels: 3               # ignore blobs smaller than this (filters noise)
+    relative_threshold_c: 4.0            # pixel must be this many degrees above median to count
+    min_cluster_pixels: 4               # ignore blobs smaller than this (filters noise)
+    max_cluster_pixels: 90              # reject large hot surfaces like heaters or sunlight
     min_victim_temp_c: 30.0             # lower bound for human body temperature
     max_victim_temp_c: 42.0             # upper bound — anything hotter is probably a hot surface
+    min_peak_delta_c: 2.5               # must be this much hotter than the scene median
+    smoothing_passes: 1                 # 3x3 smoothing passes before thresholding
+    connectivity: 8                     # 8-connected blobs handle diagonal pixels cleanly
+    tracking_radius_px: 3.5             # centroid match radius between consecutive frames
+    min_confirmed_frames: 2             # hotspot must persist this many frames before reporting
+    max_missed_frames: 1                # keep track alive briefly through one dropped frame
     assumed_range_m: 1.2               # how far away to project detections into 3D space
+    horizontal_fov_deg: 110.0          # only used if camera_info is missing
+    vertical_fov_deg: 75.0
+    marker_scale_m: 0.20
+    label_offset_m: 0.18
 
 # ── gas_mapping_node ─────────────────────────────────────────────────────────
 # Builds a 2D occupancy-style map of gas concentration as the robot walks around.

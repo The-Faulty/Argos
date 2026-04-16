@@ -10,10 +10,10 @@ from .Config import Configuration
 from .ros_support import (
     TOPICS,
     crouch_joint_matrix,
-    joint_limit_vectors,
     joint_state_from_positions,
     positions_from_joint_state,
     matrix_to_ordered_positions,
+    ordered_positions_to_matrix,
 )
 
 
@@ -42,7 +42,6 @@ class SafetyNode(Node):
         )
 
         self.config = Configuration()
-        self.min_limits, self.max_limits = joint_limit_vectors(self.config)
         self.crouch_positions = matrix_to_ordered_positions(crouch_joint_matrix(self.config))
 
         # Start tracking from the crouch (all-zeros) pose.
@@ -59,6 +58,11 @@ class SafetyNode(Node):
         self.create_subscription(Bool, estop_topic, self._estop_callback, 10)
         self.create_timer(self.update_period_s, self._update)
 
+    def _clamp_positions(self, positions) -> np.ndarray:
+        """Clamp a flat joint vector to the measured hardware envelope."""
+        matrix = ordered_positions_to_matrix(positions)
+        return matrix_to_ordered_positions(self.config.clamp_joint_matrix(matrix))
+
     def _raw_command_callback(self, msg: JointState):
         try:
             positions = positions_from_joint_state(msg)
@@ -66,8 +70,8 @@ class SafetyNode(Node):
             self.get_logger().warning(f"Ignoring malformed joint command: {exc}")
             return
 
-        # Hard-clamp incoming targets to joint limits before storing them
-        self.target_positions = np.clip(positions, self.min_limits, self.max_limits)
+        # Hard-clamp incoming targets to the measured joint and linkage limits.
+        self.target_positions = self._clamp_positions(positions)
         self.last_raw_time = self.get_clock().now()
 
     def _estop_callback(self, msg: Bool):
@@ -90,11 +94,7 @@ class SafetyNode(Node):
         # Rate-limit: move no faster than max_joint_velocity_rad_s per second
         max_step = self.max_joint_velocity_rad_s * self.update_period_s
         delta = np.clip(desired - self.current_positions, -max_step, max_step)
-        self.current_positions = np.clip(
-            self.current_positions + delta,
-            self.min_limits,
-            self.max_limits,
-        )
+        self.current_positions = self._clamp_positions(self.current_positions + delta)
 
         msg = joint_state_from_positions(
             self.get_clock().now().to_msg(),

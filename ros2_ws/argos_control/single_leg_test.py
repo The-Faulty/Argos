@@ -13,8 +13,10 @@ import numpy as np
 
 try:
     from .Config import Configuration
+    from .Kinematics import leg_explicit_inverse_kinematics
 except ImportError:
     from Config import Configuration
+    from Kinematics import leg_explicit_inverse_kinematics
 
 
 PCA9685_I2C_ADDRESS = 0x40   # default I2C address for the PCA9685 servo driver
@@ -29,7 +31,7 @@ BOT_CH = 0   # lower/bell-crank servo
 PWM_MIN_US = 370
 PWM_MAX_US = 2400
 PWM_FREQ = 50
-SERVO_RANGE_DEG = 270.0
+SERVO_RANGE_DEG = 180.0
 SERVO_CENTER_DEG = SERVO_RANGE_DEG / 2.0
 
 # Flip a multiplier to -1 if a servo runs backward.
@@ -52,13 +54,30 @@ LEG_NAMES = ("FR", "FL", "RR", "RL")
 _CONFIG = Configuration()
 PARAMS = dict(_CONFIG.leg_params)
 LEG_LATERAL_OFFSET = float(_CONFIG.LEG_ORIGINS[1, LEG_INDEX])
+LEG_SAGITTAL_OFFSET_M = float(
+    _CONFIG.default_stance[1, LEG_INDEX] - _CONFIG.LEG_ORIGINS[1, LEG_INDEX]
+)
 DEFAULT_BODY_Z_M = float(_CONFIG.default_z_ref)
+DEFAULT_SAG_X_MM = int(
+    round(
+        (_CONFIG.default_stance[0, LEG_INDEX] - _CONFIG.LEG_ORIGINS[0, LEG_INDEX])
+        * 1000.0
+    )
+)
 
 # Motion settings.
 STEPS_PER_MOVE = 30
 STEP_DELAY_S = 0.018
-STARTUP_SAG = (0, int(round(abs(DEFAULT_BODY_Z_M) * 1000.0)))
+STARTUP_SAG = (DEFAULT_SAG_X_MM, int(round(abs(DEFAULT_BODY_Z_M) * 1000.0)))
 STARTUP_SERVO_DEG = (90.0, 90.0, 90.0)
+FALLBACK_SERVO_LIMITS_DEG = np.array([
+    [45.0, 135.0],
+    [50.0, 115.0],
+    [5.0, 180.0],
+], dtype=float)
+FALLBACK_COUPLED_TOP_SAMPLES_DEG = np.array([50.0, 70.0, 90.0, 102.0, 115.0], dtype=float)
+FALLBACK_COUPLED_BOT_MIN_SAMPLES_DEG = np.array([10.0, 10.0, 40.0, 65.0, 85.0], dtype=float)
+FALLBACK_COUPLED_BOT_MAX_SAMPLES_DEG = np.array([95.0, 125.0, 180.0, 180.0, 180.0], dtype=float)
 MOCK_WALK_DWELL_S = 0.12
 MOCK_WALK_SERVO_WAYPOINTS = [
     STARTUP_SERVO_DEG,
@@ -78,6 +97,11 @@ MOCK_WALK_SERVO_WAYPOINTS = [
 
 def _point_to_rad(p1, p2):
     return (atan2(p2, p1) + 2 * pi) % (2 * pi)
+
+
+def _wrap_to_pi(angle):
+    """Wrap an angle in radians into [-pi, pi]."""
+    return (angle + pi) % (2 * pi) - pi
 
 
 def _rotx(angle):
@@ -121,6 +145,7 @@ def hip_ik(r_foot, leg_index, params):
     t1 = a1 + a3
     if t1 >= 2 * pi:
         t1 = fmod(t1, 2 * pi)
+    t1 = _wrap_to_pi(t1)
 
     offset = np.array([0.0, params["L1_hip"] * cos(t1), params["L1_hip"] * sin(t1)])
     translated = np.array([x, y, z]) - offset
@@ -209,33 +234,27 @@ def sag_fk(theta_top_deg, theta_bot_deg, params):
 def full_ik_from_sag(x_mm, y_mm, lateral_m=None):
     """Full 3-DOF IK from a sagittal plane target in mm."""
     if lateral_m is None:
-        lateral_m = LEG_LATERAL_OFFSET
-    r_foot = np.array([x_mm / 1000.0, lateral_m, -y_mm / 1000.0])
-    t1_deg, x_sag, y_sag = hip_ik(r_foot, LEG_INDEX, PARAMS)
-    sol = sag_ik(x_sag, y_sag, PARAMS)
+        lateral_m = LEG_SAGITTAL_OFFSET_M
+    r_leg = np.array([x_mm / 1000.0, lateral_m, -y_mm / 1000.0], dtype=float)
+    sol = leg_explicit_inverse_kinematics(r_leg, LEG_INDEX, _CONFIG)
     if sol is None:
         return None
-    return t1_deg, sol[0], sol[1]
+    return tuple(np.degrees(sol))
 
 
 def solve_body_target(bx, by, bz):
     """Full 3-DOF IK from a body-frame target in meters."""
-    r_foot = np.array([bx, by, bz])
-    t1_deg, x_sag, y_sag = hip_ik(r_foot, LEG_INDEX, PARAMS)
-    sol = sag_ik(x_sag, y_sag, PARAMS)
+    body_target = np.array([bx, by, bz], dtype=float)
+    r_leg = body_target - _CONFIG.LEG_ORIGINS[:, LEG_INDEX]
+    sol = leg_explicit_inverse_kinematics(r_leg, LEG_INDEX, _CONFIG)
     if sol is None:
         return None
-    return t1_deg, sol[0], sol[1]
+    return tuple(np.degrees(sol))
 
 
-def crouch_reference_angles():
-    """Return the actual IK angles for the startup crouch pose."""
-    sol = full_ik_from_sag(*STARTUP_SAG)
-    if sol is None:
-        raise RuntimeError(
-            f"Startup sag {STARTUP_SAG} mm is unreachable for leg {LEG_NAMES[LEG_INDEX]}"
-        )
-    return sol
+def startup_reference_angles():
+    """Return the raw zero-angle startup hold pose used while attaching the leg."""
+    return servo_degrees_to_angles(*STARTUP_SERVO_DEG)
 
 
 def _servo_deg_to_us(servo_deg):
@@ -265,14 +284,132 @@ def servo_degrees_to_angles(hip_deg, top_deg, bot_deg):
 
 
 def stand_reference_angles():
-    """Return the standing startup pose expressed in control-space angles."""
-    return servo_degrees_to_angles(*STARTUP_SERVO_DEG)
+    """Return the neutral standing pose from the configured default stance."""
+    body_target = _CONFIG.default_stance[:, LEG_INDEX] + np.array([0.0, 0.0, _CONFIG.default_z_ref])
+    sol = solve_body_target(*body_target)
+    if sol is None:
+        raise RuntimeError(
+            f"Neutral stand target {body_target} m is unreachable for leg {LEG_NAMES[LEG_INDEX]}"
+        )
+    return sol
+
+
+def _ik_to_servo_deg(joint_angle_deg, offset_deg, multiplier):
+    """Map an IK joint angle to a raw servo angle in degrees before pulse conversion."""
+    return SERVO_CENTER_DEG + multiplier * joint_angle_deg + offset_deg
+
+
+def _servo_limit_matrix_deg():
+    """Return measured direct-servo limits, even when running against an older Config.py."""
+    limits = getattr(_CONFIG, "SERVO_LIMITS_DEG", None)
+    if limits is None:
+        return FALLBACK_SERVO_LIMITS_DEG
+    return np.asarray(limits, dtype=float)
+
+
+def _coupled_bot_limits_servo_deg(top_servo_deg, margin_deg=0.0):
+    """Return the measured bottom-servo window for a given top-servo angle."""
+    config_fn = getattr(_CONFIG, "coupled_bot_limits_servo_deg", None)
+    if callable(config_fn):
+        return config_fn(top_servo_deg, margin_deg=margin_deg)
+
+    servo_limits = _servo_limit_matrix_deg()
+    top_lo, top_hi = servo_limits[1]
+    bot_lo_hard, bot_hi_hard = servo_limits[2]
+    clamped_top = float(np.clip(top_servo_deg, top_lo, top_hi))
+    margin_deg = max(0.0, float(margin_deg))
+    bot_min_samples = np.clip(
+        FALLBACK_COUPLED_BOT_MIN_SAMPLES_DEG + margin_deg,
+        bot_lo_hard,
+        bot_hi_hard,
+    )
+    bot_max_samples = np.clip(
+        FALLBACK_COUPLED_BOT_MAX_SAMPLES_DEG - margin_deg,
+        bot_lo_hard,
+        bot_hi_hard,
+    )
+    bot_min = float(np.interp(clamped_top, FALLBACK_COUPLED_TOP_SAMPLES_DEG, bot_min_samples))
+    bot_max = float(np.interp(clamped_top, FALLBACK_COUPLED_TOP_SAMPLES_DEG, bot_max_samples))
+    if bot_min > bot_max:
+        midpoint = 0.5 * (bot_min + bot_max)
+        bot_min = midpoint
+        bot_max = midpoint
+    return bot_min, bot_max
+
+
+def _fallback_clamp_servo_triplet_deg(hip_deg, top_deg, bot_deg, coupled_margin_deg=0.0):
+    """Clamp a direct servo command using only older Config.py primitives."""
+    requested_hip = float(hip_deg)
+    requested_top = float(top_deg)
+    requested_bot = float(bot_deg)
+    coupled_margin_deg = max(0.0, float(coupled_margin_deg))
+
+    servo_limits = _servo_limit_matrix_deg()
+    hip_lo, hip_hi = servo_limits[0]
+    top_lo, top_hi = servo_limits[1]
+    bot_lo_hard, bot_hi_hard = servo_limits[2]
+
+    clamped_hip = float(np.clip(requested_hip, hip_lo, hip_hi))
+    clamped_top = float(np.clip(requested_top, top_lo, top_hi))
+
+    bot_lo, bot_hi = _coupled_bot_limits_servo_deg(
+        clamped_top,
+        margin_deg=coupled_margin_deg,
+    )
+    bot_lo = max(bot_lo_hard, float(bot_lo))
+    bot_hi = min(bot_hi_hard, float(bot_hi))
+    clamped_bot = float(np.clip(requested_bot, bot_lo, bot_hi))
+
+    reasons = []
+    if abs(clamped_hip - requested_hip) > 1e-9:
+        reasons.append(
+            f"hip {requested_hip:.1f}->{clamped_hip:.1f} deg "
+            f"(safe range [{hip_lo:.1f}, {hip_hi:.1f}])"
+        )
+    if abs(clamped_top - requested_top) > 1e-9:
+        reasons.append(
+            f"top {requested_top:.1f}->{clamped_top:.1f} deg "
+            f"(safe range [{top_lo:.1f}, {top_hi:.1f}])"
+        )
+    if abs(clamped_bot - requested_bot) > 1e-9:
+        reasons.append(
+            f"bot {requested_bot:.1f}->{clamped_bot:.1f} deg "
+            f"(safe range [{bot_lo:.1f}, {bot_hi:.1f}] for top={clamped_top:.1f})"
+        )
+
+    return (clamped_hip, clamped_top, clamped_bot), bool(reasons), "; ".join(reasons)
+
+
+def _clamp_safe_servo_triplet(hip_deg, top_deg, bot_deg, verbose=False):
+    """Clamp a direct servo command to the measured envelope and optionally warn."""
+    clamp_fn = getattr(_CONFIG, "clamp_servo_triplet_deg", None)
+    if callable(clamp_fn):
+        clamped_triplet, changed, reason = clamp_fn(
+            float(hip_deg),
+            float(top_deg),
+            float(bot_deg),
+            coupled_margin_deg=_CONFIG.BENCH_COUPLED_MARGIN_DEG,
+        )
+    else:
+        clamped_triplet, changed, reason = _fallback_clamp_servo_triplet_deg(
+            float(hip_deg),
+            float(top_deg),
+            float(bot_deg),
+            coupled_margin_deg=getattr(_CONFIG, "BENCH_COUPLED_MARGIN_DEG", 0.0),
+        )
+    if changed and verbose:
+        print(
+            "  [WARN] Clamped servo target to measured limits: "
+            f"hip={clamped_triplet[0]:.1f}  top={clamped_triplet[1]:.1f}  bot={clamped_triplet[2]:.1f}"
+        )
+        print(f"         {reason}")
+    return clamped_triplet
 
 
 def _ik_to_servo_us(joint_angle_deg, offset_deg, multiplier):
     """Map an IK joint angle to a servo pulse width in microseconds.
 
-    Servos expect 0–270 degrees centered at SERVO_CENTER_DEG. Offset and multiplier
+    Servos expect 0–180 degrees centered at SERVO_CENTER_DEG. Offset and multiplier
     correct for mounting direction and neutral position.
     """
     cmd = SERVO_CENTER_DEG + multiplier * joint_angle_deg + offset_deg
@@ -330,25 +467,42 @@ def _set_pulse(channel, pulse_us):
 
 def send_angles(t1_deg, tt_deg, tb_deg, verbose=True):
     """Drive all three servos to the given IK angles."""
-    hip_us = _ik_to_servo_us(t1_deg, HIP_OFFSET, HIP_MULTIPLIER)
-    top_us = _ik_to_servo_us(tt_deg, TOP_OFFSET, TOP_MULTIPLIER)
-    bot_us = _ik_to_servo_us(tb_deg, BOT_OFFSET, BOT_MULTIPLIER)
+    hip_deg = _ik_to_servo_deg(t1_deg, HIP_OFFSET, HIP_MULTIPLIER)
+    top_deg = _ik_to_servo_deg(tt_deg, TOP_OFFSET, TOP_MULTIPLIER)
+    bot_deg = _ik_to_servo_deg(tb_deg, BOT_OFFSET, BOT_MULTIPLIER)
+    hip_deg, top_deg, bot_deg = _clamp_safe_servo_triplet(
+        hip_deg,
+        top_deg,
+        bot_deg,
+        verbose=verbose,
+    )
+    t1_cmd, tt_cmd, tb_cmd = servo_degrees_to_angles(hip_deg, top_deg, bot_deg)
+    hip_us = _servo_deg_to_us(hip_deg)
+    top_us = _servo_deg_to_us(top_deg)
+    bot_us = _servo_deg_to_us(bot_deg)
     _set_pulse(HIP_CH, hip_us)
     _set_pulse(TOP_CH, top_us)
     _set_pulse(BOT_CH, bot_us)
     if verbose:
-        print(f"    theta_1  ={t1_deg:+7.2f} deg  ch{HIP_CH}  {hip_us:.0f} us")
-        print(f"    theta_top={tt_deg:+7.2f} deg  ch{TOP_CH}  {top_us:.0f} us")
-        print(f"    theta_bot={tb_deg:+7.2f} deg  ch{BOT_CH}  {bot_us:.0f} us")
+        print(f"    theta_1  ={t1_cmd:+7.2f} deg  ch{HIP_CH}  {hip_us:.0f} us")
+        print(f"    theta_top={tt_cmd:+7.2f} deg  ch{TOP_CH}  {top_us:.0f} us")
+        print(f"    theta_bot={tb_cmd:+7.2f} deg  ch{BOT_CH}  {bot_us:.0f} us")
+    return t1_cmd, tt_cmd, tb_cmd
 
 
 def move_to_angles(target_angles, from_angles=None, verbose=True):
     """Move to an angle triplet, interpolating when hardware is active."""
     t1_target, tt_target, tb_target = target_angles
+    target_servo_deg = (
+        _ik_to_servo_deg(t1_target, HIP_OFFSET, HIP_MULTIPLIER),
+        _ik_to_servo_deg(tt_target, TOP_OFFSET, TOP_MULTIPLIER),
+        _ik_to_servo_deg(tb_target, BOT_OFFSET, BOT_MULTIPLIER),
+    )
+    target_servo_deg = _clamp_safe_servo_triplet(*target_servo_deg, verbose=verbose)
+    t1_target, tt_target, tb_target = servo_degrees_to_angles(*target_servo_deg)
 
     if from_angles is None or _pca is None:
-        send_angles(t1_target, tt_target, tb_target, verbose=verbose)
-        return t1_target, tt_target, tb_target
+        return send_angles(t1_target, tt_target, tb_target, verbose=verbose)
 
     t1_start, tt_start, tb_start = from_angles
     for step in range(1, STEPS_PER_MOVE + 1):
@@ -361,14 +515,18 @@ def move_to_angles(target_angles, from_angles=None, verbose=True):
         )
         time.sleep(STEP_DELAY_S)
 
-    if verbose:
-        send_angles(t1_target, tt_target, tb_target, verbose=True)
-    return t1_target, tt_target, tb_target
+    return send_angles(t1_target, tt_target, tb_target, verbose=verbose)
 
 
 def move_to_servo_degrees(target_servo_deg, from_angles=None, verbose=True):
     """Move using direct servo angles in degrees."""
     hip_deg, top_deg, bot_deg = [float(v) for v in target_servo_deg]
+    hip_deg, top_deg, bot_deg = _clamp_safe_servo_triplet(
+        hip_deg,
+        top_deg,
+        bot_deg,
+        verbose=verbose,
+    )
     if verbose:
         print(
             f"\n  Servo target: hip={hip_deg:.1f} deg"
@@ -409,57 +567,50 @@ def release():
 # ── Self-tests ────────────────────────────────────────────────────────────────
 
 def test_math():
-    """Run IK/FK round-trip checks and print results. Returns True if all pass."""
-    from math import sqrt
+    """Run a quick smoke test around the configured neutral single-leg workspace."""
 
     print("\n-- IK/FK self-test ---------------------------------------------")
-    print("  Sagittal IK/FK:")
-    nominal_y_m = abs(DEFAULT_BODY_Z_M)
+    print("  Neutral sagittal IK samples:")
+    nominal_x_mm, nominal_y_mm = STARTUP_SAG
     sag_tests = [
-        (0.000, nominal_y_m, "Nominal"),
-        (0.025, nominal_y_m - 0.005, "Fwd +25mm"),
-        (0.050, nominal_y_m - 0.015, "Wide fwd"),
-        (-0.025, nominal_y_m - 0.005, "Back -25mm"),
-        (-0.040, nominal_y_m - 0.010, "Wide back"),
-        (0.000, nominal_y_m - 0.020, "Raised"),
-        (0.000, nominal_y_m + 0.010, "Extended"),
+        (nominal_x_mm, nominal_y_mm, "Neutral"),
+        (nominal_x_mm + 12, nominal_y_mm, "Forward +12mm"),
+        (nominal_x_mm - 20, nominal_y_mm, "Back -20mm"),
     ]
-    print(f"  {'Pose':>16}   {'theta_top':>10}  {'theta_bot':>10}  FK err")
+    print(f"  {'Pose':>16}   {'theta_1':>9}  {'theta_top':>10}  {'theta_bot':>10}")
     print("  " + "-" * 60)
     all_ok = True
-    for x_m, y_m, name in sag_tests:
-        sol = sag_ik(x_m, y_m, PARAMS)
+    for x_mm, y_mm, name in sag_tests:
+        sol = full_ik_from_sag(x_mm, y_mm)
         if sol is None:
             print(f"  {name:<16}  UNREACHABLE")
             all_ok = False
             continue
-        tt, tb = sol
-        fk = sag_fk(tt, tb, PARAMS)
-        if fk is None:
-            print(f"  {name:<16}   {tt:+9.3f} deg  {tb:+9.3f} deg  FK failed")
+        t1, tt, tb = sol
+        print(f"  {name:<16}   {t1:+8.3f}  {tt:+9.3f}  {tb:+9.3f}")
+
+    print(f"\n  Neutral body-frame IK sample for leg {LEG_INDEX}:")
+    stance = _CONFIG.default_stance + np.array([0.0, 0.0, _CONFIG.default_z_ref])[:, np.newaxis]
+    body_target = stance[:, LEG_INDEX]
+    body_tests = [
+        (
+            float(body_target[0]),
+            float(body_target[1]),
+            float(body_target[2]),
+            f"Neutral, {LEG_NAMES[LEG_INDEX]}",
+        ),
+    ]
+    print(f"  {'Pose':>18}   {'theta_1':>9}  {'theta_top':>10}  {'theta_bot':>10}")
+    print("  " + "-" * 60)
+    for bx, by, bz, name in body_tests:
+        sol = solve_body_target(bx, by, bz)
+        if sol is None:
+            print(f"  {name:<18}  UNREACHABLE")
             all_ok = False
             continue
-        x_mm, y_mm = x_m * 1000, y_m * 1000
-        err = sqrt((fk[0] - x_mm) ** 2 + (fk[1] - y_mm) ** 2)
-        ok = "OK" if err < 0.001 else f"{err:.4f} mm"
-        if err >= 0.001:
-            all_ok = False
-        print(f"  {name:<16}   {tt:+9.3f} deg  {tb:+9.3f} deg  {ok}")
+        print(f"  {name:<18}   {sol[0]:+8.3f}  {sol[1]:+9.3f}  {sol[2]:+9.3f}")
 
-    print(f"\n  Hip abductor IK for leg {LEG_INDEX}:")
-    hip_tests = [
-        (0.000, LEG_LATERAL_OFFSET, DEFAULT_BODY_Z_M, f"Nominal, {LEG_NAMES[LEG_INDEX]}"),
-        (0.030, LEG_LATERAL_OFFSET, DEFAULT_BODY_Z_M + 0.005, f"Fwd 30mm, {LEG_NAMES[LEG_INDEX]}"),
-        (-0.030, LEG_LATERAL_OFFSET, DEFAULT_BODY_Z_M + 0.005, f"Back 30mm, {LEG_NAMES[LEG_INDEX]}"),
-    ]
-    print(f"  {'Pose':>18}   {'theta_1':>9}  {'x_sag':>10}  {'y_sag':>10}")
-    print("  " + "-" * 60)
-    for bx, by, bz, name in hip_tests:
-        r_foot = np.array([bx, by, bz])
-        t1, xs, ys = hip_ik(r_foot, LEG_INDEX, PARAMS)
-        print(f"  {name:<18}   {t1:+8.2f} deg  {xs * 1000:+9.2f}mm  {ys * 1000:+9.2f}mm")
-
-    print(f"\n  {'Sagittal checks passed' if all_ok else 'Sagittal checks failed'}")
+    print(f"\n  {'Smoke checks passed' if all_ok else 'Smoke checks failed'}")
     return all_ok
 
 
@@ -497,7 +648,7 @@ def test_sweep(sim_only=False):
             continue
         t1, tt, tb = sol
         fk = sag_fk(tt, tb, PARAMS)
-        r_foot = np.array([x / 1000.0, LEG_LATERAL_OFFSET, -y / 1000.0])
+        r_foot = np.array([x / 1000.0, LEG_SAGITTAL_OFFSET_M, -y / 1000.0])
         _, xs, ys = hip_ik(r_foot, LEG_INDEX, PARAMS)
         err = sqrt((fk[0] - xs * 1000) ** 2 + (fk[1] - ys * 1000) ** 2) if fk else float("nan")
         ok = "OK" if err < 0.001 else f"{err:.3f} mm"
@@ -523,7 +674,7 @@ def test_mock_walk(sim_only=False, cycles=2, from_angles=None):
     step = 1
 
     if current is None:
-        current = stand_reference_angles()
+        current = startup_reference_angles()
 
     for cycle in range(cycles):
         print(f"  Cycle {cycle + 1}/{cycles}")
@@ -559,15 +710,16 @@ def test_mock_walk(sim_only=False, cycles=2, from_angles=None):
 def interactive(sim_only=False):
     global HIP_OFFSET, TOP_OFFSET, BOT_OFFSET
     print("\n-- Interactive mode -------------------------------------------")
+    startup = startup_reference_angles()
     stand = stand_reference_angles()
     hip_us = _servo_deg_to_us(STARTUP_SERVO_DEG[0])
     top_us = _servo_deg_to_us(STARTUP_SERVO_DEG[1])
     bot_us = _servo_deg_to_us(STARTUP_SERVO_DEG[2])
 
-    print("  Servos are PASSIVE (no PWM). Position the leg at the standing")
-    print("  startup pose, then type 'hold' to lock.")
+    print("  Servos are PASSIVE (no PWM). Position the leg at the startup")
+    print("  assembly pose below, then type 'hold' to lock that reference.")
     print()
-    print("  Startup stand servo angles and pulse widths:")
+    print("  Startup assembly servo angles and pulse widths:")
     print(
         f"    hip  (ch{HIP_CH}): {STARTUP_SERVO_DEG[0]:6.1f} deg  ->  {hip_us:.0f} us"
     )
@@ -577,8 +729,16 @@ def interactive(sim_only=False):
     print(
         f"    bot  (ch{BOT_CH}): {STARTUP_SERVO_DEG[2]:6.1f} deg  ->  {bot_us:.0f} us"
     )
-    print("  Equivalent control-space angles:")
-    print(f"    theta_1={stand[0]:+7.2f}  theta_top={stand[1]:+7.2f}  theta_bot={stand[2]:+7.2f}")
+    print("  Equivalent startup control-space angles:")
+    print(
+        f"    theta_1={startup[0]:+7.2f}  "
+        f"theta_top={startup[1]:+7.2f}  theta_bot={startup[2]:+7.2f}"
+    )
+    print("  Neutral stand control-space target:")
+    print(
+        f"    theta_1={stand[0]:+7.2f}  "
+        f"theta_top={stand[1]:+7.2f}  theta_bot={stand[2]:+7.2f}"
+    )
     print()
     print("  If 'hold' causes a servo to jump the wrong way:")
     print("    - flip its MULTIPLIER to -1 in the code")
@@ -589,7 +749,7 @@ def interactive(sim_only=False):
     current = None  # No position locked yet.
 
     print("\n  Commands:")
-    print("    hold                 lock servos at startup stand (first command!)")
+    print("    hold                 lock servos at startup assembly pose (first command!)")
     print("    servo <h> <t> <b>    move by direct servo angles in degrees")
     print("    raw <t1> <tt> <tb>   move by control-space angles")
     print("    sag <x> <y>         sagittal target in mm")
@@ -600,7 +760,7 @@ def interactive(sim_only=False):
     print("    fk <tt> <tb>        print FK only")
     print("    sweep                run the arc sweep")
     print("    mockwalk [n]         run the direct-servo mock walk for n cycles")
-    print("    stand / neutral      return to startup stand")
+    print("    stand / neutral      move to the configured neutral stand pose")
     print("    release              let the servos go limp")
     print("    q / quit             exit")
     print()
@@ -624,8 +784,11 @@ def interactive(sim_only=False):
             try:
                 x_mm, y_mm = float(parts[1]), float(parts[2])
                 current = move_to_sag(x_mm, y_mm, from_angles=current, verbose=True)
-            except ValueError:
-                print("  Usage: sag <x_mm> <y_mm>")
+            except ValueError as exc:
+                if str(exc).startswith("could not convert string"):
+                    print("  Usage: sag <x_mm> <y_mm>")
+                else:
+                    print(f"  [WARN] {exc}")
             continue
 
         if cmd == "body" and len(parts) == 4:
@@ -643,8 +806,11 @@ def interactive(sim_only=False):
                 current = move_to_angles(
                     (t1_deg, tt_deg, tb_deg), from_angles=current, verbose=True
                 )
-            except ValueError:
-                print("  Usage: body <x_m> <y_m> <z_m>")
+            except ValueError as exc:
+                if str(exc).startswith("could not convert string"):
+                    print("  Usage: body <x_m> <y_m> <z_m>")
+                else:
+                    print(f"  [WARN] {exc}")
             continue
 
         if cmd == "raw" and len(parts) == 4:
@@ -656,8 +822,11 @@ def interactive(sim_only=False):
                 fk = sag_fk(tt_deg, tb_deg, PARAMS)
                 if fk:
                     print(f"  FK foot (sagittal): ({fk[0]:.2f}, {fk[1]:.2f}) mm")
-            except ValueError:
-                print("  Usage: raw <t1_deg> <tt_deg> <tb_deg>")
+            except ValueError as exc:
+                if str(exc).startswith("could not convert string"):
+                    print("  Usage: raw <t1_deg> <tt_deg> <tb_deg>")
+                else:
+                    print(f"  [WARN] {exc}")
             continue
 
         if cmd == "servo" and len(parts) == 4:
@@ -672,8 +841,11 @@ def interactive(sim_only=False):
                     from_angles=current,
                     verbose=True,
                 )
-            except ValueError:
-                print("  Usage: servo <hip_deg> <top_deg> <bot_deg>")
+            except ValueError as exc:
+                if str(exc).startswith("could not convert string"):
+                    print("  Usage: servo <hip_deg> <top_deg> <bot_deg>")
+                else:
+                    print(f"  [WARN] {exc}")
             continue
 
         if cmd == "offset" and len(parts) == 3:
@@ -694,8 +866,11 @@ def interactive(sim_only=False):
                 if current is not None:
                     send_angles(*current, verbose=True)
                     print("  Re-sent current angles with updated offset.")
-            except ValueError:
-                print("  Usage: offset <hip|top|bot> <deg>")
+            except ValueError as exc:
+                if str(exc).startswith("could not convert string"):
+                    print("  Usage: offset <hip|top|bot> <deg>")
+                else:
+                    print(f"  [WARN] {exc}")
             continue
 
         if cmd == "show_offsets":
@@ -760,8 +935,8 @@ def interactive(sim_only=False):
             continue
 
         if cmd in ("neutral", "stand"):
-            current = move_to_servo_degrees(
-                STARTUP_SERVO_DEG,
+            current = move_to_angles(
+                stand,
                 from_angles=current,
                 verbose=True,
             )
@@ -769,8 +944,8 @@ def interactive(sim_only=False):
 
         if cmd == "hold":
             if current is None:
-                # First hold — send the standing startup pose to lock servos.
-                current = stand_reference_angles()
+                # First hold — send the startup assembly pose to lock servos.
+                current = startup_reference_angles()
             send_angles(*current, verbose=True)
             print("  Servos locked.")
             continue
@@ -824,7 +999,7 @@ def main():
     args = parser.parse_args()
 
     leg_name = LEG_NAMES[LEG_INDEX]
-    crouch_t1_deg, crouch_tt_deg, crouch_tb_deg = crouch_reference_angles()
+    startup_t1_deg, startup_tt_deg, startup_tb_deg = startup_reference_angles()
     stand_t1_deg, stand_tt_deg, stand_tb_deg = stand_reference_angles()
 
     print("=" * 62)
@@ -833,21 +1008,21 @@ def main():
     print(f"  Channels    : hip={HIP_CH}  top={TOP_CH}  bot={BOT_CH}")
     print(f"  Servo travel: {SERVO_RANGE_DEG:.0f} deg  center={SERVO_CENTER_DEG:.1f} deg")
     print(
-        "  Startup stand servo: "
+        "  Startup assembly servo: "
         f"hip={STARTUP_SERVO_DEG[0]:.1f}  top={STARTUP_SERVO_DEG[1]:.1f}  bot={STARTUP_SERVO_DEG[2]:.1f}"
     )
     print(
-        "  Startup stand cmd : "
-        f"theta_1={stand_t1_deg:+.2f}  "
-        f"theta_top={stand_tt_deg:+.2f}  "
-        f"theta_bot={stand_tb_deg:+.2f}"
+        "  Startup hold cmd  : "
+        f"theta_1={startup_t1_deg:+.2f}  "
+        f"theta_top={startup_tt_deg:+.2f}  "
+        f"theta_bot={startup_tb_deg:+.2f}"
     )
     print(f"  Startup sag : ({STARTUP_SAG[0]}, {STARTUP_SAG[1]}) mm")
     print(
-        "  IK ref pose : "
-        f"theta_1={crouch_t1_deg:+.2f}  "
-        f"theta_top={crouch_tt_deg:+.2f}  "
-        f"theta_bot={crouch_tb_deg:+.2f}"
+        "  Neutral stand cmd : "
+        f"theta_1={stand_t1_deg:+.2f}  "
+        f"theta_top={stand_tt_deg:+.2f}  "
+        f"theta_bot={stand_tb_deg:+.2f}"
     )
     print(
         f"  L1_hip={PARAMS['L1_hip'] * 1000:.1f}mm"

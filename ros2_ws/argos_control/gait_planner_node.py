@@ -54,7 +54,7 @@ class GaitPlannerNode(Node):
         self.declare_parameter("estop_topic", TOPICS.estop)
         self.declare_parameter("update_rate_hz", 50.0)
         self.declare_parameter("default_mode", "crouch")
-        self.declare_parameter("max_height_offset_m", 0.08)
+        self.declare_parameter("max_height_offset_m", 0.0)
         self.declare_parameter("use_imu_stabilization", True)
         self.declare_parameter("imu_filter_alpha", 0.15)
         self.declare_parameter("stabilization_roll_gain", 0.6)
@@ -63,9 +63,9 @@ class GaitPlannerNode(Node):
         self.declare_parameter("enable_push_recovery", True)
         self.declare_parameter("push_recovery_tilt_threshold_rad", 0.18)
         self.declare_parameter("push_recovery_hold_s", 1.0)
-        self.declare_parameter("recovery_stance_scale_x", 1.05)
-        self.declare_parameter("recovery_stance_scale_y", 1.12)
-        self.declare_parameter("recovery_height_offset_m", -0.01)
+        self.declare_parameter("recovery_stance_scale_x", 1.0)
+        self.declare_parameter("recovery_stance_scale_y", 1.0)
+        self.declare_parameter("recovery_height_offset_m", 0.0)
         self.declare_parameter("foothold_candidate_topic", TOPICS.foothold_candidates)
         self.declare_parameter(
             "foothold_contact_modes_topic", TOPICS.foothold_contact_modes
@@ -153,6 +153,7 @@ class GaitPlannerNode(Node):
             self.config.default_stance
             + np.array([0.0, 0.0, self.config.default_z_ref])[:, np.newaxis]
         )
+        self.state.height = self.config.default_z_ref
 
         self.raw_joint_pub = self.create_publisher(
             JointState, joint_command_raw_topic, 10

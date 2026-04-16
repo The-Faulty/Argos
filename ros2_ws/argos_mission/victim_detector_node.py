@@ -1,52 +1,62 @@
-"""Detect thermal hotspots and publish RViz markers for likely victims."""
+"""Detect likely victims from MLX90640 thermal frames and publish RViz markers."""
+
+from __future__ import annotations
 
 import math
+from typing import Optional, Tuple
 
 import numpy as np
 import rclpy
 from rclpy.node import Node
-from sensor_msgs.msg import Image
+from sensor_msgs.msg import CameraInfo, Image
 from std_msgs.msg import Int32
 from visualization_msgs.msg import Marker, MarkerArray
 
 from .mission_contract import TOPICS
+from .thermal_common import camera_matrix_from_fov
+from .thermal_detection import HotspotTracker, TrackedHotspot, detect_hotspots
 
 
 class VictimDetectorNode(Node):
-    """Finds warm clusters in the thermal image and projects them into 3D space.
-
-    Detection pipeline:
-      1. Threshold pixels above median + relative_threshold_c
-      2. Connected-components to find blobs
-      3. Filter blobs smaller than min_cluster_pixels
-      4. Project each centroid to 3D using assumed_range_m and camera FOV
-      5. Publish RViz sphere markers and a detection count
-    """
+    """Find and stabilize human-temperature hotspots from the thermal stream."""
 
     def __init__(self):
         super().__init__("victim_detector_node")
 
         self.declare_parameter("image_topic", TOPICS.thermal_image)
+        self.declare_parameter("camera_info_topic", TOPICS.thermal_camera_info)
         self.declare_parameter("detections_topic", TOPICS.victim_detections)
         self.declare_parameter("detection_count_topic", TOPICS.mission_detection_count)
-        self.declare_parameter("relative_threshold_c", 8.0)
-        self.declare_parameter("min_cluster_pixels", 3)
+        self.declare_parameter("relative_threshold_c", 4.0)
+        self.declare_parameter("min_cluster_pixels", 4)
+        self.declare_parameter("max_cluster_pixels", 90)
         self.declare_parameter("min_victim_temp_c", 30.0)
         self.declare_parameter("max_victim_temp_c", 42.0)
-        # assumed_range_m is tunable — increase if the robot operates farther from victims
+        self.declare_parameter("min_peak_delta_c", 2.5)
+        self.declare_parameter("smoothing_passes", 1)
+        self.declare_parameter("connectivity", 8)
+        self.declare_parameter("tracking_radius_px", 3.5)
+        self.declare_parameter("min_confirmed_frames", 2)
+        self.declare_parameter("max_missed_frames", 1)
         self.declare_parameter("assumed_range_m", 1.2)
         self.declare_parameter("horizontal_fov_deg", 110.0)
         self.declare_parameter("vertical_fov_deg", 75.0)
         self.declare_parameter("marker_scale_m", 0.20)
+        self.declare_parameter("label_offset_m", 0.18)
 
         image_topic = self.get_parameter("image_topic").value
+        camera_info_topic = self.get_parameter("camera_info_topic").value
         detections_topic = self.get_parameter("detections_topic").value
         detection_count_topic = self.get_parameter("detection_count_topic").value
 
         self.relative_threshold_c = float(self.get_parameter("relative_threshold_c").value)
         self.min_cluster_pixels = int(self.get_parameter("min_cluster_pixels").value)
+        self.max_cluster_pixels = int(self.get_parameter("max_cluster_pixels").value)
         self.min_victim_temp_c = float(self.get_parameter("min_victim_temp_c").value)
         self.max_victim_temp_c = float(self.get_parameter("max_victim_temp_c").value)
+        self.min_peak_delta_c = float(self.get_parameter("min_peak_delta_c").value)
+        self.smoothing_passes = int(self.get_parameter("smoothing_passes").value)
+        self.connectivity = int(self.get_parameter("connectivity").value)
         self.assumed_range_m = float(self.get_parameter("assumed_range_m").value)
         self.horizontal_fov_rad = math.radians(
             float(self.get_parameter("horizontal_fov_deg").value)
@@ -55,130 +65,162 @@ class VictimDetectorNode(Node):
             float(self.get_parameter("vertical_fov_deg").value)
         )
         self.marker_scale_m = float(self.get_parameter("marker_scale_m").value)
+        self.label_offset_m = float(self.get_parameter("label_offset_m").value)
+        self.latest_intrinsics: Optional[Tuple[float, float, float, float]] = None
+        self.latest_camera_size: Optional[Tuple[int, int]] = None
+        self.warned_bad_encoding = False
+
+        self.tracker = HotspotTracker(
+            match_radius_px=float(self.get_parameter("tracking_radius_px").value),
+            min_confirmed_frames=int(self.get_parameter("min_confirmed_frames").value),
+            max_missed_frames=int(self.get_parameter("max_missed_frames").value),
+        )
 
         self.detections_pub = self.create_publisher(MarkerArray, detections_topic, 10)
         self.detection_count_pub = self.create_publisher(Int32, detection_count_topic, 10)
+        self.create_subscription(CameraInfo, camera_info_topic, self._camera_info_callback, 10)
         self.create_subscription(Image, image_topic, self._image_callback, 10)
 
-    def _connected_components(self, mask: np.ndarray):
-        """4-connectivity flood fill to find all hot blobs in the mask."""
-        visited = np.zeros_like(mask, dtype=bool)
-        height, width = mask.shape
-        components = []
+    def _camera_info_callback(self, msg: CameraInfo):
+        if len(msg.k) >= 6 and msg.k[0] > 0.0 and msg.k[4] > 0.0:
+            self.latest_intrinsics = (
+                float(msg.k[0]),
+                float(msg.k[4]),
+                float(msg.k[2]),
+                float(msg.k[5]),
+            )
+            self.latest_camera_size = (int(msg.width), int(msg.height))
 
-        for row in range(height):
-            for col in range(width):
-                if not mask[row, col] or visited[row, col]:
-                    continue
+    def _intrinsics_for_shape(self, width: int, height: int) -> Tuple[float, float, float, float]:
+        if self.latest_intrinsics is not None and self.latest_camera_size == (width, height):
+            return self.latest_intrinsics
+        return camera_matrix_from_fov(
+            width=width,
+            height=height,
+            horizontal_fov_rad=self.horizontal_fov_rad,
+            vertical_fov_rad=self.vertical_fov_rad,
+        )
 
-                # BFS from this unvisited hot pixel
-                queue = [(row, col)]
-                visited[row, col] = True
-                pixels = []
+    def _project_track(
+        self,
+        track: TrackedHotspot,
+        *,
+        width: int,
+        height: int,
+    ) -> Tuple[float, float, float]:
+        fx, fy, cx, cy = self._intrinsics_for_shape(width, height)
+        x = self.assumed_range_m
+        y = -((track.cluster.centroid_col - cx) / fx) * self.assumed_range_m
+        z = -((track.cluster.centroid_row - cy) / fy) * self.assumed_range_m
+        return x, y, z
 
-                while queue:
-                    current_row, current_col = queue.pop()
-                    pixels.append((current_row, current_col))
-                    for delta_row, delta_col in ((1, 0), (-1, 0), (0, 1), (0, -1)):
-                        next_row = current_row + delta_row
-                        next_col = current_col + delta_col
-                        if (
-                            0 <= next_row < height
-                            and 0 <= next_col < width
-                            and mask[next_row, next_col]
-                            and not visited[next_row, next_col]
-                        ):
-                            visited[next_row, next_col] = True
-                            queue.append((next_row, next_col))
-
-                components.append(pixels)
-
-        return components
-
-    def _cluster_to_marker(self, cluster, image: np.ndarray, stamp, frame_id: str, marker_id: int):
-        """Project a pixel cluster's centroid into 3D and build an RViz sphere marker."""
-        rows = np.array([pixel[0] for pixel in cluster], dtype=float)
-        cols = np.array([pixel[1] for pixel in cluster], dtype=float)
-        centroid_row = float(rows.mean())
-        centroid_col = float(cols.mean())
-
-        width = image.shape[1]
-        height = image.shape[0]
-        # Normalize centroid to [-1, 1] in both axes
-        x_norm = ((centroid_col + 0.5) / width - 0.5) * 2.0
-        y_norm = ((centroid_row + 0.5) / height - 0.5) * 2.0
-
-        # Project to 3D using pinhole geometry at the assumed victim range
-        lateral = math.tan(self.horizontal_fov_rad / 2.0) * self.assumed_range_m
-        vertical = math.tan(self.vertical_fov_rad / 2.0) * self.assumed_range_m
+    def _sphere_marker(self, track: TrackedHotspot, stamp, frame_id: str, width: int, height: int) -> Marker:
+        x, y, z = self._project_track(track, width=width, height=height)
+        confidence = min(
+            1.0,
+            float(track.consecutive_hits) / max(1.0, float(self.tracker.min_confirmed_frames)),
+        )
 
         marker = Marker()
         marker.header.stamp = stamp
         marker.header.frame_id = frame_id
         marker.ns = "victims"
-        marker.id = marker_id
+        marker.id = track.track_id * 2
         marker.type = Marker.SPHERE
         marker.action = Marker.ADD
-        marker.pose.position.x = self.assumed_range_m   # straight ahead
-        marker.pose.position.y = -x_norm * lateral       # left/right
-        marker.pose.position.z = -y_norm * vertical      # up/down
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = z
         marker.pose.orientation.w = 1.0
         marker.scale.x = self.marker_scale_m
         marker.scale.y = self.marker_scale_m
         marker.scale.z = self.marker_scale_m
         marker.color.r = 1.0
-        marker.color.g = 0.25
-        marker.color.b = 0.1
-        marker.color.a = 0.85
-        # Label with the peak temperature at the centroid pixel
-        marker.text = f"{float(image[int(round(centroid_row)), int(round(centroid_col))]):.1f}C"
+        marker.color.g = 0.30 + 0.40 * confidence
+        marker.color.b = 0.10
+        marker.color.a = 0.90
         return marker
 
+    def _label_marker(self, track: TrackedHotspot, stamp, frame_id: str, width: int, height: int) -> Marker:
+        x, y, z = self._project_track(track, width=width, height=height)
+        marker = Marker()
+        marker.header.stamp = stamp
+        marker.header.frame_id = frame_id
+        marker.ns = "victim_labels"
+        marker.id = track.track_id * 2 + 1
+        marker.type = Marker.TEXT_VIEW_FACING
+        marker.action = Marker.ADD
+        marker.pose.position.x = x
+        marker.pose.position.y = y
+        marker.pose.position.z = z + self.label_offset_m
+        marker.pose.orientation.w = 1.0
+        marker.scale.z = max(0.05, self.marker_scale_m * 0.6)
+        marker.color.r = 1.0
+        marker.color.g = 1.0
+        marker.color.b = 1.0
+        marker.color.a = 0.95
+        marker.text = (
+            f"{track.cluster.peak_temp_c:.1f}C "
+            f"({track.cluster.pixel_count}px, +{track.cluster.contrast_temp_c:.1f}C)"
+        )
+        return marker
+
+    def _publish_markers(self, tracks, stamp, frame_id: str, width: int, height: int):
+        markers = MarkerArray()
+        delete_all = Marker()
+        delete_all.header.stamp = stamp
+        delete_all.header.frame_id = frame_id
+        delete_all.action = Marker.DELETEALL
+        markers.markers.append(delete_all)
+
+        for track in tracks:
+            markers.markers.append(
+                self._sphere_marker(track, stamp=stamp, frame_id=frame_id, width=width, height=height)
+            )
+            markers.markers.append(
+                self._label_marker(track, stamp=stamp, frame_id=frame_id, width=width, height=height)
+            )
+
+        self.detections_pub.publish(markers)
+
     def _image_callback(self, msg: Image):
+        if msg.encoding and msg.encoding != "32FC1" and not self.warned_bad_encoding:
+            self.get_logger().warning(
+                f"Expected thermal frames encoded as 32FC1, received {msg.encoding}."
+            )
+            self.warned_bad_encoding = True
+
         thermal = np.frombuffer(bytes(msg.data), dtype=np.float32)
         if thermal.size != msg.height * msg.width:
             self.get_logger().warning("Ignoring malformed thermal image.")
             return
 
         thermal = thermal.reshape((msg.height, msg.width))
-        ambient = float(np.median(thermal))
-        # Threshold: pixel must be both warmer than ambient by relative_threshold_c
-        # and within the human-body temperature range
-        threshold = max(self.min_victim_temp_c, ambient + self.relative_threshold_c)
-        mask = np.logical_and(
-            thermal >= threshold,
-            thermal <= self.max_victim_temp_c,
+        clusters, _, _ = detect_hotspots(
+            thermal,
+            relative_threshold_c=self.relative_threshold_c,
+            min_cluster_pixels=self.min_cluster_pixels,
+            max_cluster_pixels=self.max_cluster_pixels,
+            min_victim_temp_c=self.min_victim_temp_c,
+            max_victim_temp_c=self.max_victim_temp_c,
+            min_peak_delta_c=self.min_peak_delta_c,
+            smoothing_passes=self.smoothing_passes,
+            connectivity=self.connectivity,
         )
-        clusters = [
-            cluster
-            for cluster in self._connected_components(mask)
-            if len(cluster) >= self.min_cluster_pixels
-        ]
+        confirmed_tracks = self.tracker.update(clusters)
+        frame_id = msg.header.frame_id or "thermal_link"
 
-        markers = MarkerArray()
-
-        # Send a DELETEALL first so stale markers from the previous frame don't linger
-        delete_all = Marker()
-        delete_all.header.stamp = msg.header.stamp
-        delete_all.header.frame_id = msg.header.frame_id or "thermal_link"
-        delete_all.action = Marker.DELETEALL
-        markers.markers.append(delete_all)
-
-        for marker_id, cluster in enumerate(clusters, start=1):
-            markers.markers.append(
-                self._cluster_to_marker(
-                    cluster=cluster,
-                    image=thermal,
-                    stamp=msg.header.stamp,
-                    frame_id=msg.header.frame_id or "thermal_link",
-                    marker_id=marker_id,
-                )
-            )
+        self._publish_markers(
+            confirmed_tracks,
+            stamp=msg.header.stamp,
+            frame_id=frame_id,
+            width=msg.width,
+            height=msg.height,
+        )
 
         detection_count = Int32()
-        detection_count.data = len(clusters)
+        detection_count.data = len(confirmed_tracks)
         self.detection_count_pub.publish(detection_count)
-        self.detections_pub.publish(markers)
 
 
 def main(args=None):

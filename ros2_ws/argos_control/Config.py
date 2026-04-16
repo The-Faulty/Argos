@@ -33,12 +33,11 @@ class Configuration:
 
         # ── Stance geometry ───────────────────────────────────────────────
         # delta_x/delta_y = front-back and left-right foot spread from body center
-        self.delta_x           = 0.117
+        self.delta_x           = 0.100
         self.rear_leg_x_shift  = -0.04   # rear legs shifted back slightly
         self.front_leg_x_shift =  0.00
         self.delta_y           = 0.1106
-        self.default_z_ref     = -0.165  # standing height (valid range: ~-0.185 to -0.105 m)
-        # NOTE: -0.25 m is outside the IK workspace for the real bell-crank geometry
+        self.default_z_ref     = -0.189  # neutral stand height inside the measured top/bot envelope
 
         # ── Swing params ──────────────────────────────────────────────────
         self.z_clearance = 0.07   # how high the foot lifts during swing
@@ -94,12 +93,32 @@ class Configuration:
         self.D_KNEE_OFFSET = 0.030023
 
         # ── Joint limits ──────────────────────────────────────────────────
-        # Tightened to the coupled bell-crank workspace (validated via IK sweep).
-        self.JOINT_LIMITS_RAD = np.array([
-            [m.radians(-45.0),  m.radians(45.0)],   # hip abductor
-            [m.radians(-75.0),  m.radians(10.0)],   # upper leg (theta_top)
-            [m.radians(-20.0),  m.radians(80.0)],   # lower servo (theta_bot)
+        # Bench-tested direct-servo travel with the linkage fully assembled.
+        # These are absolute horn commands in the servo's native 0..180 degree space.
+        self.SERVO_CENTER_DEG = 90.0
+        self.SERVO_LIMITS_DEG = np.array([
+            [45.0, 135.0],   # hip servo
+            [50.0, 115.0],   # top servo
+            [5.0, 180.0],    # bottom/bell-crank servo
         ])
+        self.COUPLED_TOP_SAMPLES_DEG = np.array([50.0, 70.0, 90.0, 102.0, 115.0])
+        # Treat the 70 deg forward point like the 50 deg point; the measured 5 deg
+        # difference looked like binding-detection noise rather than a real trend.
+        self.COUPLED_BOT_MIN_SAMPLES_DEG = np.array([10.0, 10.0, 40.0, 65.0, 85.0])
+        self.COUPLED_BOT_MAX_SAMPLES_DEG = np.array([95.0, 125.0, 180.0, 180.0, 180.0])
+        # Use the measured hard stops by default. If you want extra bench margin
+        # later, increase this in the single-leg tool while testing.
+        self.BENCH_COUPLED_MARGIN_DEG = 0.0
+
+        # Control-space actuator limits expressed relative to the 90 degree neutral.
+        # The top/bottom pair is further constrained by the coupled linkage envelope
+        # captured in the measured sample points above.
+        self.JOINT_LIMITS_DEG = np.array([
+            [-45.0, 45.0],   # hip abductor
+            [-40.0, 25.0],   # upper leg (theta_top)
+            [-85.0, 90.0],   # lower servo (theta_bot)
+        ])
+        self.JOINT_LIMITS_RAD = np.radians(self.JOINT_LIMITS_DEG)
 
         # Per-leg limits — same as global by default, customize per leg if needed.
         # Shape: (3 joints, 4 legs, 2 = [min, max])
@@ -205,6 +224,159 @@ class Configuration:
         return self.JOINT_LIMITS_RAD.copy()
 
     @property
+    def joint_limits_deg(self):
+        """(3, 2) array of [min, max] degrees in control-space coordinates."""
+        return self.JOINT_LIMITS_DEG.copy()
+
+    @property
+    def servo_limits_deg(self):
+        """(3, 2) array of [min, max] direct-servo degrees measured on the bench."""
+        return self.SERVO_LIMITS_DEG.copy()
+
+    @property
     def joint_limits_per_leg_rad(self):
-        """(3, 4, 2) array of per-leg [min, max] radians."""
+        """(3, 4, 2) array of per-leg actuator [min, max] radians."""
         return self.JOINT_LIMITS_PER_LEG_RAD.copy()
+
+    def coupled_bot_limits_servo_deg(
+        self,
+        top_servo_deg: float,
+        margin_deg: float = 0.0,
+    ) -> tuple[float, float]:
+        """Return the allowed bottom-servo window for a given top-servo angle."""
+        top_lo, top_hi = self.SERVO_LIMITS_DEG[1]
+        clamped_top = float(np.clip(top_servo_deg, top_lo, top_hi))
+        margin_deg = max(0.0, float(margin_deg))
+        bot_min_samples = np.clip(
+            self.COUPLED_BOT_MIN_SAMPLES_DEG + margin_deg,
+            self.SERVO_LIMITS_DEG[2, 0],
+            self.SERVO_LIMITS_DEG[2, 1],
+        )
+        bot_max_samples = np.clip(
+            self.COUPLED_BOT_MAX_SAMPLES_DEG - margin_deg,
+            self.SERVO_LIMITS_DEG[2, 0],
+            self.SERVO_LIMITS_DEG[2, 1],
+        )
+        bot_min = float(np.interp(clamped_top, self.COUPLED_TOP_SAMPLES_DEG, bot_min_samples))
+        bot_max = float(np.interp(clamped_top, self.COUPLED_TOP_SAMPLES_DEG, bot_max_samples))
+        if bot_min > bot_max:
+            midpoint = 0.5 * (bot_min + bot_max)
+            bot_min = midpoint
+            bot_max = midpoint
+        return bot_min, bot_max
+
+    def coupled_bot_limits_joint_deg(
+        self,
+        top_joint_deg: float,
+        margin_deg: float = 0.0,
+    ) -> tuple[float, float]:
+        """Return the allowed bottom-joint window in control-space degrees."""
+        bot_min, bot_max = self.coupled_bot_limits_servo_deg(
+            self.SERVO_CENTER_DEG + float(top_joint_deg),
+            margin_deg=margin_deg,
+        )
+        return bot_min - self.SERVO_CENTER_DEG, bot_max - self.SERVO_CENTER_DEG
+
+    def coupled_bot_limits_joint_rad(
+        self,
+        top_joint_rad: float,
+        margin_deg: float = 0.0,
+    ) -> tuple[float, float]:
+        """Return the allowed bottom-joint window in control-space radians."""
+        bot_min_deg, bot_max_deg = self.coupled_bot_limits_joint_deg(
+            np.degrees(float(top_joint_rad)),
+            margin_deg=margin_deg,
+        )
+        return np.radians(bot_min_deg), np.radians(bot_max_deg)
+
+    def clamp_joint_matrix(
+        self,
+        angle_matrix: np.ndarray,
+        coupled_margin_deg: float = 0.0,
+    ) -> np.ndarray:
+        """Clamp a (3, N) control-space joint matrix to the measured hardware envelope."""
+        matrix = np.asarray(angle_matrix, dtype=float).copy()
+        if matrix.ndim != 2 or matrix.shape[0] != 3:
+            raise ValueError(f"Expected a (3, N) angle matrix, got {matrix.shape}")
+
+        hip_lo, hip_hi = self.JOINT_LIMITS_RAD[0]
+        top_lo, top_hi = self.JOINT_LIMITS_RAD[1]
+        bot_lo_global, bot_hi_global = self.JOINT_LIMITS_RAD[2]
+
+        for leg_index in range(matrix.shape[1]):
+            matrix[0, leg_index] = float(np.clip(matrix[0, leg_index], hip_lo, hip_hi))
+            matrix[1, leg_index] = float(np.clip(matrix[1, leg_index], top_lo, top_hi))
+            bot_lo, bot_hi = self.coupled_bot_limits_joint_rad(
+                matrix[1, leg_index],
+                margin_deg=coupled_margin_deg,
+            )
+            bot_lo = max(bot_lo_global, bot_lo)
+            bot_hi = min(bot_hi_global, bot_hi)
+            if bot_lo > bot_hi:
+                midpoint = 0.5 * (bot_lo + bot_hi)
+                bot_lo = midpoint
+                bot_hi = midpoint
+            matrix[2, leg_index] = float(np.clip(matrix[2, leg_index], bot_lo, bot_hi))
+        return matrix
+
+    def validate_servo_triplet_deg(
+        self,
+        hip_deg: float,
+        top_deg: float,
+        bot_deg: float,
+        coupled_margin_deg: float = 0.0,
+    ) -> tuple[bool, str]:
+        """Check whether a direct servo command is inside the measured hardware envelope."""
+        (_, _, _), changed, reason = self.clamp_servo_triplet_deg(
+            hip_deg,
+            top_deg,
+            bot_deg,
+            coupled_margin_deg=coupled_margin_deg,
+        )
+        return (not changed), reason
+
+    def clamp_servo_triplet_deg(
+        self,
+        hip_deg: float,
+        top_deg: float,
+        bot_deg: float,
+        coupled_margin_deg: float = 0.0,
+    ) -> tuple[tuple[float, float, float], bool, str]:
+        """Clamp a direct servo command to the measured hardware envelope."""
+        hip_lo, hip_hi = self.SERVO_LIMITS_DEG[0]
+        top_lo, top_hi = self.SERVO_LIMITS_DEG[1]
+        bot_lo_hard, bot_hi_hard = self.SERVO_LIMITS_DEG[2]
+
+        requested_hip = float(hip_deg)
+        requested_top = float(top_deg)
+        requested_bot = float(bot_deg)
+        clamped_hip = float(np.clip(requested_hip, hip_lo, hip_hi))
+        clamped_top = float(np.clip(requested_top, top_lo, top_hi))
+
+        bot_lo, bot_hi = self.coupled_bot_limits_servo_deg(
+            clamped_top,
+            margin_deg=coupled_margin_deg,
+        )
+        bot_lo = max(bot_lo_hard, bot_lo)
+        bot_hi = min(bot_hi_hard, bot_hi)
+        clamped_bot = float(np.clip(requested_bot, bot_lo, bot_hi))
+
+        reasons = []
+        if abs(clamped_hip - requested_hip) > 1e-9:
+            reasons.append(
+                f"hip {requested_hip:.1f}->{clamped_hip:.1f} deg "
+                f"(safe range [{hip_lo:.1f}, {hip_hi:.1f}])"
+            )
+        if abs(clamped_top - requested_top) > 1e-9:
+            reasons.append(
+                f"top {requested_top:.1f}->{clamped_top:.1f} deg "
+                f"(safe range [{top_lo:.1f}, {top_hi:.1f}])"
+            )
+        if abs(clamped_bot - requested_bot) > 1e-9:
+            reasons.append(
+                f"bot {requested_bot:.1f}->{clamped_bot:.1f} deg "
+                f"(safe range [{bot_lo:.1f}, {bot_hi:.1f}] for top={clamped_top:.1f})"
+            )
+
+        changed = bool(reasons)
+        return (clamped_hip, clamped_top, clamped_bot), changed, "; ".join(reasons)

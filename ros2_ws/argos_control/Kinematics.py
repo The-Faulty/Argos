@@ -14,6 +14,11 @@ def _point_to_rad(p1, p2):
     return (atan2(p2, p1) + 2 * pi) % (2 * pi)
 
 
+def _wrap_to_pi(angle):
+    """Wrap an angle in radians into [-pi, pi]."""
+    return (angle + pi) % (2 * pi) - pi
+
+
 def _rotx(angle):
     """3x3 rotation matrix about the X axis."""
     c, s = cos(angle), sin(angle)
@@ -118,6 +123,7 @@ def _hip_abductor_ik(r_body_foot, leg_index, L1_hip, phi):
     theta_1 = a_1 + a_3
     if theta_1 >= 2 * pi:
         theta_1 = fmod(theta_1, 2 * pi)
+    theta_1 = _wrap_to_pi(theta_1)
 
     # Shift to the femur origin, then project into the sagittal plane
     offset = np.array([0.0, L1_hip * cos(theta_1), L1_hip * sin(theta_1)])
@@ -129,12 +135,22 @@ def _hip_abductor_ik(r_body_foot, leg_index, L1_hip, phi):
     return theta_1, x_, -z_
 
 
-def _sagittal_ik(x_sag, y_sag, P, _hint=None):
+def _sagittal_ik(
+    x_sag,
+    y_sag,
+    P,
+    top_limits=None,
+    bot_limit_fn=None,
+    _hint=None,
+):
     """Solve the upper and lower leg joints for a sagittal-plane foot target.
 
     Uses a numerical sweep of theta_bot through the FK chain to stay consistent
     with the coupled bell-crank linkage.  If a hint (previous theta_bot) is
-    given, the search is narrowed to ±12° for faster real-time use.
+    given, the search is narrowed to ±12° for faster real-time use. When
+    top_limits is provided, theta_top is rejected outside its allowed range.
+    When bot_limit_fn is provided, theta_bot is only searched inside the
+    measured coupled workspace for the solved theta_top.
     """
     L1, L2 = P["L1"], P["L2"]
 
@@ -163,6 +179,31 @@ def _sagittal_ik(x_sag, y_sag, P, _hint=None):
     cos_b = max(-1.0, min(1.0, (L1 * L1 + d * d - L2 * L2) / (2 * L1 * d)))
     t_upper = atan2(x_sag, y_sag) - acos(cos_b)
 
+    bot_lo_deg, bot_hi_deg = -90.0, 90.0
+    if top_limits is not None:
+        limits = np.asarray(top_limits, dtype=float)
+        top_lo, top_hi = float(limits[0]), float(limits[1])
+        if t_upper < top_lo - 1e-9 or t_upper > top_hi + 1e-9:
+            log.warning(
+                "sagittal_ik: theta_top %.2f deg outside limits [%.2f, %.2f] deg",
+                t_upper * 180.0 / pi,
+                top_lo * 180.0 / pi,
+                top_hi * 180.0 / pi,
+            )
+            return None
+
+    if bot_limit_fn is not None:
+        bot_lo_rad, bot_hi_rad = bot_limit_fn(t_upper)
+        bot_lo_deg = max(bot_lo_deg, float(bot_lo_rad) * 180.0 / pi)
+        bot_hi_deg = min(bot_hi_deg, float(bot_hi_rad) * 180.0 / pi)
+        if bot_lo_deg > bot_hi_deg:
+            log.warning(
+                "sagittal_ik: invalid theta_bot search window [%.2f, %.2f] deg",
+                bot_lo_deg,
+                bot_hi_deg,
+            )
+            return None
+
     best_bot, best_err = None, float("inf")
 
     def _sweep(lo_deg, hi_deg, step_deg):
@@ -182,19 +223,23 @@ def _sagittal_ik(x_sag, y_sag, P, _hint=None):
     # If we have a previous solution nearby, search there first (much faster)
     if _hint is not None:
         hd = _hint * 180.0 / pi
-        _sweep(hd - 12, hd + 12, 0.5)
+        _sweep(max(bot_lo_deg, hd - 12), min(bot_hi_deg, hd + 12), 0.5)
         if best_bot is not None and best_err < 0.002:
             cd = best_bot * 180.0 / pi
-            _sweep(cd - 1, cd + 1, 0.1)   # fine-tune around the best candidate
+            _sweep(
+                max(bot_lo_deg, cd - 1),
+                min(bot_hi_deg, cd + 1),
+                0.1,
+            )   # fine-tune around the best candidate
             return t_upper, best_bot
 
     # No hint — do a full coarse sweep then refine
     best_bot, best_err = None, float("inf")
-    _sweep(-90, 90, 2)
+    _sweep(bot_lo_deg, bot_hi_deg, 2)
     if best_bot is None or best_err > 0.01:
         return None
     cd = best_bot * 180.0 / pi
-    _sweep(cd - 2, cd + 2, 0.1)
+    _sweep(max(bot_lo_deg, cd - 2), min(bot_hi_deg, cd + 2), 0.1)
     if best_err > 0.002:
         return None
     return t_upper, best_bot
@@ -209,11 +254,30 @@ _ik_hint = {}
 def leg_explicit_inverse_kinematics(r_body_foot, leg_index, config):
     """Full 3-DOF IK for one leg. Returns [theta_1, theta_top, theta_bot] or None."""
     P = config.leg_params
+    joint_limits = config.joint_limits_per_leg_rad[:, leg_index, :]
     theta_1, x_sag, y_sag = _hip_abductor_ik(
         r_body_foot, leg_index, P["L1_hip"], P["phi"]
     )
 
-    sag = _sagittal_ik(x_sag, y_sag, P, _hint=_ik_hint.get(leg_index))
+    hip_lo, hip_hi = float(joint_limits[0, 0]), float(joint_limits[0, 1])
+    if theta_1 < hip_lo - 1e-9 or theta_1 > hip_hi + 1e-9:
+        log.warning(
+            "leg_ik: hip angle %.2f deg outside limits [%.2f, %.2f] deg for %s",
+            theta_1 * 180.0 / pi,
+            hip_lo * 180.0 / pi,
+            hip_hi * 180.0 / pi,
+            LEG_NAMES[leg_index],
+        )
+        return None
+
+    sag = _sagittal_ik(
+        x_sag,
+        y_sag,
+        P,
+        top_limits=joint_limits[1],
+        bot_limit_fn=config.coupled_bot_limits_joint_rad,
+        _hint=_ik_hint.get(leg_index),
+    )
     if sag is None:
         log.warning(
             "leg_ik: sagittal IK failed for %s at x=%.4f m, y=%.4f m",

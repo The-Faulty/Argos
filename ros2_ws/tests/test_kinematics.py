@@ -29,6 +29,48 @@ def cfg():
     return Configuration()
 
 
+def test_measured_joint_limits_match_bench_data(cfg):
+    """Bench-tested servo travel should stay encoded in the config."""
+    np.testing.assert_allclose(
+        cfg.servo_limits_deg,
+        np.array([
+            [45.0, 135.0],
+            [50.0, 115.0],
+            [5.0, 180.0],
+        ]),
+    )
+    np.testing.assert_allclose(
+        cfg.joint_limits_deg,
+        np.array([
+            [-45.0, 45.0],
+            [-40.0, 25.0],
+            [-85.0, 90.0],
+        ]),
+    )
+
+
+def test_coupled_bot_limits_match_bench_marks(cfg):
+    """Measured top/bot linkage marks should interpolate back to the bench data."""
+    top_samples = [50.0, 70.0, 90.0, 102.0, 115.0]
+    expected_bot_min = [10.0, 10.0, 40.0, 65.0, 85.0]
+    expected_bot_max = [95.0, 125.0, 180.0, 180.0, 180.0]
+
+    for top_deg, bot_min, bot_max in zip(top_samples, expected_bot_min, expected_bot_max):
+        got_min, got_max = cfg.coupled_bot_limits_servo_deg(top_deg)
+        assert got_min == pytest.approx(bot_min)
+        assert got_max == pytest.approx(bot_max)
+
+
+def test_clamp_servo_triplet_deg_saturates_to_measured_limits(cfg):
+    """Unsafe direct-servo targets should hard-clamp to the bench-tested envelope."""
+    clamped, changed, reason = cfg.clamp_servo_triplet_deg(10.0, 30.0, 180.0)
+    assert changed
+    assert clamped == pytest.approx((45.0, 50.0, 95.0))
+    assert "hip" in reason
+    assert "top" in reason
+    assert "bot" in reason
+
+
 # ── Sagittal IK/FK round-trip ─────────────────────────────────────────────────
 
 SAG_CASES = [
@@ -89,7 +131,7 @@ def test_four_legs_ik_output_shape(cfg):
 
 
 def test_four_legs_ik_within_joint_limits(cfg):
-    """All solved angles should respect the configured joint limits."""
+    """All solved angles should respect the configured measured joint limits."""
     stance = cfg.default_stance + np.array([0.0, 0.0, cfg.default_z_ref])[:, np.newaxis]
     out = four_legs_inverse_kinematics(stance, cfg)
     limits = cfg.joint_limits_per_leg_rad  # shape (3, 4, 2)
@@ -102,6 +144,23 @@ def test_four_legs_ik_within_joint_limits(cfg):
                 f"{LEG_NAMES[leg]} joint {row}: angle {np.degrees(angle):.1f}° "
                 f"outside limits [{np.degrees(lo):.1f}°, {np.degrees(hi):.1f}°]"
             )
+
+        bot_lo_deg, bot_hi_deg = cfg.coupled_bot_limits_joint_deg(np.degrees(out[1, leg]))
+        bot_deg = np.degrees(out[2, leg])
+        assert bot_lo_deg <= bot_deg <= bot_hi_deg, (
+            f"{LEG_NAMES[leg]} theta_bot {bot_deg:.1f}° outside coupled limits "
+            f"[{bot_lo_deg:.1f}°, {bot_hi_deg:.1f}°] for theta_top {np.degrees(out[1, leg]):.1f}°"
+        )
+
+
+def test_full_ik_accepts_negative_hip_angles(cfg):
+    """Hip IK should use signed angles, not reject valid negative solutions as 300+ deg wraps."""
+    target = np.array([0.0, 0.04, -0.19])
+    sol = leg_explicit_inverse_kinematics(target, 0, cfg)
+    assert sol is not None, "FR target with a modest inward hip angle should be reachable"
+    hip_deg = np.degrees(sol[0])
+    assert -45.0 <= hip_deg <= 0.0
+    assert hip_deg == pytest.approx(-15.51, abs=0.3)
 
 
 def test_ik_raises_on_unreachable(cfg):
