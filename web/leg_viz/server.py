@@ -24,6 +24,7 @@ import argparse
 import json
 import logging
 import sys
+import time
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -71,11 +72,50 @@ def init_hardware(force_sim=False):
         _pca.frequency = PWM_FREQ
         log.info("PCA9685 OK (addr=0x%02X, channels hip=%d top=%d bot=%d)",
                  PCA9685_I2C_ADDRESS, HIP_CH, TOP_CH, BOT_CH)
+        home_servos()
         return True
     except Exception as exc:
         log.warning("PCA9685 unavailable (%s) -- running in sim mode", exc)
         _sim_mode = True
         return False
+
+
+def home_servos():
+    """Drive a 90 -> 45 -> 90 wake-up sequence on every channel.
+
+    The PCA9685 channels sometimes latch at a leftover duty cycle from
+    the previous run, and some servos won't respond to a static setpoint
+    that matches where they already are. Sweeping through a known
+    sequence forces every servo to move, so by the time init returns
+    the leg is reliably sitting at the 90/90/90 stand position.
+
+    Raw servo degrees, not control-space angles -- this is a hardware
+    home, not a kinematic pose. Each leg of the sweep is interpolated
+    in small steps rather than jumped in one shot, so the mechanism
+    doesn't slam against the bell-crank linkage on startup.
+    """
+    if _pca is None:
+        return
+    log.info("homing servos: 90 -> 45 -> 90 (interpolated)")
+    waypoints = (90.0, 45.0, 90.0)
+    cur = 90.0
+    for target in waypoints:
+        _sweep_all(cur, target, duration_s=0.35, steps=28)
+        cur = target
+        time.sleep(0.15)   # settle
+
+
+def _sweep_all(start_deg, end_deg, duration_s, steps):
+    """Drive all three channels from start_deg to end_deg in small steps."""
+    if steps < 1:
+        steps = 1
+    dt = duration_s / steps
+    for i in range(1, steps + 1):
+        u = i / steps
+        d = start_deg + (end_deg - start_deg) * u
+        for ch in (HIP_CH, TOP_CH, BOT_CH):
+            set_servo(ch, d)
+        time.sleep(dt)
 
 
 def set_servo(channel, servo_deg):

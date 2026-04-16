@@ -242,11 +242,13 @@ sliders.thetaBot.max = deg(JOINT_LIMITS.theta_bot[1]);
 // ~(0, 165 mm) sagittal — the default stand height from Config.py.
 const PRESET_STAND = { hip: 90, top: 90, bot: 90 };
 
-// Crouch: foot ~(0, 130 mm) — body 35 mm lower over the foot.
-const PRESET_CROUCH = { hip: 90, top: 81, bot: 96 };
+// Crouch: foot ~(0, 130 mm) — body 35 mm higher over the foot. The bot
+// servo value is high because it's reversed from the top (MULTIPLIERS.bot
+// = -1) and the FK now uses the bell-crank pivot offset.
+const PRESET_CROUCH = { hip: 90, top: 80.3, bot: 161.6 };
 
 // Stretch: foot ~(0, 230 mm) — near max leg extension, directly below.
-const PRESET_STRETCH = { hip: 90, top: 115, bot: 46 };
+const PRESET_STRETCH = { hip: 90, top: 114.7, bot: 87.0 };
 
 // Gait arcs: foot traces a walking stride around the stand pose.
 // Fore/aft sweep comes from theta_top (the upper leg pivoting about the
@@ -280,9 +282,36 @@ function gaitAnimation(periodSec) {
   };
 }
 
+// Smooth interpolation from the current servo pose to `target` over
+// durationSec. Uses an ease-in-out cubic so starts and ends are gentle.
+// The start pose is captured on the first call (not at construction time),
+// so transitions always blend from wherever the leg actually is now.
+const easeInOut = (u) => (u < 0.5 ? 4 * u * u * u : 1 - Math.pow(-2 * u + 2, 3) / 2);
+
+function tweenToServo(target, durationSec = 0.6) {
+  let startPose = null;
+  const fn = (t) => {
+    if (startPose === null) {
+      startPose = {
+        hip: controlRadToServoDeg(state.theta1, MULTIPLIERS.hip, OFFSETS.hip),
+        top: controlRadToServoDeg(state.thetaTop, MULTIPLIERS.top, OFFSETS.top),
+        bot: controlRadToServoDeg(state.thetaBot, MULTIPLIERS.bot, OFFSETS.bot),
+      };
+    }
+    const u = Math.min(1, t / durationSec);
+    const s = easeInOut(u);
+    return {
+      hip: startPose.hip + (target.hip - startPose.hip) * s,
+      top: startPose.top + (target.top - startPose.top) * s,
+      bot: startPose.bot + (target.bot - startPose.bot) * s,
+      done: u >= 1,
+    };
+  };
+  return fn;
+}
+
 function startPreset(pose) {
-  state.animation = null;
-  setJointsFromServo(pose.hip, pose.top, pose.bot);
+  startAnimation(tweenToServo(pose, 0.6));
 }
 
 function startAnimation(fn) {
@@ -315,7 +344,11 @@ const robot = {
   lastPostMs: 0,
   lastSent: null,            // {hip, top, bot}
   inflight: false,
-  minPeriodMs: 50,           // 20 Hz cap
+  // 50 Hz matches the PCA9685's PWM refresh rate — faster sends buy
+  // nothing and hammer the loopback socket. During a tween or a gait,
+  // 50 Hz gives ~30 interp steps over a 600 ms preset transition, which
+  // is visibly smooth on the physical servos.
+  minPeriodMs: 20,
   endpoint: "/api/servo",
   releaseEndpoint: "/api/release",
   statusEndpoint: "/api/status",
@@ -405,9 +438,15 @@ robotUi.toggle.addEventListener("change", async (e) => {
 });
 
 robotUi.release.addEventListener("click", async () => {
+  // Turning off the Drive toggle FIRST is critical -- if we left it on,
+  // the next maybePostCurrentPose() would immediately re-power the
+  // servos (within ~20 ms) and the release would visibly do nothing.
+  robot.enabled = false;
+  robotUi.toggle.checked = false;
+  robot.lastSent = null;
   try {
     await fetch(robot.releaseEndpoint, { method: "POST" });
-    setRobotStatus("robot: released", "#e8a04a");
+    setRobotStatus("robot: released (toggle off)", "#e8a04a");
   } catch (e) {
     setRobotStatus("robot: release failed", "#e06868");
   }
@@ -424,6 +463,7 @@ function stepAnimation() {
   const t = performance.now() / 1000 - state.animation.start;
   const pose = state.animation.fn(t);
   setJointsFromServo(pose.hip, pose.top, pose.bot);
+  if (pose.done) state.animation = null;   // tween finished; no more updates
 }
 
 function updateLeg() {

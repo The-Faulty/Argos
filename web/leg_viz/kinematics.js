@@ -22,6 +22,15 @@ export const LEG_PARAMS = {
   Lr2: 0.150,
   rh: 0.024,
   dko: 0.030023,
+
+  // Bottom servo shaft position in the sagittal frame, relative to the
+  // top servo (which is at the origin). The physical mounting has the
+  // bot servo 20 mm behind (-x) and 20 mm below (+y) the top servo, so
+  // the horn rotates about this offset point instead of the origin.
+  // The bell-crank pivot itself stays at the origin (coaxial with the
+  // femur pivot).
+  botPivotX: -0.020,
+  botPivotY: 0.020,
 };
 
 // Joint limits (rad) from Config.py.
@@ -71,7 +80,13 @@ export function sagittalFkState(thetaTop, thetaBot, P) {
   const O = [0, 0];
 
   const knee = [L1 * Math.sin(thetaTop), L1 * Math.cos(thetaTop)];
-  const horn = [P.rh * Math.sin(thetaBot), P.rh * Math.cos(thetaBot)];
+  // Horn rotates about the bottom servo shaft, which sits at
+  // (botPivotX, botPivotY) in the sagittal frame — NOT at the origin.
+  const botPivot = [P.botPivotX, P.botPivotY];
+  const horn = [
+    botPivot[0] + P.rh * Math.sin(thetaBot),
+    botPivot[1] + P.rh * Math.cos(thetaBot),
+  ];
 
   let pair = circleIntersect(O, P.rbr, horn, P.Lr1);
   if (!pair) return null;
@@ -214,12 +229,18 @@ export function legFk3D(theta1, thetaTop, thetaBot, legIndex = 0, P = LEG_PARAMS
 // (the default_z_ref stand height from Config.py).
 export const SERVO_CENTER_DEG = 90;
 
-// Direction of each servo relative to the IK control sign.
-export const MULTIPLIERS = { hip: -1, top: +1, bot: +1 };
+// Direction of each servo relative to the IK control sign. The bottom
+// servo is physically mounted reversed from the top one, so its sign
+// is flipped -- rotating the bot shaft "up" decreases control-space
+// theta_bot instead of increasing it.
+export const MULTIPLIERS = { hip: -1, top: +1, bot: -1 };
 
-// Calibration offsets (degrees). Found by inverting the FK at the target
-// stand pose: with these, servo 90/90/90 -> foot at (0, 165 mm) sagittal.
-export const OFFSETS = { hip: 0, top: 50, bot: -55 };
+// Calibration offsets (degrees). Solved numerically against the updated
+// FK (with the bot servo pivot offset) so servo 90/90/90 lands the foot
+// at (0, 165 mm) sagittal -- the default stand pose.
+//   top: baseline theta_top = -49.57° at servo 90
+//   bot: baseline theta_bot = +53.50° at servo 90 (with mult=-1)
+export const OFFSETS = { hip: 0, top: 49.565, bot: 53.503 };
 
 export function servoDegToControlRad(servoDeg, mult, offset = 0) {
   return rad((servoDeg - SERVO_CENTER_DEG - offset) / mult);
