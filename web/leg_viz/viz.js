@@ -248,22 +248,34 @@ const PRESET_CROUCH = { hip: 90, top: 81, bot: 96 };
 // Stretch: foot ~(0, 230 mm) — near max leg extension, directly below.
 const PRESET_STRETCH = { hip: 90, top: 115, bot: 46 };
 
-// Gait arcs: foot follows a sinusoidal arc around the stand pose.
-// The servo deltas here are small (±8°) so the foot stays near the
-// standing workspace and the linkage stays feasible throughout the
-// cycle. Walk = slow (1.6 s); trot = fast (0.75 s).
+// Gait arcs: foot traces a walking stride around the stand pose.
+// Fore/aft sweep comes from theta_top (the upper leg pivoting about the
+// hip); vertical lift comes from theta_bot (retracting the knee via the
+// bell-crank). Split cleanly so the motion actually looks like a walk.
+//
+// Phase layout (one full stride = one period):
+//   ph 0.00 .. 0.50  →  SWING   foot lifted, sweeps rear → forward
+//   ph 0.50 .. 1.00  →  STANCE  foot planted, sweeps forward → rear (propulsion)
+//
+// Walk = slow (1.6 s); trot = fast (0.75 s). Amplitudes kept within the
+// joint limits so the linkage stays feasible.
 function gaitAnimation(periodSec) {
+  const sweepAmp = 14;   // deg on top servo — fore/aft stride length
+  const liftAmp = 15;    // deg on bot servo — how high the foot lifts
   return (t) => {
-    const ph = (t % periodSec) / periodSec;     // 0..1
+    const ph = (t % periodSec) / periodSec;          // 0..1
     const w = 2 * Math.PI * ph;
-    // Swing half (ph<0.5): foot lifts; stance half: foot plants & pushes.
+    // -cos(w): starts at -1 (rearmost) at ph=0, passes 0 at mid-swing,
+    // reaches +1 (forwardmost) at ph=0.5, back to -1 at ph=1.
+    const fore_aft = -sweepAmp * Math.cos(w);
+    // Lift half-sine: peaks at ph=0.25 (mid-swing), zero at 0 and 0.5,
+    // stays zero through stance (ph in [0.5, 1]).
     const swing = ph < 0.5;
-    const lift = swing ? 8 * Math.sin(2 * w) : 0;     // knee bend during swing
-    const fwd = 6 * Math.cos(w);                      // fore/aft sweep
+    const lift = swing ? liftAmp * Math.sin(Math.PI * (ph / 0.5)) : 0;
     return {
       hip: 90,
-      top: 90 - fwd - lift * 0.5,
-      bot: 90 + fwd * 0.8 + lift,
+      top: 90 + fore_aft,
+      bot: 90 + lift,
     };
   };
 }
