@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Argos — Single Leg Viz</title>
+  <style>
+    :root {
+      --bg: #0d1016;
+      --panel: #161b25;
+      --panel-border: #222a38;
+      --text: #e6ebf2;
+      --muted: #8893a5;
+      --accent: #4da3ff;
+      --accent-hover: #73baff;
+      --ok: #9adb8a;
+    }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; height: 100%; background: var(--bg); color: var(--text); font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+    body { display: grid; grid-template-columns: 1fr 320px; grid-template-rows: auto 1fr auto; height: 100vh; }
+
+    header {
+      grid-column: 1 / -1;
+      padding: 10px 16px;
+      border-bottom: 1px solid var(--panel-border);
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      background: var(--panel);
+    }
+    header h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: 0.02em; }
+    header .subtitle { color: var(--muted); font-size: 12px; }
+    header .presets { margin-left: auto; display: flex; gap: 6px; }
+
+    button.preset {
+      background: #20283a;
+      color: var(--text);
+      border: 1px solid var(--panel-border);
+      border-radius: 4px;
+      padding: 6px 12px;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+    button.preset:hover { background: #2a354b; border-color: var(--accent); }
+    button.preset:active { background: #35415a; }
+
+    #viewport-wrap {
+      position: relative;
+      overflow: hidden;
+      background: #0a0c11;
+    }
+    canvas#viewport { display: block; width: 100%; height: 100%; }
+
+    #overlay {
+      position: absolute;
+      left: 12px;
+      bottom: 12px;
+      background: rgba(22, 27, 37, 0.85);
+      border: 1px solid var(--panel-border);
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 13px;
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      color: var(--text);
+      pointer-events: none;
+    }
+    #overlay #readout-servo-summary { font-weight: 600; color: var(--accent); }
+    #overlay #readout-foot { color: var(--muted); font-size: 12px; margin-top: 4px; }
+    #overlay #readout-status { color: var(--ok); font-size: 12px; margin-top: 4px; }
+
+    aside.panel {
+      padding: 16px;
+      background: var(--panel);
+      border-left: 1px solid var(--panel-border);
+      overflow-y: auto;
+    }
+    aside.panel h2 { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin: 0 0 8px; }
+    .slider-row { margin-bottom: 18px; }
+    .slider-row label {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 13px;
+      margin-bottom: 6px;
+    }
+    .slider-row label .name { font-weight: 600; }
+    .slider-row label .subname { color: var(--muted); font-size: 11px; }
+    .slider-row input[type="range"] {
+      width: 100%;
+      accent-color: var(--accent);
+    }
+    .slider-row .values {
+      display: flex;
+      justify-content: space-between;
+      font-family: "SF Mono", Menlo, Consolas, monospace;
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+    .slider-row .values .ctrl { color: var(--text); }
+
+    footer {
+      grid-column: 1 / -1;
+      padding: 8px 16px;
+      border-top: 1px solid var(--panel-border);
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 12px;
+    }
+    footer code { color: var(--text); background: #222a38; padding: 1px 5px; border-radius: 3px; }
+  </style>
+
+  <!-- Three.js from CDN via ES module imports. -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <header>
+    <h1>Argos — Single Leg Viz</h1>
+    <span class="subtitle">90/90/90 servo = neutral stand</span>
+    <div class="presets">
+      <button class="preset" id="btn-stand">Stand</button>
+      <button class="preset" id="btn-crouch">Crouch</button>
+      <button class="preset" id="btn-stretch">Stretch</button>
+      <button class="preset" id="btn-walk">Walk</button>
+      <button class="preset" id="btn-trot">Trot</button>
+    </div>
+  </header>
+
+  <div id="viewport-wrap">
+    <canvas id="viewport"></canvas>
+    <div id="overlay">
+      <div id="readout-servo-summary">Servo H/T/B = 90.0 / 90.0 / 90.0</div>
+      <div id="readout-foot">foot: —</div>
+      <div id="readout-status">linkage: OK</div>
+    </div>
+  </div>
+
+  <aside class="panel">
+    <h2>Joint sliders (control space)</h2>
+
+    <div class="slider-row">
+      <label>
+        <span class="name">theta_1</span>
+        <span class="subname">hip abductor</span>
+      </label>
+      <input type="range" id="slider-theta1" min="-45" max="45" step="0.1" value="0" />
+      <div class="values">
+        <span>ctrl: <span class="ctrl" id="readout-theta1-ctrl">0.00°</span></span>
+        <span>servo: <span id="readout-theta1-srv">90.0°</span></span>
+      </div>
+    </div>
+
+    <div class="slider-row">
+      <label>
+        <span class="name">theta_top</span>
+        <span class="subname">upper leg (top servo)</span>
+      </label>
+      <input type="range" id="slider-top" min="-75" max="10" step="0.1" value="0" />
+      <div class="values">
+        <span>ctrl: <span class="ctrl" id="readout-top-ctrl">0.00°</span></span>
+        <span>servo: <span id="readout-top-srv">90.0°</span></span>
+      </div>
+    </div>
+
+    <div class="slider-row">
+      <label>
+        <span class="name">theta_bot</span>
+        <span class="subname">bell-crank (bot servo)</span>
+      </label>
+      <input type="range" id="slider-bot" min="-20" max="80" step="0.1" value="0" />
+      <div class="values">
+        <span>ctrl: <span class="ctrl" id="readout-bot-ctrl">0.00°</span></span>
+        <span>servo: <span id="readout-bot-srv">90.0°</span></span>
+      </div>
+    </div>
+
+    <h2>Legend</h2>
+    <div style="font-size: 12px; color: var(--muted); line-height: 1.7;">
+      <div><span style="color:#ffbe3e">●</span> hip / femur pivot</div>
+      <div><span style="color:#ff6a3e">●</span> knee</div>
+      <div><span style="color:#ff3e6a">●</span> foot</div>
+      <div><span style="color:#7fb4ff">●</span> bell-crank arms</div>
+      <div><span style="color:#ff83b3">●</span> bottom servo horn</div>
+      <div><span style="color:#e0e6f0">─</span> push rods (Rod 1, Rod 2)</div>
+    </div>
+  </aside>
+
+  <footer>
+    Drag in the 3D view to orbit. Drag a slider to adjust a joint (cancels any running gait).
+    Reference: <code>ros2_ws/argos_control/Kinematics.py</code>,
+    <code>ros2_ws/argos_control/Config.py</code>,
+    <code>ros2_ws/argos_control/single_leg_test.py</code>.
+  </footer>
+
+  <script type="module" src="./viz.js"></script>
+</body>
+</html>
