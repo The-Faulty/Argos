@@ -42,8 +42,9 @@ The server uses only the Python stdlib plus `adafruit-pca9685`
 (`board`, `busio`) — same packages `single_leg_test.py` already needs.
 No Flask, no pip install beyond what's there.
 
-ES modules + an `importmap` pull Three.js 0.160 from unpkg — the first
-load needs internet; subsequent loads work offline from cache.
+Three.js 0.160 is vendored locally under `vendor/three/` so the page
+works fully offline (important on the Pi's isolated hotspot, which has
+no internet access to CDNs like unpkg).
 
 ## Controls
 
