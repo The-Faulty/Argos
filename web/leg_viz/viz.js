@@ -22,7 +22,6 @@ import {
 const canvas = document.getElementById("viewport");
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(window.devicePixelRatio);
-resizeRenderer();
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x12151c);

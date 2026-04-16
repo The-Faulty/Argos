@@ -124,12 +124,12 @@
     footer code { color: var(--text); background: #222a38; padding: 1px 5px; border-radius: 3px; }
   </style>
 
-  <!-- Three.js from CDN via ES module imports. -->
+  <!-- Three.js vendored locally so the page works offline (Pi hotspot has no internet). -->
   <script type="importmap">
     {
       "imports": {
-        "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        "three": "./vendor/three/three.module.js",
+        "three/addons/controls/OrbitControls.js": "./vendor/three/OrbitControls.js"
       }
     }
   </script>
