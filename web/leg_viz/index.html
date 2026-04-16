@@ -45,6 +45,19 @@
     button.preset:hover { background: #2a354b; border-color: var(--accent); }
     button.preset:active { background: #35415a; }
 
+    .robot-ctl {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: 16px;
+      padding-left: 16px;
+      border-left: 1px solid var(--panel-border);
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .robot-ctl label { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
+    .robot-ctl #robot-status { font-family: "SF Mono", Menlo, Consolas, monospace; }
+
     #viewport-wrap {
       position: relative;
       overflow: hidden;
@@ -131,6 +144,11 @@
       <button class="preset" id="btn-stretch">Stretch</button>
       <button class="preset" id="btn-walk">Walk</button>
       <button class="preset" id="btn-trot">Trot</button>
+      <span class="robot-ctl">
+        <label><input type="checkbox" id="robot-toggle" /> Drive robot</label>
+        <button class="preset" id="btn-release" title="Send /api/release">Release</button>
+        <span id="robot-status">robot: offline</span>
+      </span>
     </div>
   </header>
 

@@ -7,6 +7,8 @@ reference.
 
 ## Usage
 
+### Simulator only (no hardware)
+
 Double-click `index.html`, or serve the directory:
 
 ```
@@ -14,6 +16,31 @@ cd web/leg_viz
 python -m http.server 8000
 # then open http://localhost:8000 in a browser
 ```
+
+Sliders and presets drive the FK in the browser — no robot involvement.
+
+### Driving the real robot from the Pi
+
+Copy this directory to the Pi and run `server.py` — a tiny stdlib HTTP
+server that serves the page AND exposes a `/api/servo` endpoint that
+writes directly to the PCA9685.
+
+```
+scp -r web/leg_viz pi@argos-pi:~/
+ssh pi@argos-pi
+cd ~/leg_viz
+python3 server.py                   # default port 8000
+# or:  python3 server.py --sim      # log requests without touching I2C
+```
+
+Then, from any browser on the same network, open
+`http://argos-pi:8000`, tick **Drive robot** in the top-right, and the
+servos will follow the sliders / presets / gait animations. Use
+**Release** to zero the duty cycles (servos go limp).
+
+The server uses only the Python stdlib plus `adafruit-pca9685`
+(`board`, `busio`) — same packages `single_leg_test.py` already needs.
+No Flask, no pip install beyond what's there.
 
 ES modules + an `importmap` pull Three.js 0.160 from unpkg — the first
 load needs internet; subsequent loads work offline from cache.
@@ -63,9 +90,22 @@ the overlay flags it.
 
 ## Files
 
-- `index.html` — page shell, sliders, preset buttons
-- `viz.js` — Three.js scene + animation loop
+- `index.html` — page shell, sliders, preset buttons, Drive-robot toggle
+- `viz.js` — Three.js scene + animation loop + throttled robot POSTs
 - `kinematics.js` — pure FK port of `Kinematics.py` (no IK, no ROS)
+- `server.py` — optional HTTP bridge for driving the real servos from the Pi
+
+## API (server.py)
+
+| Method | Path | Body | Effect |
+|---|---|---|---|
+| GET | `/api/status` | — | `{connected, sim}` |
+| POST | `/api/servo` | `{hip, top, bot}` (degrees, 0–270) | sets PWM on ch 2 / 1 / 0 |
+| POST | `/api/release` | — | zeroes every duty cycle |
+
+The viz throttles POSTs to 20 Hz and skips sends when the pose hasn't
+moved, so a running Walk/Trot animation produces ~20 POSTs per second,
+not 60.
 
 ## Verifying against the robot math
 

@@ -294,6 +294,118 @@ document.getElementById("btn-trot").addEventListener("click", () =>
   startAnimation(gaitAnimation(0.75)),
 );
 
+// ---------- robot control layer -------------------------------------------
+// When enabled, POSTs the current servo angles to /api/servo on the Pi.
+// Throttled to 20 Hz and only fires when the pose actually changed, so the
+// 60 fps animation loop doesn't hammer the server.
+
+const robot = {
+  enabled: false,
+  lastPostMs: 0,
+  lastSent: null,            // {hip, top, bot}
+  inflight: false,
+  minPeriodMs: 50,           // 20 Hz cap
+  endpoint: "/api/servo",
+  releaseEndpoint: "/api/release",
+  statusEndpoint: "/api/status",
+};
+
+const robotUi = {
+  toggle: document.getElementById("robot-toggle"),
+  status: document.getElementById("robot-status"),
+  release: document.getElementById("btn-release"),
+};
+
+function setRobotStatus(text, color) {
+  robotUi.status.textContent = text;
+  robotUi.status.style.color = color;
+}
+
+async function probeRobot() {
+  try {
+    const r = await fetch(robot.statusEndpoint, { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const s = await r.json();
+    if (s.sim) setRobotStatus("robot: sim mode", "#e8a04a");
+    else if (s.connected) setRobotStatus("robot: connected", "#9adb8a");
+    else setRobotStatus("robot: no hardware", "#e8a04a");
+    return true;
+  } catch (e) {
+    setRobotStatus("robot: unreachable", "#e06868");
+    return false;
+  }
+}
+
+async function postPose(hip, top, bot) {
+  if (robot.inflight) return;
+  robot.inflight = true;
+  try {
+    const r = await fetch(robot.endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ hip, top, bot }),
+    });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+  } catch (e) {
+    setRobotStatus("robot: send failed (" + e.message + ")", "#e06868");
+    robot.enabled = false;
+    robotUi.toggle.checked = false;
+  } finally {
+    robot.inflight = false;
+  }
+}
+
+function maybePostCurrentPose() {
+  if (!robot.enabled) return;
+  const now = performance.now();
+  if (now - robot.lastPostMs < robot.minPeriodMs) return;
+
+  const hip = controlRadToServoDeg(state.theta1, MULTIPLIERS.hip, OFFSETS.hip);
+  const top = controlRadToServoDeg(state.thetaTop, MULTIPLIERS.top, OFFSETS.top);
+  const bot = controlRadToServoDeg(state.thetaBot, MULTIPLIERS.bot, OFFSETS.bot);
+
+  const last = robot.lastSent;
+  if (
+    last &&
+    Math.abs(last.hip - hip) < 0.1 &&
+    Math.abs(last.top - top) < 0.1 &&
+    Math.abs(last.bot - bot) < 0.1
+  ) {
+    return;   // pose unchanged, don't POST
+  }
+  robot.lastPostMs = now;
+  robot.lastSent = { hip, top, bot };
+  postPose(hip, top, bot);
+}
+
+robotUi.toggle.addEventListener("change", async (e) => {
+  if (e.target.checked) {
+    const ok = await probeRobot();
+    if (!ok) {
+      e.target.checked = false;
+      return;
+    }
+    robot.enabled = true;
+    robot.lastSent = null;   // force first POST
+  } else {
+    robot.enabled = false;
+    setRobotStatus("robot: offline", "#8893a5");
+  }
+});
+
+robotUi.release.addEventListener("click", async () => {
+  try {
+    await fetch(robot.releaseEndpoint, { method: "POST" });
+    setRobotStatus("robot: released", "#e8a04a");
+  } catch (e) {
+    setRobotStatus("robot: release failed", "#e06868");
+  }
+});
+
+// Probe once on load so the user can see whether a server is reachable
+// before flipping the toggle.
+probeRobot();
+
 // ---------- main loop -----------------------------------------------------
 
 function stepAnimation() {
@@ -389,6 +501,7 @@ function tick() {
   resizeRenderer();
   stepAnimation();
   updateLeg();
+  maybePostCurrentPose();
   controls.update();
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
