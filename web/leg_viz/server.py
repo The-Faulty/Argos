@@ -197,6 +197,16 @@ class Handler(SimpleHTTPRequestHandler):
             release_all()
             return self._json(200, {"released": True})
 
+        if self.path == "/api/home":
+            # 90 -> 45 -> 90 wake-up sweep. Same sequence init_hardware uses
+            # at startup; exposed here so the browser can re-run it when the
+            # servos get stuck from the PCA9685 channel latching at a
+            # leftover duty cycle. The browser is expected to turn its own
+            # 50 Hz poster off first (see /urdf_viewer.html Home button),
+            # otherwise the sweep will fight the poser's setpoints.
+            home_servos()
+            return self._json(200, {"homed": True})
+
         return self._json(404, {"error": "unknown endpoint"})
 
 
