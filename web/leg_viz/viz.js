@@ -231,24 +231,14 @@ sliders.thetaBot.min = deg(JOINT_LIMITS.theta_bot[0]);
 sliders.thetaBot.max = deg(JOINT_LIMITS.theta_bot[1]);
 
 // ---------- presets -------------------------------------------------------
-// Poses are specified in servo degrees so the 90/90/90 reference stays front
-// and center. All four presets (Stand + gait states) are rooted there.
+// Preset poses specified in raw servo degrees (channels hip/top/bot) so
+// they match what the user physically tested with single_leg_test.py.
+// 90/90/90 is the neutral stand reference — crouch and stretch both keep
+// hip and bot at 90 and vary only the top servo.
 
-// All preset servo values are chosen so the calibration offsets in
-// kinematics.js land the foot at visually sensible sagittal positions.
-// Values came from a sweep of the ported FK — see the README.
-
-// Stand: servo 90/90/90. With the baked-in offsets, foot lands at
-// ~(0, 165 mm) sagittal — the default stand height from Config.py.
 const PRESET_STAND = { hip: 90, top: 90, bot: 90 };
-
-// Crouch: foot ~(0, 130 mm) — body 35 mm higher over the foot. The bot
-// servo value is high because it's reversed from the top (MULTIPLIERS.bot
-// = -1) and the FK now uses the bell-crank pivot offset.
-const PRESET_CROUCH = { hip: 90, top: 80.3, bot: 161.6 };
-
-// Stretch: foot ~(0, 230 mm) — near max leg extension, directly below.
-const PRESET_STRETCH = { hip: 90, top: 114.7, bot: 87.0 };
+const PRESET_CROUCH = { hip: 90, top: 115, bot: 90 };
+const PRESET_STRETCH = { hip: 90, top: 50, bot: 90 };
 
 // Gait arcs: foot traces a walking stride around the stand pose.
 // Fore/aft sweep comes from theta_top (the upper leg pivoting about the

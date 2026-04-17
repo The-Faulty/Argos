@@ -22,21 +22,14 @@ export const LEG_PARAMS = {
   Lr2: 0.150,
   rh: 0.024,
   dko: 0.030023,
-
-  // Bottom servo shaft position in the sagittal frame, relative to the
-  // top servo (which is at the origin). The physical mounting has the
-  // bot servo 20 mm behind (-x) and 20 mm below (+y) the top servo, so
-  // the horn rotates about this offset point instead of the origin.
-  // The bell-crank pivot itself stays at the origin (coaxial with the
-  // femur pivot).
-  botPivotX: -0.020,
-  botPivotY: 0.020,
 };
 
-// Joint limits (rad) from Config.py.
+// Joint limits (rad). theta_top upper range is widened beyond Config.py's
+// +10° to accommodate the crouch preset (servo 115 → control +25°), which
+// the physical robot reaches without issue.
 export const JOINT_LIMITS = {
   theta1: [(-45 * Math.PI) / 180, (45 * Math.PI) / 180],
-  theta_top: [(-75 * Math.PI) / 180, (10 * Math.PI) / 180],
+  theta_top: [(-75 * Math.PI) / 180, (30 * Math.PI) / 180],
   theta_bot: [(-20 * Math.PI) / 180, (80 * Math.PI) / 180],
 };
 
@@ -80,13 +73,7 @@ export function sagittalFkState(thetaTop, thetaBot, P) {
   const O = [0, 0];
 
   const knee = [L1 * Math.sin(thetaTop), L1 * Math.cos(thetaTop)];
-  // Horn rotates about the bottom servo shaft, which sits at
-  // (botPivotX, botPivotY) in the sagittal frame — NOT at the origin.
-  const botPivot = [P.botPivotX, P.botPivotY];
-  const horn = [
-    botPivot[0] + P.rh * Math.sin(thetaBot),
-    botPivot[1] + P.rh * Math.cos(thetaBot),
-  ];
+  const horn = [P.rh * Math.sin(thetaBot), P.rh * Math.cos(thetaBot)];
 
   let pair = circleIntersect(O, P.rbr, horn, P.Lr1);
   if (!pair) return null;
@@ -220,27 +207,14 @@ export function legFk3D(theta1, thetaTop, thetaBot, legIndex = 0, P = LEG_PARAMS
 // Servo (0..270, centered at 90) <-> control-space radians. Mirrors
 // _servo_deg_to_ik / _ik_to_servo_us from single_leg_test.py.
 //
-// The OFFSETS here represent the real-robot calibration: when every
-// servo sits at 90°, the physical leg is in a proper standing pose
-// (the user's "90/90/90 is stand normal"). With offsets = 0 and the
-// multipliers below, the FK at servo 90/90/90 would not match that
-// standing pose — so we bake in offsets that shift servo 90/90/90 to
-// the control-space angles that put the foot at ~(0, 165 mm) sagittal
-// (the default_z_ref stand height from Config.py).
+// Matches the defaults in single_leg_test.py: HIP_MULTIPLIER=-1 (hip
+// servo runs backward relative to IK), TOP and BOT multipliers +1,
+// all offsets zero. With these values, 90/90/90 servo → (0, 0, 0)
+// control, which is the neutral stand pose the user operates at.
 export const SERVO_CENTER_DEG = 90;
 
-// Direction of each servo relative to the IK control sign. The bottom
-// servo is physically mounted reversed from the top one, so its sign
-// is flipped -- rotating the bot shaft "up" decreases control-space
-// theta_bot instead of increasing it.
-export const MULTIPLIERS = { hip: -1, top: +1, bot: -1 };
-
-// Calibration offsets (degrees). Solved numerically against the updated
-// FK (with the bot servo pivot offset) so servo 90/90/90 lands the foot
-// at (0, 165 mm) sagittal -- the default stand pose.
-//   top: baseline theta_top = -49.57° at servo 90
-//   bot: baseline theta_bot = +53.50° at servo 90 (with mult=-1)
-export const OFFSETS = { hip: 0, top: 49.565, bot: 53.503 };
+export const MULTIPLIERS = { hip: -1, top: +1, bot: +1 };
+export const OFFSETS = { hip: 0, top: 0, bot: 0 };
 
 export function servoDegToControlRad(servoDeg, mult, offset = 0) {
   return rad((servoDeg - SERVO_CENTER_DEG - offset) / mult);
