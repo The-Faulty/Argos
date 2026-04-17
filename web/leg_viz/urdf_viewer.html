@@ -34,9 +34,9 @@ input[type=range]:disabled{opacity:0.3;pointer-events:none}
 <h1>Argos</h1><div class="sub">URDF mesh viewer</div>
 <div class="sec"><div class="sct">Active leg</div><div class="ls"><div class="lb a" data-leg="0">FR</div><div class="lb" data-leg="1">FL</div><div class="lb" data-leg="2">RR</div><div class="lb" data-leg="3">RL</div></div></div>
 <div class="sec"><div class="sct">Joint angles</div>
-<div class="sr"><div class="sl"><span>Hip (θ₁)</span><span class="v" id="vh">0.0°</span></div><input type="range" id="sh" min="-45" max="45" value="0" step="0.5"></div>
-<div class="sr"><div class="sl"><span>Femur (θ_top)</span><span class="v" id="vt">-55.5°</span></div><input type="range" id="st" min="-90" max="90" value="-55.5" step="0.5"></div>
-<div class="sr"><div class="sl"><span>Servo horn (θ_bot)</span><span class="v" id="vb">55.5°</span></div><input type="range" id="sb" min="-90" max="90" value="55.5" step="0.5"></div></div>
+<div class="sr"><div class="sl"><span>Hip servo (Δ°)</span><span class="v" id="vh">0.0°</span></div><input type="range" id="sh" min="-45" max="45" value="0" step="0.5"></div>
+<div class="sr"><div class="sl"><span>Top servo (Δ°)</span><span class="v" id="vt">0.0°</span></div><input type="range" id="st" min="-90" max="90" value="0" step="0.5"></div>
+<div class="sr"><div class="sl"><span>Bot servo (Δ°)</span><span class="v" id="vb">0.0°</span></div><input type="range" id="sb" min="-90" max="90" value="0" step="0.5"></div></div>
 <div class="sec"><div class="sct">Presets</div><div class="pr"><div class="pb" data-preset="stand">Stand</div><div class="pb" data-preset="crouch">Crouch</div><div class="pb" data-preset="reach">Reach</div></div></div>
 <div class="sec"><div class="sct">Gait</div><div class="pr"><div class="pb" id="bw" style="flex:2">Trot</div><div class="pb" id="bs">Stop</div></div>
 <div class="sr"><div class="sl"><span>Speed</span><span class="v" id="vsp">1.0x</span></div><input type="range" id="ssp" min="0.2" max="3" value="1" step="0.1"></div>
@@ -298,8 +298,22 @@ document.getElementById('gp').innerHTML=info;syncSl();updatePose();}
 
 // UI
 const sh_=document.getElementById('sh'),st_=document.getElementById('st'),sb_=document.getElementById('sb');
-function syncSl(){const a=LA[aL];sh_.value=(a.hip*180/Math.PI).toFixed(1);st_.value=(a.top*180/Math.PI).toFixed(1);sb_.value=(a.bot*180/Math.PI).toFixed(1);document.getElementById('vh').textContent=(+sh_.value).toFixed(1)+'°';document.getElementById('vt').textContent=(+st_.value).toFixed(1)+'°';document.getElementById('vb').textContent=(+sb_.value).toFixed(1)+'°';}
-function oS(){LA[aL].hip=+sh_.value*Math.PI/180;LA[aL].top=+st_.value*Math.PI/180;LA[aL].bot=+sb_.value*Math.PI/180;document.getElementById('vh').textContent=(+sh_.value).toFixed(1)+'°';document.getElementById('vt').textContent=(+st_.value).toFixed(1)+'°';document.getElementById('vb').textContent=(+sb_.value).toFixed(1)+'°';updatePose();}
+// Slider UI layer: signed servo delta from 90 on each channel.
+// slider = standDeg - URDF_deg   (so Stand → 0/0/0, positive → higher servo).
+// standDeg: hip=0, top=-55.5, bot=+55.5 — matches laToServo() below.
+function syncSl(){const a=LA[aL],D=180/Math.PI;
+  const sh=0 - a.hip*D, st=-55.5 - a.top*D, sb=55.5 - a.bot*D;
+  sh_.value=sh.toFixed(1);st_.value=st.toFixed(1);sb_.value=sb.toFixed(1);
+  document.getElementById('vh').textContent=sh.toFixed(1)+'°';
+  document.getElementById('vt').textContent=st.toFixed(1)+'°';
+  document.getElementById('vb').textContent=sb.toFixed(1)+'°';}
+function oS(){const sh=+sh_.value,st=+st_.value,sb=+sb_.value,R=Math.PI/180;
+  LA[aL].hip=(0    - sh)*R;
+  LA[aL].top=(-55.5 - st)*R;
+  LA[aL].bot=(55.5  - sb)*R;
+  document.getElementById('vh').textContent=sh.toFixed(1)+'°';
+  document.getElementById('vt').textContent=st.toFixed(1)+'°';
+  document.getElementById('vb').textContent=sb.toFixed(1)+'°';updatePose();}
 sh_.oninput=st_.oninput=sb_.oninput=oS;
 document.querySelectorAll('.lb').forEach(b=>b.onclick=()=>{document.querySelectorAll('.lb').forEach(x=>x.classList.remove('a'));b.classList.add('a');aL=+b.dataset.leg;syncSl();updatePose();});
 document.querySelectorAll('[data-preset]').forEach(b=>b.onclick=()=>{const p=b.dataset.preset;if(!p)return;gR=false;document.getElementById('bw').classList.remove('wk');document.getElementById('gp').innerHTML='';sh_.disabled=st_.disabled=sb_.disabled=false;let t=0,bo=0;if(p==='stand'){t=-55.5;bo=55.5;}else if(p==='crouch'){t=-90;bo=40;}else if(p==='reach'){t=-30;bo=25;}LA[aL].top=t*Math.PI/180;LA[aL].bot=bo*Math.PI/180;syncSl();updatePose();});
