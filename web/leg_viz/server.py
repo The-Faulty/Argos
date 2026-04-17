@@ -37,7 +37,11 @@ BOT_CH = 0
 PWM_MIN_US = 370
 PWM_MAX_US = 2400
 PWM_FREQ = 50
-SERVO_RANGE_DEG = 270.0
+# 180-deg servos (matches servo_test.py and single_leg_test.py). Previously
+# this was 270.0, which compressed every angle into the lower 2/3 of the
+# servo's real travel — "90" from the viewer produced ~1047 µs instead of
+# the true-center ~1385 µs, so nothing lined up with bench calibration.
+SERVO_RANGE_DEG = 180.0
 
 log = logging.getLogger("legviz")
 
