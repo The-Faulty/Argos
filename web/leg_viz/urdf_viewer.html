@@ -393,29 +393,83 @@ onresize=onR;onR();
 //   Reach  (t=-30,   b=25)               → (90,  64.5, 120.5)
 //   Hip +10° slider front (FR/FL)        → hip servo 100
 //   Hip +10° slider back  (RR/RL)        → hip servo  80
-const ROBOT={enabled:false,lastPostMs:0,lastSent:null,inflight:false,
-  minPeriodMs:20, // 50 Hz = PCA9685 PWM refresh rate
+const ROBOT={enabled:false,lastPostMs:0,lastSent:null,cur:null,inflight:false,
+  minPeriodMs:20,         // 50 Hz = PCA9685 PWM refresh rate
+  maxDegPerSec:240,       // per-channel slew cap (≈0.75 s for a full 180° sweep)
   hipStandDeg:0, topStandDeg:-55.5, botStandDeg:55.5};
 function laToServo(la, leg){const D=180/Math.PI;return{
   hip:90 + LEG_HIP_SIGN[leg]*(la.hip*D - ROBOT.hipStandDeg),
   top:90 - (la.top*D - ROBOT.topStandDeg),
   bot:90 - (la.bot*D - ROBOT.botStandDeg)};}
+// ── Smooth servo tween (quaternion SLERP + slew limit) ────────────────
+// When LA[aL] jumps by a large delta (preset click, leg switch, gait
+// tick) we don't want to throw the whole delta at the PCA in one 20 ms
+// refresh — that's what makes presses "clack". Instead we track the
+// last pose actually commanded (ROBOT.cur) and on every tick SLERP cur
+// one small step toward the target pose, capped at maxDegPerSec per
+// channel. For a 240 °/s cap and the 20 ms tick, that's ≤4.8 ° per step
+// → ~30 intermediate commands to cross the Crouch preset's 25 ° top
+// delta.
+//
+// About the quaternions: each of the three joints is a rotation about a
+// single axis, so SLERP between two axis-angle quaternions about THAT
+// axis reduces exactly to linear interpolation of the scalar angle.
+// We still route through THREE.Quaternion.slerp here because (a) it
+// reads unambiguously as a rotation-space tween rather than a scalar
+// lerp that happens to be in degrees, and (b) it makes the code easy to
+// upgrade to full 3D pose-level blending later if someone wants to
+// represent the leg orientation as one rotation instead of three.
+const _QX=new THREE.Vector3(1,0,0);
+const _qA=new THREE.Quaternion(), _qB=new THREE.Quaternion();
+function slerpAngleDeg(fromDeg,toDeg,t){const R=Math.PI/180;
+  _qA.setFromAxisAngle(_QX,fromDeg*R);
+  _qB.setFromAxisAngle(_QX,toDeg*R);
+  _qA.slerp(_qB,t);
+  // All joints rotate about +X, so the signed angle is 2·atan2(qx, qw).
+  // Servo commands are clamped to [0, 180] in server.py, so no wrap.
+  return 2*Math.atan2(_qA.x,_qA.w)/R;}
+function stepTowardDeg(fromDeg,toDeg,maxStepDeg){const d=toDeg-fromDeg;
+  if(Math.abs(d)<=maxStepDeg) return toDeg;
+  return slerpAngleDeg(fromDeg,toDeg,maxStepDeg/Math.abs(d));}
 const rbeEl=document.getElementById('rbe'),rbrEl=document.getElementById('rbr'),rbhEl=document.getElementById('rbh'),rbsEl=document.getElementById('rbs');
 function setRS(t,c){rbsEl.textContent=t;rbsEl.style.color=c||'#8893a5';}
 async function probeRobot(){try{const r=await fetch('/api/status',{cache:'no-store'});if(!r.ok)throw new Error('HTTP '+r.status);const s=await r.json();if(s.sim)setRS('robot: sim mode','#e8a04a');else if(s.connected)setRS('robot: connected','#6bffb8');else setRS('robot: no hardware','#e8a04a');return true;}catch(e){setRS('robot: unreachable','#ff6b6b');return false;}}
 async function postPose(hip,top,bot){if(ROBOT.inflight)return;ROBOT.inflight=true;try{const r=await fetch('/api/servo',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({hip,top,bot})});if(!r.ok)throw new Error('HTTP '+r.status);}catch(e){setRS('robot: send failed ('+e.message+')','#ff6b6b');ROBOT.enabled=false;rbeEl.checked=false;}finally{ROBOT.inflight=false;}}
-function maybePostCurrentPose(){if(!ROBOT.enabled)return;const now=performance.now();if(now-ROBOT.lastPostMs<ROBOT.minPeriodMs)return;const s=laToServo(LA[aL], aL);const last=ROBOT.lastSent;
-  // Skip POSTing if the pose hasn't moved meaningfully (0.1° deadband);
-  // prevents hammering the loopback socket at 50 Hz while the leg is idle.
-  if(last&&Math.abs(last.hip-s.hip)<0.1&&Math.abs(last.top-s.top)<0.1&&Math.abs(last.bot-s.bot)<0.1)return;
-  ROBOT.lastPostMs=now;ROBOT.lastSent=s;postPose(s.hip,s.top,s.bot);}
+function driveServoTween(){if(!ROBOT.enabled)return;
+  const now=performance.now();
+  const dt=Math.min((now-ROBOT.lastPostMs)/1000,0.1); // clamp in case tab was backgrounded
+  if(now-ROBOT.lastPostMs<ROBOT.minPeriodMs)return;
+  ROBOT.lastPostMs=now;
+  const tgt=laToServo(LA[aL], aL);
+  // First tick after Drive-on seeds cur at the assumed physical home so
+  // the tween actually runs; see the rbe change-handler for the seed.
+  if(!ROBOT.cur){ROBOT.cur={hip:tgt.hip,top:tgt.top,bot:tgt.bot};}
+  const maxStep=ROBOT.maxDegPerSec*dt;
+  const c=ROBOT.cur;
+  c.hip=stepTowardDeg(c.hip,tgt.hip,maxStep);
+  c.top=stepTowardDeg(c.top,tgt.top,maxStep);
+  c.bot=stepTowardDeg(c.bot,tgt.bot,maxStep);
+  // 0.1° deadband vs. last SENT (not vs. target) so we stop hammering
+  // the socket once we've settled; any new slider/preset nudges tgt
+  // beyond the band and we start posting again.
+  const last=ROBOT.lastSent;
+  if(last&&Math.abs(last.hip-c.hip)<0.1&&Math.abs(last.top-c.top)<0.1&&Math.abs(last.bot-c.bot)<0.1)return;
+  ROBOT.lastSent={hip:c.hip,top:c.top,bot:c.bot};
+  postPose(c.hip,c.top,c.bot);}
 rbeEl.addEventListener('change',async e=>{
-  if(e.target.checked){const ok=await probeRobot();if(!ok){e.target.checked=false;return;}ROBOT.enabled=true;ROBOT.lastSent=null;}
-  else{ROBOT.enabled=false;setRS('robot: offline','#8893a5');}});
+  if(e.target.checked){const ok=await probeRobot();if(!ok){e.target.checked=false;return;}
+    ROBOT.enabled=true;ROBOT.lastSent=null;
+    // Assume the servos are physically at 90/90/90 (where /api/home and a
+    // fresh server boot park them). Seeding cur here makes the first
+    // commanded move SLERP from that physical pose toward LA[aL], instead
+    // of snapping straight to the target on tick 1.
+    ROBOT.cur={hip:90,top:90,bot:90};
+    ROBOT.lastPostMs=performance.now();}
+  else{ROBOT.enabled=false;ROBOT.cur=null;setRS('robot: offline','#8893a5');}});
 rbrEl.addEventListener('click',async()=>{
   // Turn off the drive toggle FIRST — otherwise the 50 Hz poster re-powers
   // the servos within ~20 ms and the release visibly does nothing.
-  ROBOT.enabled=false;rbeEl.checked=false;ROBOT.lastSent=null;
+  ROBOT.enabled=false;rbeEl.checked=false;ROBOT.lastSent=null;ROBOT.cur=null;
   try{await fetch('/api/release',{method:'POST'});setRS('robot: released (drive off)','#e8a04a');}
   catch(e){setRS('robot: release failed','#ff6b6b');}});
 rbhEl.addEventListener('click',async()=>{
@@ -423,14 +477,14 @@ rbhEl.addEventListener('click',async()=>{
   // fight the homing sweep on the bus. Park LA at Stand too, so when the
   // user re-enables Drive afterward, the first setpoint we publish is
   // 90/90/90, matching where the servos just parked.
-  ROBOT.enabled=false;rbeEl.checked=false;ROBOT.lastSent=null;
+  ROBOT.enabled=false;rbeEl.checked=false;ROBOT.lastSent=null;ROBOT.cur=null;
   for(let i=0;i<4;i++)LA[i]={hip:0,top:-55.5*Math.PI/180,bot:55.5*Math.PI/180};
   syncSl();updatePose();
   setRS('robot: homing 90→45→90…','#e8a04a');
   try{await fetch('/api/home',{method:'POST'});setRS('robot: homed (drive off)','#6bffb8');}
   catch(e){setRS('robot: home failed','#ff6b6b');}});
 probeRobot();
-setInterval(maybePostCurrentPose,ROBOT.minPeriodMs);
+setInterval(driveServoTween,ROBOT.minPeriodMs);
 
 let lTm=performance.now();
 function anim(now){requestAnimationFrame(anim);const dt=Math.min((now-lTm)/1000,.05);lTm=now;
