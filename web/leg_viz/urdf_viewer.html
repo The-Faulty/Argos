@@ -50,6 +50,7 @@ input[type=range]:disabled{opacity:0.3;pointer-events:none}
 <div class="sec"><div class="sct">Robot</div>
 <div class="tr">Drive robot<label class="tg"><input type="checkbox" id="rbe"><span></span></label></div>
 <div class="pr"><div class="pb" id="rbh" style="flex:1">Home</div><div class="pb" id="rbr" style="flex:1">Release</div></div>
+<div class="sr" style="margin-top:6px"><div class="sl"><span>Move speed</span><span class="v" id="vrv">400°/s</span></div><input type="range" id="srv" min="30" max="1500" value="400" step="10"></div>
 <div id="rbs" style="font-size:10px;color:#8893a5;margin-top:6px">robot: offline</div></div>
 <div id="fp"></div>
 <div class="ib"><b>Geometry:</b> STL meshes from URDF. Bell crank drives knee via FK. Drag to orbit, scroll to zoom, right-drag to pan.</div>
@@ -355,6 +356,11 @@ document.getElementById('bs').onclick=()=>{gR=false;document.getElementById('bw'
 document.getElementById('ssp').oninput=e=>{gSp=+e.target.value;document.getElementById('vsp').textContent=gSp.toFixed(1)+'x';};
 document.getElementById('ssl').oninput=e=>{sLen=+e.target.value/1000;document.getElementById('vsl').textContent=Math.round(+e.target.value)+'mm';};
 document.getElementById('ssh').oninput=e=>{sHt=+e.target.value/1000;document.getElementById('vsh').textContent=Math.round(+e.target.value)+'mm';};
+// Global servo move-speed slider — caps per-channel slew on every /api/servo
+// post (sliders, presets, gait, leg-switch). Low values = buttery/presetty;
+// high values = effectively instant (whatever the servo's own mechanical
+// max is becomes the bottleneck).
+document.getElementById('srv').oninput=e=>{ROBOT.maxDegPerSec=+e.target.value;document.getElementById('vrv').textContent=ROBOT.maxDegPerSec+'°/s';};
 ['tm','tg','ta'].forEach(id=>document.getElementById(id).onchange=updatePose);
 syncSl();
 
@@ -395,7 +401,7 @@ onresize=onR;onR();
 //   Hip +10° slider back  (RR/RL)        → hip servo  80
 const ROBOT={enabled:false,lastPostMs:0,lastSent:null,cur:null,inflight:false,
   minPeriodMs:20,         // 50 Hz = PCA9685 PWM refresh rate
-  maxDegPerSec:240,       // per-channel slew cap (≈0.75 s for a full 180° sweep)
+  maxDegPerSec:400,       // per-channel slew cap, °/s (user-adjustable via #srv slider)
   hipStandDeg:0, topStandDeg:-55.5, botStandDeg:55.5};
 function laToServo(la, leg){const D=180/Math.PI;return{
   hip:90 + LEG_HIP_SIGN[leg]*(la.hip*D - ROBOT.hipStandDeg),
