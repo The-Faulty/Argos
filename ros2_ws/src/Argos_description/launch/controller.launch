@@ -1,0 +1,9 @@
+<launch>
+
+<rosparam file="$(find Argos_description)/launch/controller.yaml" command="load"/>
+<node name="controller_spawner" pkg="controller_manager" type="spawner" respawn="false" output="screen" ns="Argos" args="FL_coxa_joint_position_controller FL_femur_joint_position_controller FL_tibia_joint_position_controller FR_coxa_joint_position_controller FR_femur_joint_position_controller FR_tibia_joint_position_controller RR_coxa_joint_position_controller RR_femur_joint_position_controller RR_tibia_joint_position_controller RL_coxa_joint_position_controller RL_femur_joint_position_controller RL_tibia_joint_position_controller joint_state_controller "/>
+<node name="robot_state_publisher" pkg="robot_state_publisher" type="robot_state_publisher" respawn="false" output="screen">
+  <remap from="/joint_states" to="/Argos/joint_states"/>
+</node>
+
+</launch>

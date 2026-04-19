@@ -16,6 +16,7 @@ quadruped. It enables:
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -58,6 +59,28 @@ def generate_launch_description():
         description='Align depth frames to the color camera frame'
     )
 
+    publish_mount_tf_arg = DeclareLaunchArgument(
+        'publish_mount_tf', default_value='true',
+        description='Attach the RealSense driver frames to the URDF camera mount'
+    )
+
+    mount_parent_frame_arg = DeclareLaunchArgument(
+        'mount_parent_frame', default_value='camera_link_1',
+        description='URDF frame that represents the physical camera mount'
+    )
+
+    mount_child_frame_arg = DeclareLaunchArgument(
+        'mount_child_frame', default_value='camera_link',
+        description='Root frame published by the RealSense driver'
+    )
+
+    mount_x_arg = DeclareLaunchArgument('mount_x', default_value='0.0')
+    mount_y_arg = DeclareLaunchArgument('mount_y', default_value='0.0')
+    mount_z_arg = DeclareLaunchArgument('mount_z', default_value='0.0')
+    mount_roll_arg = DeclareLaunchArgument('mount_roll', default_value='0.0')
+    mount_pitch_arg = DeclareLaunchArgument('mount_pitch', default_value='0.0')
+    mount_yaw_arg = DeclareLaunchArgument('mount_yaw', default_value='0.0')
+
     # --- RealSense Node ---
     realsense_node = Node(
         package='realsense2_camera',
@@ -94,6 +117,24 @@ def generate_launch_description():
         emulate_tty=True,
     )
 
+    camera_mount_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_mount_static_tf',
+        condition=IfCondition(LaunchConfiguration('publish_mount_tf')),
+        arguments=[
+            LaunchConfiguration('mount_x'),
+            LaunchConfiguration('mount_y'),
+            LaunchConfiguration('mount_z'),
+            LaunchConfiguration('mount_yaw'),
+            LaunchConfiguration('mount_pitch'),
+            LaunchConfiguration('mount_roll'),
+            LaunchConfiguration('mount_parent_frame'),
+            LaunchConfiguration('mount_child_frame'),
+        ],
+        output='screen',
+    )
+
     return LaunchDescription([
         camera_name_arg,
         enable_color_arg,
@@ -102,5 +143,15 @@ def generate_launch_description():
         enable_infra2_arg,
         pointcloud_arg,
         align_depth_arg,
+        publish_mount_tf_arg,
+        mount_parent_frame_arg,
+        mount_child_frame_arg,
+        mount_x_arg,
+        mount_y_arg,
+        mount_z_arg,
+        mount_roll_arg,
+        mount_pitch_arg,
+        mount_yaw_arg,
         realsense_node,
+        camera_mount_tf,
     ])

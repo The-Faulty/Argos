@@ -20,7 +20,7 @@ future work, not the current critical path.
 - `ros2_ws/src/argos_control`: ROS 2 package wrapper and node entry points
 - `ros2_ws/src/argos_mission`: ROS 2 package wrapper for mission/perception bench nodes
 - `ros2_ws/src/quadruped_bringup`: launch files and sensor bring-up assets
-- `ros2_ws/src/quadruped_description`: robot description, frames, and RViz assets
+- `ros2_ws/src/Argos_description`: robot description, frames, meshes, and RViz assets
 - `ros2_ws/argos_control`: leg math, control helpers, and single-leg bench tools
 - `ros2_ws/argos_mission`: mission state, gas hazard map, and thermal demo nodes
 - `firmware`: embedded code and MCU-facing work

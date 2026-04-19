@@ -1,7 +1,10 @@
-"""Publish the robot URDF, TF tree, and optionally open RViz.
+"""Publish the Argos URDF, TF tree, and optionally open RViz.
 
-Reads quadruped.urdf.xacro, processes it with xacro, and feeds it to
-robot_state_publisher so all TF frames are available to the rest of the stack.
+Reads Argos.xacro from the Argos_description package, processes it with xacro,
+and feeds it to robot_state_publisher so all TF frames are available to the
+rest of the stack. The imported model roots at base_link, so this launch also
+adds a zero-offset base_footprint -> base_link transform for the rest of the
+stack.
 
 Usage:
   ros2 launch quadruped_bringup state_publisher.launch.py
@@ -21,8 +24,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    description_dir = get_package_share_directory("quadruped_description")
-    xacro_file = os.path.join(description_dir, "urdf", "quadruped.urdf.xacro")
+    description_dir = get_package_share_directory("Argos_description")
+    xacro_file = os.path.join(description_dir, "urdf", "Argos.xacro")
     rviz_config = os.path.join(description_dir, "config", "robot_model.rviz")
 
     use_sim_time_arg = DeclareLaunchArgument(
@@ -39,6 +42,11 @@ def generate_launch_description():
         "start_rviz",
         default_value="false",
         description="Launch RViz with the robot model config.",
+    )
+    publish_base_footprint_tf_arg = DeclareLaunchArgument(
+        "publish_base_footprint_tf",
+        default_value="true",
+        description="Publish a zero-offset base_footprint -> base_link transform.",
     )
 
     robot_description = Command(["xacro ", xacro_file])
@@ -73,6 +81,24 @@ def generate_launch_description():
         output="screen",
     )
 
+    base_footprint_tf = Node(
+        package="tf2_ros",
+        executable="static_transform_publisher",
+        name="base_footprint_static_tf",
+        condition=IfCondition(LaunchConfiguration("publish_base_footprint_tf")),
+        arguments=[
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "base_footprint",
+            "base_link",
+        ],
+        output="screen",
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -87,8 +113,10 @@ def generate_launch_description():
             use_sim_time_arg,
             use_joint_state_gui_arg,
             start_rviz_arg,
+            publish_base_footprint_tf_arg,
             robot_state_publisher,
             joint_state_publisher_gui,
+            base_footprint_tf,
             rviz_node,
         ]
     )

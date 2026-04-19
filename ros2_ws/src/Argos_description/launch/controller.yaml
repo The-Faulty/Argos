@@ -1,0 +1,55 @@
+Argos_controller:
+  # Publish all joint states -----------------------------------
+  joint_state_controller:
+    type: joint_state_controller/JointStateController
+    publish_rate: 50
+
+  # Position Controllers --------------------------------------
+  FL_coxa_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: FL_coxa_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  FL_femur_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: FL_femur_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  FL_tibia_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: FL_tibia_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  FR_coxa_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: FR_coxa_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  FR_femur_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: FR_femur_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  FR_tibia_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: FR_tibia_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  RR_coxa_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: RR_coxa_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  RR_femur_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: RR_femur_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  RR_tibia_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: RR_tibia_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  RL_coxa_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: RL_coxa_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  RL_femur_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: RL_femur_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}
+  RL_tibia_joint_position_controller:
+    type: effort_controllers/JointPositionController
+    joint: RL_tibia_joint
+    pid: {p: 100.0, i: 0.01, d: 10.0}

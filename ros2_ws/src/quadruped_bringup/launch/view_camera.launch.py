@@ -18,7 +18,7 @@ import os
 def generate_launch_description():
 
     bringup_dir = get_package_share_directory('quadruped_bringup')
-    description_dir = get_package_share_directory('quadruped_description')
+    description_dir = get_package_share_directory('Argos_description')
 
     # Include the realsense launch
     realsense_launch = IncludeLaunchDescription(
@@ -28,7 +28,7 @@ def generate_launch_description():
     )
 
     # Prefer a camera-specific config when present, otherwise fall back to the
-    # checked-in robot model RViz layout.
+    # checked-in robot model RViz layout from the imported description package.
     rviz_config = os.path.join(bringup_dir, 'config', 'realsense_view.rviz')
     if not os.path.isfile(rviz_config):
         rviz_config = os.path.join(description_dir, 'config', 'robot_model.rviz')

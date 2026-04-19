@@ -1,0 +1,958 @@
+<?xml version="1.0" ?>
+<robot name="Argos" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+<xacro:include filename="$(find Argos_description)/urdf/materials.xacro" />
+<xacro:include filename="$(find Argos_description)/urdf/Argos.trans" />
+<xacro:include filename="$(find Argos_description)/urdf/Argos.gazebo" />
+<link name="base_link">
+  <inertial>
+    <origin xyz="-0.022118466334973337 -0.009183143711477892 -0.01761714704800224" rpy="0 0 0"/>
+    <mass value="0.41722982746680565"/>
+    <inertia ixx="0.000465" iyy="0.001147" izz="0.001612" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/base_link.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_side_left_1">
+  <inertial>
+    <origin xyz="0.04749985628852587 -0.028528711386581106 0.030499852951997856" rpy="0 0 0"/>
+    <mass value="0.5418487678584163"/>
+    <inertia ixx="0.000472" iyy="0.001048" izz="0.000931" ixy="-0.0" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.009817 0.040183 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_side_left_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.009817 0.040183 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_side_left_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_front_1">
+  <inertial>
+    <origin xyz="-0.004192204191852261 0.06199985628867903 0.03075956610836024" rpy="0 0 0"/>
+    <mass value="0.4930747270961484"/>
+    <inertia ixx="0.001806" iyy="0.000269" izz="0.00157" ixy="-0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.098183 0.071183 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_front_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.098183 0.071183 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_front_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_cam_mount_1">
+  <inertial>
+    <origin xyz="0.011646354435480802 -1.437114716049126e-07 0.021129531182059128" rpy="0 0 0"/>
+    <mass value="0.03474382066439181"/>
+    <inertia ixx="1e-05" iyy="1.3e-05" izz="4e-06" ixy="0.0" iyz="-0.0" ixz="2e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.084683 0.031683 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_cam_mount_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.084683 0.031683 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_cam_mount_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_cam_mount_2">
+  <inertial>
+    <origin xyz="0.011646354435480955 -1.437114715910348e-07 0.021129531182059104" rpy="0 0 0"/>
+    <mass value="0.03474382066439181"/>
+    <inertia ixx="1e-05" iyy="1.3e-05" izz="4e-06" ixy="0.0" iyz="-0.0" ixz="2e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.084683 -0.013317 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_cam_mount_2.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.084683 -0.013317 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_cam_mount_2.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_bottom_1">
+  <inertial>
+    <origin xyz="0.07943517891202628 -1.4371146442836158e-07 -1.4704800211165492e-07" rpy="0 0 0"/>
+    <mass value="0.41722982746680565"/>
+    <inertia ixx="0.000465" iyy="0.001147" izz="0.001612" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.057317 0.009183 0.017617" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_bottom_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.057317 0.009183 0.017617" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_bottom_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_side_right__1__1">
+  <inertial>
+    <origin xyz="0.04749985628852315 0.028528423963627692 0.030499852951997697" rpy="0 0 0"/>
+    <mass value="0.5418487678584163"/>
+    <inertia ixx="0.000472" iyy="0.001048" izz="0.000931" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.009817 -0.021817 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_side_right__1__1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.009817 -0.021817 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_side_right__1__1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="camera_link_1">
+  <inertial>
+    <origin xyz="-0.010946509607845059 0.02109173183975526 -0.004009299264399694" rpy="0 0 0"/>
+    <mass value="0.07200111279051585"/>
+    <inertia ixx="4.6e-05" iyy="7e-06" izz="4.7e-05" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.084683 0.031683 -0.022883" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/camera_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.084683 0.031683 -0.022883" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/camera_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_top_front_1">
+  <inertial>
+    <origin xyz="0.08406453366502363 0.06199985628852129 0.0014998529519978099" rpy="0 0 0"/>
+    <mass value="0.41722982746680565"/>
+    <inertia ixx="0.000465" iyy="0.001147" izz="0.001612" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.106183 0.071183 -0.044883" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_top_front_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.106183 0.071183 -0.044883" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_top_front_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_back_1">
+  <inertial>
+    <origin xyz="-0.003824523493727916 -0.06200014371160491 0.030737334816992173" rpy="0 0 0"/>
+    <mass value="0.5392327270961488"/>
+    <inertia ixx="0.001836" iyy="0.00028" izz="0.001593" ixy="-0.0" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.220817 -0.052817 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_back_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.220817 -0.052817 0.016117" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_back_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="chassis_top_back_1">
+  <inertial>
+    <origin xyz="-0.08406482108797664 -0.0620001437114677 0.0014998529519979278" rpy="0 0 0"/>
+    <mass value="0.41722982746680565"/>
+    <inertia ixx="0.000465" iyy="0.001147" izz="0.001612" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.220817 -0.052817 -0.044883" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_top_back_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.220817 -0.052817 -0.044883" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/chassis_top_back_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FL_coxa_link_1">
+  <inertial>
+    <origin xyz="-0.03536618985332857 -0.00686411101953549 -1.470480022573717e-07" rpy="0 0 0"/>
+    <mass value="0.22169336139879325"/>
+    <inertia ixx="0.000138" iyy="0.000268" izz="0.000171" ixy="1e-06" iyz="0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.016983 0.073583 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.016983 0.073583 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FL_femur_link_1">
+  <inertial>
+    <origin xyz="0.04496963743627094 -0.010981700845071177 -0.029725960847840703" rpy="0 0 0"/>
+    <mass value="0.48563687689626245"/>
+    <inertia ixx="0.000276" iyy="0.000829" izz="0.000571" ixy="5e-06" iyz="-3e-06" ixz="0.000345"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.041083 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.041083 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FL_tibia_link_1">
+  <inertial>
+    <origin xyz="-0.044741386329283775 -0.01123839952367807 -0.03823646771356843" rpy="0 0 0"/>
+    <mass value="0.23251412340601418"/>
+    <inertia ixx="0.000211" iyy="0.000474" izz="0.000282" ixy="-1e-05" iyz="-9e-06" ixz="-0.000219"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.064863 0.110742 0.042899" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.064863 0.110742 0.042899" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FR_coxa_link_1">
+  <inertial>
+    <origin xyz="-0.03536618985333116 0.006863823596581671 -1.4704800227645365e-07" rpy="0 0 0"/>
+    <mass value="0.22169336139879325"/>
+    <inertia ixx="0.000138" iyy="0.000268" izz="0.000171" ixy="-1e-06" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.016983 -0.055217 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.016983 -0.055217 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FR_femur_link_1">
+  <inertial>
+    <origin xyz="0.044963811698711595 0.01098141342211656 -0.029734772258510584" rpy="0 0 0"/>
+    <mass value="0.48563687689626245"/>
+    <inertia ixx="0.000276" iyy="0.000829" izz="0.00057" ixy="-5e-06" iyz="3e-06" ixz="0.000346"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.041083 -0.093017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.041083 -0.093017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FR_tibia_link_1">
+  <inertial>
+    <origin xyz="-0.044998890719330074 0.011238110693268064 -0.03793258549694835" rpy="0 0 0"/>
+    <mass value="0.23251435769920883"/>
+    <inertia ixx="0.000208" iyy="0.000474" izz="0.000285" ixy="1e-05" iyz="8e-06" ixz="-0.000219"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.064849 -0.092376 0.04292" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.064849 -0.092376 0.04292" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RR_coxa_link_1">
+  <inertial>
+    <origin xyz="0.03536590243037757 0.00686382359658224 -1.4704800218971747e-07" rpy="0 0 0"/>
+    <mass value="0.22169336139879325"/>
+    <inertia ixx="0.000138" iyy="0.000268" izz="0.000171" ixy="1e-06" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.131617 -0.055217 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.131617 -0.055217 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RR_femur_link_1">
+  <inertial>
+    <origin xyz="0.04198059623840816 0.010981413422117961 -0.033816159465183036" rpy="0 0 0"/>
+    <mass value="0.48563687689626245"/>
+    <inertia ixx="0.000344" iyy="0.000829" izz="0.000503" ixy="-4e-06" iyz="4e-06" ixz="0.000367"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.176517 -0.093017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.176517 -0.093017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RR_tibia_link_1">
+  <inertial>
+    <origin xyz="-0.04591594144318489 0.011238110693267231 -0.03681801756070503" rpy="0 0 0"/>
+    <mass value="0.23251435769920883"/>
+    <inertia ixx="0.000198" iyy="0.000474" izz="0.000296" ixy="1e-05" iyz="8e-06" ixz="-0.000217"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.275421 -0.092376 0.052535" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.275421 -0.092376 0.052535" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RL_coxa_link_1">
+  <inertial>
+    <origin xyz="0.0353659024303799 -0.006864111019535199 -1.470480019624687e-07" rpy="0 0 0"/>
+    <mass value="0.22169336139879325"/>
+    <inertia ixx="0.000138" iyy="0.000268" izz="0.000171" ixy="-1e-06" iyz="-0.0" ixz="0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.131617 0.073583 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.131617 0.073583 -0.014583" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_coxa_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RL_femur_link_1">
+  <inertial>
+    <origin xyz="0.04203048632636108 -0.010981700845069817 -0.033754129941305604" rpy="0 0 0"/>
+    <mass value="0.48563687689626245"/>
+    <inertia ixx="0.000342" iyy="0.000829" izz="0.000505" ixy="4e-06" iyz="-4e-06" ixz="0.000367"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.176517 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.176517 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_femur_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RL_tibia_link_1">
+  <inertial>
+    <origin xyz="-0.046239433810130265 -0.011238399523676043 -0.03641002518010834" rpy="0 0 0"/>
+    <mass value="0.23251412340601418"/>
+    <inertia ixx="0.000194" iyy="0.000474" izz="0.0003" ixy="-1e-05" iyz="-8e-06" ixz="-0.000216"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.275538 0.110742 0.052389" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.275538 0.110742 0.052389" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_tibia_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FL_shoulder_link_1">
+  <inertial>
+    <origin xyz="-0.01184692882487038 -0.002000143711475902 0.018802853465674094" rpy="0 0 0"/>
+    <mass value="0.05943671002780686"/>
+    <inertia ixx="1.1e-05" iyy="2.5e-05" izz="1.4e-05" ixy="0.0" iyz="-0.0" ixz="-1e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.041083 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.041083 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FL_30mm_linkage_1">
+  <inertial>
+    <origin xyz="0.001964080899993101 -0.0016718055928684195 0.013408336541967388" rpy="0 0 0"/>
+    <mass value="0.009494049300548958"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="0.0" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.085083 0.115383 -0.002716" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.085083 0.115383 -0.002716" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FL_150mm_linkage_1">
+  <inertial>
+    <origin xyz="0.0614644618418151 -0.0020001437114769427 -0.04299727249464855" rpy="0 0 0"/>
+    <mass value="0.05051859527408095"/>
+    <inertia ixx="3.2e-05" iyy="9.3e-05" izz="6.1e-05" ixy="0.0" iyz="-0.0" ixz="4.4e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.035817 0.115383 -0.066785" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.035817 0.115383 -0.066785" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FL_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FR_shoulder_link_1">
+  <inertial>
+    <origin xyz="-0.011738885580321039 -0.002000143711478289 0.018870493777812993" rpy="0 0 0"/>
+    <mass value="0.05943671002780686"/>
+    <inertia ixx="1.1e-05" iyy="2.5e-05" izz="1.4e-05" ixy="-0.0" iyz="-0.0" ixz="-1e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.041083 -0.097017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.041083 -0.097017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FR_30mm_linkage_1">
+  <inertial>
+    <origin xyz="0.001977072656226417 0.001671518169914954 0.013406012857052712" rpy="0 0 0"/>
+    <mass value="0.009494049300548958"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="0.0" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.085081 -0.097017 -0.002948" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.085081 -0.097017 -0.002948" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="FR_150mm_linkage_1">
+  <inertial>
+    <origin xyz="0.061417389296541065 -0.0020001437114776505 -0.0430634077717404" rpy="0 0 0"/>
+    <mass value="0.05051859527408095"/>
+    <inertia ixx="3.2e-05" iyy="9.3e-05" izz="6.1e-05" ixy="-0.0" iyz="0.0" ixz="4.4e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="0.035589 -0.101017 -0.066754" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="0.035589 -0.101017 -0.066754" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/FR_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RL_shoulder_link_1">
+  <inertial>
+    <origin xyz="-0.010936691665925535 -0.00200014371147568 0.01934645639240241" rpy="0 0 0"/>
+    <mass value="0.05943671002780686"/>
+    <inertia ixx="1.1e-05" iyy="2.5e-05" izz="1.4e-05" ixy="0.0" iyz="0.0" ixz="-1e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.176517 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.176517 0.111383 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RL_30mm_linkage_1">
+  <inertial>
+    <origin xyz="0.002060616625059658 -0.0016718055928690856 0.013393955365098324" rpy="0 0 0"/>
+    <mass value="0.009494049300548958"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="0.0" ixy="0.0" iyz="0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.1326 0.115383 -0.004633" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.1326 0.115383 -0.004633" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RL_150mm_linkage_1">
+  <inertial>
+    <origin xyz="0.05757028904921216 -0.0020001437114751247 -0.04808586730500919" rpy="0 0 0"/>
+    <mass value="0.05051859527408095"/>
+    <inertia ixx="4e-05" iyy="9.3e-05" izz="5.3e-05" ixy="-0.0" iyz="0.0" ixz="4.6e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.183668 0.115383 -0.066488" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.183668 0.115383 -0.066488" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RL_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RR_shoulder_link_1">
+  <inertial>
+    <origin xyz="-0.011081512942198002 -0.0020001437114764847 0.01926387127146353" rpy="0 0 0"/>
+    <mass value="0.05943671002780686"/>
+    <inertia ixx="1.1e-05" iyy="2.5e-05" izz="1.4e-05" ixy="-0.0" iyz="0.0" ixz="-1e-06"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.176517 -0.097017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.176517 -0.097017 -0.027133" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_shoulder_link_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RR_30mm_linkage_1">
+  <inertial>
+    <origin xyz="0.0009260696504191646 0.0016715181699155646 0.013519750706526175" rpy="0 0 0"/>
+    <mass value="0.009494049300548958"/>
+    <inertia ixx="1e-06" iyy="1e-06" izz="0.0" ixy="-0.0" iyz="-0.0" ixz="-0.0"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.135059 -0.097017 -0.004059" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.135059 -0.097017 -0.004059" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_30mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<link name="RR_150mm_linkage_1">
+  <inertial>
+    <origin xyz="0.05756641671503243 -0.002000143711476457 -0.04809045177879494" rpy="0 0 0"/>
+    <mass value="0.05051859527408095"/>
+    <inertia ixx="4e-05" iyy="9.3e-05" izz="5.3e-05" ixy="0.0" iyz="0.0" ixz="4.6e-05"/>
+  </inertial>
+  <visual>
+    <origin xyz="-0.183373 -0.101017 -0.066541" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+    <material name="silver"/>
+  </visual>
+  <collision>
+    <origin xyz="-0.183373 -0.101017 -0.066541" rpy="0 0 0"/>
+    <geometry>
+      <mesh filename="package://Argos_description/meshes/RR_150mm_linkage_1.stl" scale="0.001 0.001 0.001"/>
+    </geometry>
+  </collision>
+</link>
+
+<joint name="chassis_side_left_joint" type="fixed">
+  <origin xyz="0.009817 -0.040183 -0.016117" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="chassis_side_left_1"/>
+</joint>
+
+<joint name="chassis_front_joint" type="fixed">
+  <origin xyz="-0.098183 -0.071183 -0.016117" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="chassis_front_1"/>
+</joint>
+
+<joint name="chassis_cam_mount_1" type="fixed">
+  <origin xyz="-0.084683 -0.031683 -0.016117" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="chassis_cam_mount_1"/>
+</joint>
+
+<joint name="chassis_cam_mount_2" type="fixed">
+  <origin xyz="-0.084683 0.013317 -0.016117" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="chassis_cam_mount_2"/>
+</joint>
+
+<joint name="chassis_bottom_joint" type="fixed">
+  <origin xyz="0.057317 -0.009183 -0.017617" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="chassis_bottom_1"/>
+</joint>
+
+<joint name="chassis_side_right_joint" type="fixed">
+  <origin xyz="0.009817 0.021817 -0.016117" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="chassis_side_right__1__1"/>
+</joint>
+
+<joint name="camera_joint" type="fixed">
+  <origin xyz="0.0 0.0 0.039" rpy="0 0 0"/>
+  <parent link="chassis_cam_mount_1"/>
+  <child link="camera_link_1"/>
+</joint>
+
+<joint name="chassis_top_front_joint" type="fixed">
+  <origin xyz="-0.008 0.0 0.061" rpy="0 0 0"/>
+  <parent link="chassis_front_1"/>
+  <child link="chassis_top_front_1"/>
+</joint>
+
+<joint name="chassis_back_joint" type="fixed">
+  <origin xyz="0.1635 0.062 0.0015" rpy="0 0 0"/>
+  <parent link="chassis_bottom_1"/>
+  <child link="chassis_back_1"/>
+</joint>
+
+<joint name="chassis_top_back_joint" type="fixed">
+  <origin xyz="0.0 0.0 0.061" rpy="0 0 0"/>
+  <parent link="chassis_back_1"/>
+  <child link="chassis_top_back_1"/>
+</joint>
+
+<joint name="FL_coxa_joint" type="continuous">
+  <origin xyz="-0.016983 -0.073583 0.014583" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="FL_coxa_link_1"/>
+  <axis xyz="1.0 0.0 0.0"/>
+</joint>
+
+<joint name="FL_femur_joint" type="continuous">
+  <origin xyz="-0.041083 -0.111383 0.027133" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="FL_femur_link_1"/>
+  <axis xyz="0.0 1.0 -0.0"/>
+</joint>
+
+<joint name="FL_tibia_joint" type="continuous">
+  <origin xyz="0.105946 0.000641 -0.070032" rpy="0 0 0"/>
+  <parent link="FL_femur_link_1"/>
+  <child link="FL_tibia_link_1"/>
+  <axis xyz="-0.029561 0.999231 -0.025754"/>
+</joint>
+
+<joint name="FR_coxa_joint" type="continuous">
+  <origin xyz="-0.016983 0.055217 0.014583" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="FR_coxa_link_1"/>
+  <axis xyz="1.0 0.0 0.0"/>
+</joint>
+
+<joint name="FR_femur_joint" type="continuous">
+  <origin xyz="-0.041083 0.093017 0.027133" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="FR_femur_link_1"/>
+  <axis xyz="0.0 -1.0 -0.0"/>
+</joint>
+
+<joint name="FR_tibia_joint" type="continuous">
+  <origin xyz="0.105932 -0.000641 -0.070053" rpy="0 0 0"/>
+  <parent link="FR_femur_link_1"/>
+  <child link="FR_tibia_link_1"/>
+  <axis xyz="-0.029734 -0.999231 -0.025554"/>
+</joint>
+
+<joint name="RR_coxa_joint" type="continuous">
+  <origin xyz="0.131617 0.055217 0.014583" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="RR_coxa_link_1"/>
+  <axis xyz="-1.0 -0.0 -0.0"/>
+</joint>
+
+<joint name="RR_femur_joint" type="continuous">
+  <origin xyz="0.176517 0.093017 0.027133" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="RR_femur_link_1"/>
+  <axis xyz="-0.0 1.0 -0.0"/>
+</joint>
+
+<joint name="RR_tibia_joint" type="continuous">
+  <origin xyz="0.098904 -0.000641 -0.079668" rpy="0 0 0"/>
+  <parent link="RR_femur_link_1"/>
+  <child link="RR_tibia_link_1"/>
+  <axis xyz="0.030352 0.999231 0.024817"/>
+</joint>
+
+<joint name="RL_coxa_joint" type="continuous">
+  <origin xyz="0.131617 -0.073583 0.014583" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="RL_coxa_link_1"/>
+  <axis xyz="1.0 0.0 0.0"/>
+</joint>
+
+<joint name="RL_femur_joint" type="continuous">
+  <origin xyz="0.176517 -0.111383 0.027133" rpy="0 0 0"/>
+  <parent link="base_link"/>
+  <child link="RL_femur_link_1"/>
+  <axis xyz="-0.0 1.0 0.0"/>
+</joint>
+
+<joint name="RL_tibia_joint" type="continuous">
+  <origin xyz="0.099021 0.000641 -0.079522" rpy="0 0 0"/>
+  <parent link="RL_femur_link_1"/>
+  <child link="RL_tibia_link_1"/>
+  <axis xyz="-0.030571 0.999231 -0.024547"/>
+</joint>
+
+<joint name="FL_shoulder_linkage_joint" type="fixed">
+  <origin xyz="-0.0241 -0.0378 0.01255" rpy="0 0 0"/>
+  <parent link="FL_coxa_link_1"/>
+  <child link="FL_shoulder_link_1"/>
+</joint>
+
+<joint name="FL_30mm_linkage_joint" type="fixed">
+  <origin xyz="-0.044 -0.004 -0.024417" rpy="0 0 0"/>
+  <parent link="FL_shoulder_link_1"/>
+  <child link="FL_30mm_linkage_1"/>
+</joint>
+
+<joint name="FL_150mm_linkage" type="fixed">
+  <origin xyz="0.005266 -0.004 0.039652" rpy="0 0 0"/>
+  <parent link="FL_shoulder_link_1"/>
+  <child link="FL_150mm_linkage_1"/>
+</joint>
+
+<joint name="FR_shoulder_linkage_joint" type="fixed">
+  <origin xyz="-0.0241 0.0418 0.01255" rpy="0 0 0"/>
+  <parent link="FR_coxa_link_1"/>
+  <child link="FR_shoulder_link_1"/>
+</joint>
+
+<joint name="FR_30mm_linkage_joint" type="fixed">
+  <origin xyz="-0.043998 0.0 -0.024185" rpy="0 0 0"/>
+  <parent link="FR_shoulder_link_1"/>
+  <child link="FR_30mm_linkage_1"/>
+</joint>
+
+<joint name="FR_150mm_linkage_joint" type="fixed">
+  <origin xyz="0.005494 0.004 0.039621" rpy="0 0 0"/>
+  <parent link="FR_shoulder_link_1"/>
+  <child link="FR_150mm_linkage_1"/>
+</joint>
+
+<joint name="RL_shoulder_linkage_joint" type="fixed">
+  <origin xyz="0.0449 -0.0378 0.01255" rpy="0 0 0"/>
+  <parent link="RL_coxa_link_1"/>
+  <child link="RL_shoulder_link_1"/>
+</joint>
+
+<joint name="RL_30mm_linkage_joint" type="fixed">
+  <origin xyz="-0.043917 -0.004 -0.0225" rpy="0 0 0"/>
+  <parent link="RL_shoulder_link_1"/>
+  <child link="RL_30mm_linkage_1"/>
+</joint>
+
+<joint name="RL_150mm_linkage_joint" type="fixed">
+  <origin xyz="0.007151 -0.004 0.039355" rpy="0 0 0"/>
+  <parent link="RL_shoulder_link_1"/>
+  <child link="RL_150mm_linkage_1"/>
+</joint>
+
+<joint name="RR_shoulder_linkage_joint" type="fixed">
+  <origin xyz="0.0449 0.0418 0.01255" rpy="0 0 0"/>
+  <parent link="RR_coxa_link_1"/>
+  <child link="RR_shoulder_link_1"/>
+</joint>
+
+<joint name="RR_30mm_linkage_joint" type="fixed">
+  <origin xyz="-0.041458 0.0 -0.023074" rpy="0 0 0"/>
+  <parent link="RR_shoulder_link_1"/>
+  <child link="RR_30mm_linkage_1"/>
+</joint>
+
+<joint name="RR_150mm_linkage_joint" type="fixed">
+  <origin xyz="0.006856 0.004 0.039408" rpy="0 0 0"/>
+  <parent link="RR_shoulder_link_1"/>
+  <child link="RR_150mm_linkage_1"/>
+</joint>
+
+</robot>

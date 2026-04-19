@@ -19,7 +19,7 @@
   <exec_depend>rviz2</exec_depend>
   <exec_depend>tf2_ros</exec_depend>
   <exec_depend>micro_ros_agent</exec_depend>
-  <exec_depend>quadruped_description</exec_depend>
+  <exec_depend>Argos_description</exec_depend>
   <exec_depend>argos_control</exec_depend>
   <exec_depend>realsense2_camera</exec_depend>
   <exec_depend>realsense2_description</exec_depend>
