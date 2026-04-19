@@ -85,6 +85,7 @@ parameters in `ros2_ws/src/quadruped_bringup/config/mission_stack.yaml`:
 
 ## Notes
 
-- The control stack currently mirrors commanded joints to `/joint_states` for bench visualization.
-- Once the ESP32-C6 publishes real `/joint_states`, disable the preview publisher in `control_stack.launch.py`.
+- The ESP32-C6 firmware (`firmware/esp32c6/`) echoes `/joint_states` at 100 Hz.
+  `publish_joint_states_preview` in `control_stack.yaml` is off by default —
+  re-enable it only for ROS-only bench testing with the MCU disconnected.
 - The RPLiDAR launch defaults to `frame_id:=lidar_link` to match the robot description.
