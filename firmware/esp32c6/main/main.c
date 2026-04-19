@@ -59,7 +59,7 @@
 // ─── Compile-time tunables (mirror Kconfig.projbuild) ─────────────────────
 
 #ifndef CONFIG_ARGOS_PCA9685_ADDR
-#define CONFIG_ARGOS_PCA9685_ADDR 0x40
+#define CONFIG_ARGOS_PCA9685_ADDR 0x00
 #endif
 #ifndef CONFIG_ARGOS_GAS_ADC_GPIO
 #define CONFIG_ARGOS_GAS_ADC_GPIO 4

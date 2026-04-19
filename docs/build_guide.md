@@ -33,7 +33,7 @@ Cross-references:
 ### Actuation
 
 - 12 × hobby servos rated for 180° travel (one per joint)
-- PCA9685 16-channel I2C PWM driver (addr `0x40`)
+- PCA9685 16-channel I2C PWM driver (addr `0x00` on the Argos board; stock breakouts default to `0x40`)
 - Servo power supply: 5–6 V, ≥10 A bench supply (do **not** power servos from
   the Pi 5V rail)
 
@@ -66,7 +66,7 @@ The ESP32-C6 owns one I2C bus that talks to:
 
 | Device | Address | Notes |
 |---|---|---|
-| PCA9685 | `0x40` | servo PWM driver |
+| PCA9685 | `0x00` | servo PWM driver (Argos board wiring; stock breakouts are `0x40`) |
 | LSM9DS0 (accel/mag) | `0x1D` (LSM9DS0_I2C_AM_ADDRESS_2) | |
 | LSM9DS0 (gyro) | `0x6B` (LSM9DS0_I2C_G_ADDRESS_2) | same chip, two slave addresses |
 | MLX90640 | `0x33` | thermal camera (currently wired to the **Pi** I2C, not the ESP32 — see note below) |
@@ -242,7 +242,7 @@ idf.py menuconfig
 
 In the menu, open **"Argos firmware settings"** and confirm:
 
-- `PCA9685 I2C address` = `0x40`
+- `PCA9685 I2C address` = `0x00` (or whatever `i2cdetect` reports for your board)
 - `GPIO used for the MQ-series gas sensor` = whatever you wired (default `4`)
 - `Joint-command watchdog timeout (ms)` = `250`
 - `IMU + /joint_states control loop rate (Hz)` = `100`

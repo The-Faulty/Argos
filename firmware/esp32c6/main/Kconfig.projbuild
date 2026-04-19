@@ -14,9 +14,11 @@ menu "Argos firmware settings"
 
     config ARGOS_PCA9685_ADDR
         hex "PCA9685 I2C address"
-        default 0x40
+        default 0x00
         help
-            7-bit I2C address of the PCA9685 servo driver.
+            7-bit I2C address of the PCA9685 servo driver. Default 0x00
+            matches the Argos board wiring; standard Adafruit-style
+            breakouts default to 0x40.
 
     config ARGOS_GAS_ADC_GPIO
         int "GPIO used for the MQ-series gas sensor (ADC1)"

@@ -21,7 +21,7 @@ static const char *TAG = "pca9685";
 #define PCA9685_I2C_TIMEOUT_MS 50
 
 static i2c_port_t s_port = I2C_NUM_0;
-static uint8_t    s_addr = 0x40;
+static uint8_t    s_addr = 0x00;
 static uint16_t   s_freq_hz = PCA9685_DEFAULT_FREQ_HZ;
 static bool       s_inited = false;
 
