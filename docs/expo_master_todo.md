@@ -9,13 +9,13 @@ Current demo target:
 - live LiDAR
 - live RealSense
 - SLAM map in RViz
+- thermal camera
+- victim detection
+- gas mapping
 - clear safety story
 
 Not part of the required demo:
 
-- thermal camera
-- victim detection
-- gas mapping
 - Gazebo
 - full Nav2 autonomy
 
@@ -29,6 +29,35 @@ Not part of the required demo:
 - [ ] Confirm the final `/dev/ttyESP32` and `/dev/ttyLIDAR` device mapping.
 - [ ] Confirm real leg geometry matches `Config.py` and the URDF.
 - [ ] Write down one known-good startup order for power, Pi, ESP32-C6, and ROS.
+- [ ] Confirm the ESP32-C6 USB vendor:product ID with `lsusb`; update the udev rule if it is not `303a:1001`.
+- [ ] Confirm the MQ-series gas sensor ADC GPIO matches `CONFIG_ARGOS_GAS_ADC_GPIO` (default `GPIO4`).
+- [ ] Confirm MLX90640 is wired to the Pi I2C bus and shows `0x33` in `i2cdetect`.
+
+## Firmware bring-up (ESP32-C6)
+
+- [ ] Flash `firmware/esp32c6/` once the per-joint calibration table is set.
+- [ ] Verify PCA9685 and LSM9DS0 both initialize on the same I2C bus without collision.
+- [ ] Verify `/imu/data_raw` publishes at ~100 Hz under load.
+- [ ] Verify `/joint_states` echoes the last commanded pose at ~100 Hz.
+- [ ] Verify `/gas` publishes at ~10 Hz with sensible mV after a 60 s warm-up.
+- [ ] Verify the watchdog releases all 12 channels when `/joint_command` stops for >250 ms (yank-cable test).
+- [ ] Walk every joint through its safe min/max once at low rate to confirm direction and offset.
+- [ ] Confirm micro-ROS transport menuconfig matches the agent's UART/baud (921600).
+- [ ] Tag a known-good firmware build so the team knows what is on the robot.
+
+## Power and wiring
+
+- [ ] Servo PSU is fully separate from the Pi 5V rail (shared GND only).
+- [ ] Bench-test current draw with all 12 servos active to confirm the supply does not sag.
+- [ ] Confirm `web/leg_viz/server.py` is NOT running while the ESP32 is powered (two masters on the PCA9685).
+- [ ] Strain-relieve the servo bus, USB cables, and I2C jumpers before any walking test.
+
+## Pi-side verification (post-firmware)
+
+- [ ] Run `ros2 topic hz` on `/imu/data_raw`, `/joint_states`, `/joint_command`, `/scan`, `/gas`, `/thermal/image_raw` and record the steady rates.
+- [ ] Confirm RViz shows the MCU echo on `/joint_states`, not the preview publisher.
+- [ ] Confirm `/estop true` drops the robot into safe crouch and ignores `/cmd_vel` until cleared.
+- [ ] Confirm `/dev/ttyESP32` and `/dev/ttyLIDAR` both appear after a cold boot (not just after manual replug).
 
 ## Hardware-required work
 
@@ -76,6 +105,16 @@ Not part of the required demo:
 - [ ] Write a short explanation of why the scope was narrowed.
 - [ ] Write a one-page troubleshooting note for sensors, MCU, and launch issues.
 - [ ] Write the fallback plan if walking is unreliable on expo day.
+- [ ] Sync the per-joint calibration in firmware with `Config.py` `SERVO_LIMITS_DEG` once measured on hardware.
+- [ ] Confirm `publish_joint_states_preview: false` is the right setting once the MCU echo is verified live.
+
+## Mission stack (thermal + victim + gas)
+
+- [ ] Verify MLX90640 thermal stream comes up at ~4 Hz with `thermal_node.backend: mlx90640`.
+- [ ] Verify victim detection markers appear on `/victim_detections` for a warm test target.
+- [ ] Tune the thermal hotspot threshold so judges see clean detections, not noise.
+- [ ] Verify `/hazard_map` darkens when isopropyl is waved past the gas sensor.
+- [ ] Confirm the mission stack can run in parallel with locomotion + SLAM without dropping rates.
 
 ## Expo and logistics
 

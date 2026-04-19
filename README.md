@@ -23,8 +23,8 @@ future work, not the current critical path.
 - `ros2_ws/src/quadruped_description`: robot description, frames, and RViz assets
 - `ros2_ws/argos_control`: leg math, control helpers, and single-leg bench tools
 - `ros2_ws/argos_mission`: mission state, gas hazard map, and thermal demo nodes
-- `firmware`: embedded code and MCU-facing work
-- `simulation`: Gazebo and robot model work
+- `firmware/esp32c6`: ESP-IDF + micro-ROS firmware for the C6 (servos, IMU, gas)
+- `web/leg_viz`: bench-only single-leg web visualizer + Pi PCA9685 bridge
 
 ## Development environment
 
@@ -112,3 +112,4 @@ ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_mi
 - The single source-of-truth expo checklist is documented in `docs/expo_master_todo.md`.
 - The repeatable demo launch flow is documented in `docs/expo_demo_runbook.md`.
 - The architecture, safety, terrain, and scope talking points are documented in `docs/expo_story.md`.
+- The end-to-end build instructions (Pi + ESP32 + sensors) are documented in `docs/build_guide.md`.

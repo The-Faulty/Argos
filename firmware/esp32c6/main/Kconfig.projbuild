@@ -1,0 +1,49 @@
+menu "Argos firmware settings"
+
+    config MICRO_ROS_APP_STACK
+        int "Stack of the micro-ROS app (bytes)"
+        default 16000
+        help
+            Stack size in bytes for the micro-ROS task.
+
+    config MICRO_ROS_APP_TASK_PRIO
+        int "Priority of the micro-ROS app"
+        default 5
+        help
+            Higher value = higher priority.
+
+    config ARGOS_PCA9685_ADDR
+        hex "PCA9685 I2C address"
+        default 0x40
+        help
+            7-bit I2C address of the PCA9685 servo driver.
+
+    config ARGOS_GAS_ADC_GPIO
+        int "GPIO used for the MQ-series gas sensor (ADC1)"
+        default 4
+        range 0 6
+        help
+            ESP32-C6 ADC1 channels live on GPIO0..GPIO6. Pick one not used
+            by I2C, the LiDAR UART, or the micro-ROS USB CDC.
+
+    config ARGOS_JOINT_CMD_TIMEOUT_MS
+        int "Joint-command watchdog timeout (ms)"
+        default 250
+        help
+            If no /joint_command arrives within this window, all 12 servo
+            channels are released so the robot sags rather than holding the
+            last commanded pose.
+
+    config ARGOS_IMU_RATE_HZ
+        int "IMU + /joint_states control loop rate (Hz)"
+        default 100
+        range 50 200
+        help
+            Matches the ros2_topic_contract.md spec. The Pi expects a steady
+            100 Hz feed for /imu/data_raw and /joint_states.
+
+    config ARGOS_GAS_RATE_HZ
+        int "Gas sensor publish rate (Hz)"
+        default 10
+
+endmenu

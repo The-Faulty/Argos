@@ -1,0 +1,11 @@
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=4096
+CONFIG_ESP_TASK_WDT_INIT=n
+CONFIG_FREERTOS_HZ=1000
+
+# I2C driver — needed by the PCA9685 component on the new servo path.
+CONFIG_I2C_ENABLE_DEBUG_LOG=n
+
+# micro-ROS runs over USB CDC serial on the C6's native USB port. The Pi-side
+# launch (esp32_bridge.launch.py) opens this at 921600 baud.
+CONFIG_RMW_UXRCE_TRANSPORT_CUSTOM=y
+
