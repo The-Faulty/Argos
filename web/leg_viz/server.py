@@ -1,8 +1,14 @@
-"""HTTP bridge for the single-leg web viz.
+"""HTTP bridge for the single-leg web viz — BENCH ONLY.
 
 Runs on the Pi. Serves the static viz files AND exposes a small JSON API
 that drives the PCA9685 directly, so the browser sliders / preset buttons
 can move the real servos.
+
+NOTE: once the ESP32-C6 firmware (firmware/esp32c6/) is flashed, the MCU
+owns the PCA9685 over I2C. Running this server at the same time means two
+masters fighting for the same servo bus — only one should be live. Use this
+script during single-leg calibration only, with the ESP32 unpowered or
+unplugged from I2C.
 
 Self-contained: does not depend on the ROS workspace or single_leg_test.py.
 The PWM constants and servo channel assignments mirror those in

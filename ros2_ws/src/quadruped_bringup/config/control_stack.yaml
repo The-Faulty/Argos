@@ -103,4 +103,6 @@ joint_command_publisher_node:
     joint_command_topic: /joint_command   # the MCU subscribes here via micro-ROS
     joint_states_topic: /joint_states     # RViz reads this for robot model visualization
     output_rate_hz: 100.0               # MCU expects 100 Hz — keep this in sync with firmware
-    publish_joint_states_preview: true   # set false to reduce CPU if RViz is not running
+    # ESP32-C6 firmware now echoes /joint_states at 100 Hz (firmware/esp32c6/main/main.c).
+    # Set this to true only if running ROS-only on the bench with no MCU attached.
+    publish_joint_states_preview: false
