@@ -1,6 +1,6 @@
 """Publish the Argos URDF, TF tree, and optionally open RViz.
 
-Reads Argos.xacro from the Argos_description package, processes it with xacro,
+Reads Argos.xacro from the argos_description package, processes it with xacro,
 and feeds it to robot_state_publisher so all TF frames are available to the
 rest of the stack. The imported model roots at base_link, so this launch also
 adds a zero-offset base_footprint -> base_link transform for the rest of the
@@ -24,7 +24,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
-    description_dir = get_package_share_directory("Argos_description")
+    description_dir = get_package_share_directory("argos_description")
     xacro_file = os.path.join(description_dir, "urdf", "Argos.xacro")
     rviz_config = os.path.join(description_dir, "config", "robot_model.rviz")
 

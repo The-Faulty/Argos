@@ -1,8 +1,8 @@
 """Launch the RealSense D435i depth camera and RPLiDAR A1M8 together.
 
 Both sensors can be toggled independently via enable_realsense and enable_lidar args.
-Static TF glue is included for the lidar because the imported Argos description
-package does not define lidar_link.
+An optional lidar static TF is available for bench-only setups, but it is off
+by default because the final argos_description model already defines lidar_link.
 
 Usage:
   ros2 launch quadruped_bringup sensors.launch.py
@@ -56,8 +56,8 @@ def generate_launch_description():
     )
     publish_static_tf_arg = DeclareLaunchArgument(
         "publish_static_tf",
-        default_value="true",
-        description="Publish a static TF for the lidar.",
+        default_value="false",
+        description="Publish an override static TF for the lidar.",
     )
     parent_frame_arg = DeclareLaunchArgument(
         "parent_frame",

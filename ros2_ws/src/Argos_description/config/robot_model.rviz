@@ -1,4 +1,4 @@
-# RViz config for visualizing the imported Argos robot model and TF tree.
+# RViz config for visualizing the final Argos robot model and TF tree.
 # Open with: ros2 launch quadruped_bringup state_publisher.launch.py start_rviz:=true
 Panels:
   - Class: rviz_common/Displays

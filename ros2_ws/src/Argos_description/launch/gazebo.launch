@@ -1,5 +1,5 @@
 <launch>
-  <param name="robot_description" command="$(find xacro)/xacro $(find Argos_description)/urdf/Argos.xacro"/>
+  <param name="robot_description" command="$(find xacro)/xacro $(find argos_description)/urdf/Argos.xacro"/>
   <node name="spawn_urdf" pkg="gazebo_ros" type="spawn_model" args="-param robot_description -urdf -model Argos"/>
   <include file="$(find gazebo_ros)/launch/empty_world.launch">
     <arg name="paused" value="true"/>
@@ -9,3 +9,4 @@
     <arg name="debug" value="false"/>
   </include>
 </launch>
+

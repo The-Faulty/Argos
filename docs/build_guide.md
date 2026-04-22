@@ -1,186 +1,252 @@
-# Argos Build Guide
+# Argos Physical Robot Build Guide
 
-End-to-end instructions for building Argos from bare hardware to a running
-demo. Follow the sections in order — each one assumes the previous one is
-done.
+This guide covers the repo-supported path from bare electronics and a finished
+mechanical frame to a powered robot that can publish sensor data, jog joints,
+and run the full ROS 2 bring-up stack.
 
-Cross-references:
+What this guide does cover:
 
+- power, wiring, and bring-up order
+- Raspberry Pi setup
+- ROS 2 workspace setup
+- ESP32-C6 firmware build and flash
+- per-component test scripts
+- first full-system validation
+
+What this guide does not cover in exact step-by-step detail:
+
+- CAD assembly drawings
+- fastener-by-fastener mechanical assembly
+- custom PCB rework
+
+Those artifacts are not currently stored in this repo, so the mechanical
+sections below stay at the checklist / wiring-contract level instead of
+inventing geometry-specific instructions.
+
+Cross references:
+
+- Component tests: [component_test_guide.md](component_test_guide.md)
+- Pi hardware contract: [pi_hardware_contract.md](pi_hardware_contract.md)
 - Topic contract: [ros2_topic_contract.md](ros2_topic_contract.md)
-- Pi device map: [pi_hardware_contract.md](pi_hardware_contract.md)
-- Demo flow: [expo_demo_runbook.md](expo_demo_runbook.md)
-- Critical-path checklist: [expo_master_todo.md](expo_master_todo.md)
+- Demo runbook: [expo_demo_runbook.md](expo_demo_runbook.md)
 
 ---
 
-## 1. Bill of materials
+## 1. Success criteria
+
+You are done when all of the following are true:
+
+- `/dev/ttyESP32` and `/dev/ttyLIDAR` exist on the Pi
+- the ESP32 bridge publishes `/joint_states`, `/imu/data_raw`, and `/gas`
+- the lidar publishes `/scan`
+- the RealSense publishes color and aligned depth
+- the thermal camera publishes `/thermal/image_raw` if that sensor is installed
+- `argos_joint_jog` can move each joint one at a time
+- `argos_component_check full` passes
+- `expo_demo.launch.py` runs without manual patching
+
+---
+
+## 2. Hardware checklist
 
 ### Compute
 
-- Raspberry Pi 4 (4 GB or 8 GB), microSD card (32 GB+, A2 class), USB-C PSU
-- ESP32-C6 dev board with native USB (e.g. Seeed XIAO ESP32-C6 or ESP32-C6-DevKitC-1)
-- USB-C cable (Pi ↔ ESP32-C6 must be a real data cable)
-- Powered USB 3.0 hub (RealSense D435/D455 needs USB 3, and the Pi has only two USB 3 ports)
-
-### Sensors
-
-- RPLiDAR A1M8 + supplied CP2102 USB-UART adapter
-- Intel RealSense D435 or D455
-- MLX90640 thermal camera breakout (I2C, addr `0x33`)
-- LSM9DS0 9-axis IMU breakout (I2C: accel/mag at one addr, gyro at another)
-- MQ-series gas sensor breakout (analog out — MQ-2, MQ-4, MQ-135 all work)
+- Raspberry Pi 4 with reliable USB-C power
+- microSD card, 32 GB or larger
+- ESP32-C6 dev board with native USB
+- powered USB hub if the RealSense needs one
 
 ### Actuation
 
-- 12 × hobby servos rated for 180° travel (one per joint)
-- PCA9685 16-channel I2C PWM driver (addr `0x00` on the Argos board; stock breakouts default to `0x40`)
-- Servo power supply: 5–6 V, ≥10 A bench supply (do **not** power servos from
-  the Pi 5V rail)
+- 12 hobby servos
+- PCA9685 servo driver
+- separate 5-6 V servo power supply, at least 10 A continuous
 
-### Misc
+### Sensors
 
-- Female-female jumper wires for I2C bus
-- 4.7 kΩ I2C pull-up resistors (most breakouts include them — verify before
-  paralleling many devices)
-- Tethered AC power, extension cord, power strip for demo day
+- RPLiDAR A1M8
+- Intel RealSense D435 or D455
+- LSM9DS0 IMU
+- MQ-series gas sensor breakout
+- MLX90640 thermal camera if mission sensing is installed
+
+### Cables and lab gear
+
+- one real USB data cable for the ESP32
+- lidar USB-UART cable
+- RealSense USB 3 cable
+- I2C wiring and pull-ups as required by your breakouts
+- bench supply, multimeter, and a way to support the robot off the ground
 
 ---
 
-## 2. Wiring
+## 3. Label everything before assembly
 
-### Power domains (keep separate)
+Do this before you zip-tie wires or mount the top shell.
+
+- Label legs `FR`, `FL`, `RR`, `RL`
+- Label each servo by joint name before plugging it into the PCA9685 harness
+- Keep the PCA9685 channel map aligned with the firmware table in `firmware/esp32c6/main/main.c`
+
+Servo channel map:
+
+| Channel | Joint |
+|---|---|
+| 0 | `FR_coxa_joint` |
+| 1 | `FR_femur_joint` |
+| 2 | `FR_tibia_joint` |
+| 3 | `FL_coxa_joint` |
+| 4 | `FL_femur_joint` |
+| 5 | `FL_tibia_joint` |
+| 6 | `RR_coxa_joint` |
+| 7 | `RR_femur_joint` |
+| 8 | `RR_tibia_joint` |
+| 9 | `RL_coxa_joint` |
+| 10 | `RL_femur_joint` |
+| 11 | `RL_tibia_joint` |
+
+If your physical harness does not match this table, fix the harness or the
+firmware before trying to walk the robot.
+
+---
+
+## 4. Wiring and power
+
+### Power rails
+
+Keep the logic rail and servo rail separate.
 
 | Rail | Source | Loads |
 |---|---|---|
-| 5 V logic | Pi USB-C PSU | Pi, ESP32-C6 (over Pi USB), all I2C breakouts |
-| 5–6 V servo | bench supply | PCA9685 V+ rail only — **not** the Pi |
-| GND | common | tied between all three rails |
+| 5 V logic | Pi USB-C PSU | Pi, ESP32-C6 over USB, sensor breakouts |
+| 5-6 V servo rail | bench supply | PCA9685 V+ rail and servos only |
+| GND | shared | every subsystem must share ground |
 
-The single most common mistake is powering 12 servos from the Pi's 5V pin.
-The Pi browns out, the ESP32 resets, the demo dies. Use a separate supply
-and tie grounds.
+Rules:
 
-### I2C bus (single bus, four devices)
+- never power the servos from the Pi 5 V rail
+- tie grounds together before sending PWM or ADC signals
+- power the servo rail last and turn it off first
 
-The ESP32-C6 owns one I2C bus that talks to:
+### I2C bus
 
-| Device | Address | Notes |
-|---|---|---|
-| PCA9685 | `0x00` | servo PWM driver (Argos board wiring; stock breakouts are `0x40`) |
-| LSM9DS0 (accel/mag) | `0x1D` (LSM9DS0_I2C_AM_ADDRESS_2) | |
-| LSM9DS0 (gyro) | `0x6B` (LSM9DS0_I2C_G_ADDRESS_2) | same chip, two slave addresses |
-| MLX90640 | `0x33` | thermal camera (currently wired to the **Pi** I2C, not the ESP32 — see note below) |
+The ESP32-C6 owns the actuator/sensor I2C bus:
 
-ESP32-C6 I2C pins (per `firmware/esp32c6/main/main.c`): `SDA=GPIO23`, `SCL=GPIO22`.
-Add 4.7 kΩ pull-ups on each line if no breakout in the chain provides them.
+- `GPIO23` SDA
+- `GPIO22` SCL
+- PCA9685 at `0x00` on the current Argos board
+- LSM9DS0 accel/mag at `0x1D`
+- LSM9DS0 gyro at `0x6B`
+- gas sensor is analog on `GPIO4`
 
-> **Thermal camera placement decision pending.** Today the
-> `argos_mission.thermal_node` reads the MLX90640 from the Pi's I2C
-> ([pi_hardware_contract.md](pi_hardware_contract.md)). Leave it on the Pi
-> unless a future change moves it. Adding it to the ESP32 bus is fine
-> electrically (different address) but doubles the firmware work.
+The thermal camera is currently expected on the Pi's I2C bus at `0x33`.
 
-### USB
+### USB devices on the Pi
 
-| Cable | Pi side | Other end |
-|---|---|---|
-| USB-A to micro-USB | Pi USB 2 | RPLiDAR A1M8 USB-UART adapter (CP2102) |
-| USB-A to USB-C | Pi USB 3 (via powered hub recommended) | RealSense D435/D455 |
-| USB-A to USB-C | Pi USB 2 | ESP32-C6 native USB CDC |
+- ESP32-C6 -> `/dev/ttyESP32`
+- lidar USB-UART -> `/dev/ttyLIDAR`
+- RealSense -> USB 3 camera device
 
-### Servo channel map
-
-Channels 0–11 on the PCA9685, in this order:
-
-| Ch | Joint | Ch | Joint |
-|---|---|---|---|
-| 0 | FR coxa | 6 | RR coxa |
-| 1 | FR femur | 7 | RR femur |
-| 2 | FR tibia | 8 | RR tibia |
-| 3 | FL coxa | 9 | RL coxa |
-| 4 | FL femur | 10 | RL femur |
-| 5 | FL tibia | 11 | RL tibia |
-
-This ordering is hard-coded in `firmware/esp32c6/main/main.c` (`s_servo_cal[]`)
-and must match the labels you stick on the harness.
-
-### Gas sensor
-
-MQ analog output → ESP32-C6 `GPIO4` (default `CONFIG_ARGOS_GAS_ADC_GPIO`).
-Heater on the breakout → 5 V from the same logic supply. Allow ≥60 s warm-up
-before trusting readings.
+Install the udev rules from `ros2_ws/src/quadruped_bringup/config/99-argos-devices.rules`
+before relying on the serial aliases.
 
 ---
 
-## 3. Raspberry Pi setup
+## 5. Raspberry Pi OS and system setup
 
-### 3.1 Flash the OS
+### 5.1 Flash and update
 
-1. Flash **Raspberry Pi OS Bookworm 64-bit** (Lite is fine) with Raspberry Pi
-   Imager. In the imager's advanced options, enable SSH and set hostname/user.
-2. Boot the Pi, log in over SSH.
-3. `sudo apt update && sudo apt full-upgrade -y && sudo reboot`.
+1. Flash Raspberry Pi OS Bookworm 64-bit.
+2. Enable SSH during imaging.
+3. Boot the Pi and run:
 
-### 3.2 Enable I2C and SPI
+```bash
+sudo apt update
+sudo apt full-upgrade -y
+sudo reboot
+```
+
+### 5.2 Enable interfaces
 
 ```bash
 sudo raspi-config nonint do_i2c 0
 sudo raspi-config nonint do_spi 0
-sudo apt install -y i2c-tools
-i2cdetect -y 1   # should show 0x33 once the MLX90640 is wired
+sudo apt install -y i2c-tools usbutils
 ```
 
-### 3.3 Install dependencies
+### 5.3 Install Docker or native ROS 2
 
-You have two paths. Pick one.
+Pick one supported workflow.
 
-**Option A — Docker (recommended, matches the dev container).**
+#### Option A: Docker / devcontainer-style workflow
 
 ```bash
 sudo apt install -y docker.io docker-compose-plugin git
-sudo usermod -aG docker $USER   # log out and back in
+sudo usermod -aG docker $USER
+# log out and back in
 git clone <argos-repo> ~/argos
 cd ~/argos
 docker compose build
 docker compose up -d
-docker compose exec argos bash
-# inside the container:
-cd /workspace/ros2_ws && colcon build --symlink-install && source install/setup.bash
 ```
 
-**Option B — Native ROS 2 Humble install.** Follow
-[docs.ros.org humble install](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html),
-then install the same apt packages listed in the project `Dockerfile`
-(`ros-humble-slam-toolbox`, `ros-humble-realsense2-camera`,
-`ros-humble-rplidar-ros`, `ros-humble-micro-ros-agent`,
-`ros-humble-robot-state-publisher`, `ros-humble-xacro`,
-`ros-humble-robot-localization`, `ros-humble-rviz2`), plus pip:
-`transforms3d numpy scipy matplotlib opencv-python-headless pyrealsense2`.
+#### Option B: Native ROS 2 Humble
 
-For the thermal sensor reader on the Pi:
+Install ROS 2 Humble and the packages already assumed by the launch files:
+
+- `ros-humble-rviz2`
+- `ros-humble-xacro`
+- `ros-humble-robot-state-publisher`
+- `ros-humble-rplidar-ros`
+- `ros-humble-realsense2-camera`
+- `ros-humble-micro-ros-agent`
+- `ros-humble-slam-toolbox`
+
+Also install:
 
 ```bash
 sudo apt install -y python3-pip python3-smbus
 python3 -m pip install adafruit-blinka adafruit-circuitpython-mlx90640
 ```
 
-### 3.4 Install udev rules
+### 5.4 Install udev rules
 
 ```bash
+cd ~/argos
 sudo cp ros2_ws/src/quadruped_bringup/config/99-argos-devices.rules /etc/udev/rules.d/
 sudo udevadm control --reload-rules
 sudo udevadm trigger
-ls -l /dev/ttyLIDAR /dev/ttyESP32   # both symlinks should exist
+ls -l /dev/ttyESP32 /dev/ttyLIDAR
 ```
 
-If `/dev/ttyESP32` does not appear, plug the ESP32 in and run `lsusb`. If the
-vendor:product is **not** `303a:1001`, edit
-`ros2_ws/src/quadruped_bringup/config/99-argos-devices.rules` to match what
-you see, then re-run the commands above.
+### 5.5 Build the workspace
 
-### 3.5 Set ROS environment
+#### Native
 
-In `~/.bashrc` (or the container's startup):
+```bash
+cd ~/argos/ros2_ws
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+```
+
+#### Docker
+
+```bash
+docker compose exec argos bash
+cd /workspace/ros2_ws
+rosdep update
+rosdep install --from-paths src --ignore-src -r -y
+colcon build --symlink-install
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+```
+
+### 5.6 ROS environment
+
+Add this to the shell you actually use on the Pi:
 
 ```bash
 export ROS_DOMAIN_ID=42
@@ -188,42 +254,28 @@ source /opt/ros/humble/setup.bash
 source ~/argos/ros2_ws/install/setup.bash
 ```
 
-### 3.6 Build the workspace
-
-```bash
-cd ~/argos/ros2_ws
-rosdep update
-rosdep install --from-paths src --ignore-src -r -y
-colcon build --symlink-install
-source install/setup.bash
-```
-
 ---
 
-## 4. ESP32-C6 firmware setup
+## 6. ESP32-C6 firmware
 
-### 4.1 Install ESP-IDF v5.x
+### 6.1 Install ESP-IDF
 
-On any host (Linux, macOS, Windows). The Pi can do it too but a laptop is
-faster for the first flash.
+Use ESP-IDF v5.x.
 
 ```bash
-mkdir -p ~/esp && cd ~/esp
+mkdir -p ~/esp
+cd ~/esp
 git clone -b v5.2.2 --recursive https://github.com/espressif/esp-idf.git
 cd esp-idf
 ./install.sh esp32c6
-. ./export.sh   # run this in every new shell
+. ./export.sh
 ```
 
-### 4.2 Clone the micro-ROS component as a sibling
+### 6.2 Clone the micro-ROS ESP-IDF component as a sibling repo
 
-The firmware's `CMakeLists.txt` expects `micro_ros_espidf_component` to live
-**next to** the `argos` repo, not inside it:
-
-```
+```text
 ~/dev/
 ├── argos/
-│   └── firmware/esp32c6/
 └── micro_ros_espidf_component/
 ```
 
@@ -232,7 +284,7 @@ cd ~/dev
 git clone -b humble https://github.com/micro-ROS/micro_ros_espidf_component.git
 ```
 
-### 4.3 Configure
+### 6.3 Configure the firmware
 
 ```bash
 cd ~/dev/argos/firmware/esp32c6
@@ -240,132 +292,303 @@ idf.py set-target esp32c6
 idf.py menuconfig
 ```
 
-In the menu, open **"Argos firmware settings"** and confirm:
+Verify these settings:
 
-- `PCA9685 I2C address` = `0x00` (or whatever `i2cdetect` reports for your board)
-- `GPIO used for the MQ-series gas sensor` = whatever you wired (default `4`)
-- `Joint-command watchdog timeout (ms)` = `250`
-- `IMU + /joint_states control loop rate (Hz)` = `100`
-- `Gas sensor publish rate (Hz)` = `10`
+- PCA9685 I2C address matches your hardware
+- gas ADC GPIO matches your wiring
+- joint-command watchdog remains at `250 ms`
+- IMU/control loop rate remains at `100 Hz`
+- gas publish rate remains at `10 Hz`
+- micro-ROS transport matches the Pi-side bridge expectations
 
-Then under **"micro-ROS Settings → micro-ROS Transport Settings"**, set the
-transport to **"Custom"** and confirm UART pins / baud match what the Pi side
-expects (the agent launch uses `921600` on `/dev/ttyESP32`).
-
-Save and exit.
-
-### 4.4 Build, flash, monitor
+### 6.4 Build and flash
 
 ```bash
 idf.py build
-idf.py -p /dev/ttyACM0 flash       # use the ACM/COM port you see on plug-in
-idf.py -p /dev/ttyACM0 monitor     # Ctrl-] to exit
+idf.py -p /dev/ttyACM0 flash
+idf.py -p /dev/ttyACM0 monitor
 ```
 
-You should see the firmware enumerate the LSM9DS0, init the PCA9685, and
-start the micro-ROS task. Once the Pi-side agent connects, you'll see
-`/imu/data_raw`, `/joint_states`, and `/gas` traffic in the monitor log.
-
-### 4.5 Per-joint calibration (one-time per build)
-
-Once the robot is mechanically assembled and you can identify each joint:
-
-1. Bring the agent up on the Pi: `ros2 launch quadruped_bringup esp32_bridge.launch.py`.
-2. Send a single joint to zero radians:
-   `ros2 topic pub --once /joint_command sensor_msgs/JointState "{name: ['FR_coxa_joint'], position: [0.0]}"`.
-3. If the joint is not centered, edit `s_servo_cal[]` in
-   `firmware/esp32c6/main/main.c`: tweak `offset_deg` to recenter, flip
-   `direction` if the joint moves the wrong way, tighten `min_deg`/`max_deg`
-   to the safe travel measured by hand.
-4. Rebuild + flash. Repeat for all 12 joints.
-
-This is the work captured by the "Freeze servo numbering / directions /
-neutral offsets / safe min and max" entries in
-[expo_master_todo.md](expo_master_todo.md).
+You want to see the IMU and PCA9685 initialize without repeated I2C errors.
 
 ---
 
-## 5. Bring-up order
+## 7. First preflight on the Pi
 
-Power-on order matters because the watchdog will release servos if the Pi
-isn't talking yet:
+Run the passive checks before powering the servos.
 
-1. **Servo PSU off**, Pi PSU off.
-2. Plug all USB cables in.
-3. Power the Pi. Wait for SSH to come up.
-4. SSH in, `cd ~/argos`, attach to the container or source the workspace.
-5. Power the servo PSU. Servos will start at neutral once the firmware
-   initializes them — keep the robot supported in a crouch posture so it
-   doesn't fall.
-6. Launch the demo stack:
+From source:
+
+```bash
+python3 ros2_ws/src/quadruped_bringup/scripts/argos_component_check \
+  preflight \
+  --expect-lidar \
+  --expect-realsense \
+  --expect-thermal
+```
+
+After the workspace is built:
+
+```bash
+ros2 run quadruped_bringup argos_component_check \
+  preflight \
+  --expect-lidar \
+  --expect-realsense \
+  --expect-thermal
+```
+
+Expected pass conditions:
+
+- `ros2`, `colcon`, and `micro_ros_agent` are available
+- `/dev/ttyESP32` exists
+- `/dev/ttyLIDAR` exists
+- the RealSense is visible on USB
+- `/dev/i2c-1` exists and `0x33` responds if thermal is installed
+
+Do not move on until preflight is green.
+
+---
+
+## 8. Bring-up order on real hardware
+
+Use this order every time:
+
+1. servo PSU off
+2. Pi power on
+3. SSH in and source the workspace
+4. confirm preflight
+5. start the ESP32 bridge
+6. only then turn on the servo PSU
+7. run the joint jog / sensor tests
+
+Shutdown order:
+
+1. stop launches
+2. turn off servo PSU
+3. disconnect or power down the Pi
+
+---
+
+## 9. Per-component tests
+
+This is the recommended sequence for a newly assembled robot.
+
+### 9.1 URDF and TF only
+
+```bash
+ros2 launch quadruped_bringup state_publisher.launch.py start_rviz:=true
+```
+
+Use this to confirm the model loads and the frame tree is sane before touching
+real hardware.
+
+### 9.2 ESP32 bridge, IMU, gas, and feedback
+
+Start the bridge:
+
+```bash
+ros2 launch quadruped_bringup esp32_bridge.launch.py
+```
+
+In another terminal:
+
+```bash
+ros2 run quadruped_bringup argos_component_check esp32
+ros2 run quadruped_bringup argos_component_check imu
+ros2 run quadruped_bringup argos_component_check gas
+```
+
+Pass criteria:
+
+- `/joint_states` arrives with 12 positions
+- `/imu/data_raw` is live
+- `/gas` is live and finite
+
+### 9.3 Joint-by-joint actuation test
+
+Support the robot so the legs cannot slam into the floor.
+
+Single joint:
+
+```bash
+ros2 run quadruped_bringup argos_joint_jog --joint FR_coxa_joint
+```
+
+All joints, one at a time:
+
+```bash
+ros2 run quadruped_bringup argos_joint_jog --bidirectional
+```
+
+Use this step to confirm:
+
+- the commanded joint name moves the expected physical joint
+- the direction is correct
+- no linkage binds near the neutral pose
+
+If a joint moves backward or centers incorrectly, fix the calibration table in
+`firmware/esp32c6/main/main.c` before doing any gait testing.
+
+### 9.4 RPLidar
+
+```bash
+ros2 launch quadruped_bringup rplidar.launch.py
+ros2 run quadruped_bringup argos_component_check lidar
+```
+
+Optional viewer:
+
+```bash
+ros2 launch quadruped_bringup view_lidar.launch.py
+```
+
+### 9.5 RealSense
+
+```bash
+ros2 launch quadruped_bringup realsense.launch.py
+ros2 run quadruped_bringup argos_component_check realsense
+```
+
+Optional viewer:
+
+```bash
+ros2 launch quadruped_bringup view_camera.launch.py
+```
+
+### 9.6 Thermal camera
+
+If the MLX90640 is installed:
+
+```bash
+ros2 launch quadruped_bringup mission_stack.launch.py
+ros2 run quadruped_bringup argos_component_check thermal
+```
+
+If you want to force the real camera and fail hard instead of falling back to
+mock data, set these parameters in `mission_stack.yaml` first:
+
+- `thermal_node.backend: mlx90640`
+- `thermal_node.fallback_to_mock: false`
+
+### 9.7 Full system data path
+
+Bridge + sensors:
+
+```bash
+ros2 launch quadruped_bringup esp32_bridge.launch.py
+ros2 launch quadruped_bringup sensors.launch.py
+ros2 run quadruped_bringup argos_component_check full
+```
+
+Add thermal:
+
+```bash
+ros2 launch quadruped_bringup mission_stack.launch.py
+ros2 run quadruped_bringup argos_component_check full --include-thermal
+```
+
+---
+
+## 10. Bench-only legacy tools
+
+The repo already contains two direct bench utilities in `ros2_ws/argos_control/`:
+
+- `servo_test.py`
+- `single_leg_test.py`
+
+Use them only when the ESP32 is not trying to drive the same hardware.
+
+Important:
+
+- do not run the Pi-side direct PCA9685 tools while the ESP32 owns the I2C bus
+- do not run `web/leg_viz/server.py` with the live robot powered
+
+These tools are good for one-leg assembly and horn alignment, but the normal
+physical robot acceptance path should use `argos_joint_jog` through the ESP32.
+
+---
+
+## 11. Servo calibration workflow
+
+When all joints move and nothing binds near neutral:
+
+1. use `argos_joint_jog --joint <joint_name>` to identify each servo
+2. correct `channel`, `direction`, and `offset_deg` in `firmware/esp32c6/main/main.c`
+3. reflash the ESP32
+4. rerun the jog test
+5. only after all 12 joints are correct, test crawl / stand behavior
+
+Keep the robot supported during calibration. Zero radians should remain a safe,
+repeatable crouch / neutral test pose.
+
+---
+
+## 12. First integrated robot launch
+
+Once per-component checks are passing:
+
+```bash
+ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true start_rviz:=true
+```
+
+For the expo demo profile:
 
 ```bash
 ros2 launch quadruped_bringup expo_demo.launch.py enable_esp32:=true start_demo_commander:=true
 ```
 
-To shut down: stop the launch (Ctrl-C), then power off the servo PSU
-**before** unplugging the ESP32.
+Before using the demo commander, verify manually that:
+
+- estop works
+- the robot stands without saturating servos
+- the gait planner is using the correct servo calibration
 
 ---
 
-## 6. Verification
+## 13. Quick acceptance checklist
 
-Run these in separate terminals after `expo_demo.launch.py` is up.
-
-```bash
-ros2 topic hz /imu/data_raw     # ~100 Hz
-ros2 topic hz /joint_states     # ~100 Hz (echo from MCU, not preview)
-ros2 topic hz /joint_command    # ~100 Hz
-ros2 topic hz /scan             # 5–10 Hz (RPLiDAR A1M8)
-ros2 topic hz /gas              # ~10 Hz
-ros2 topic hz /thermal/image_raw   # ~4 Hz (mission stack only)
-```
-
-Visual checks in RViz: robot model present, `/scan` lines on the floor plane,
-RealSense color and depth windows live, SLAM `/map` filling in as you walk
-the robot.
-
-Failure-mode checks:
-
-- Yank the ESP32 USB cable. Servos should sag (watchdog limp), not freeze in
-  the last commanded pose.
-- Publish `/estop true`. Robot should drop into safe crouch and stop
-  responding to `/cmd_vel` until you publish `/estop false`.
+- `argos_component_check preflight` passes
+- `argos_component_check esp32` passes
+- `argos_joint_jog --bidirectional` completes without a wrong joint moving
+- `argos_component_check lidar` passes
+- `argos_component_check realsense` passes
+- `argos_component_check thermal` passes if thermal hardware is installed
+- `argos_component_check full --include-thermal` passes for the fully populated robot
+- `full_system.launch.py` runs cleanly
 
 ---
 
-## 7. Repo layout reference
+## 14. Common failure signatures
 
-| Path | What it is |
-|---|---|
-| `firmware/esp32c6/` | ESP-IDF + micro-ROS firmware (servos, IMU, gas) |
-| `firmware/esp32c6/main/main.c` | Joint calibration table lives here |
-| `firmware/esp32c6/components/pca9685/` | I2C PWM driver |
-| `firmware/esp32c6/components/lsm9ds0/` | IMU driver |
-| `ros2_ws/src/argos_control/` | Node entry points (gait, safety, joint cmd) |
-| `ros2_ws/src/argos_mission/` | Mission state, gas hazard map, thermal/victim |
-| `ros2_ws/src/quadruped_bringup/` | Launch files, sensor configs, udev rules |
-| `ros2_ws/src/quadruped_description/` | URDF, RViz layouts |
-| `ros2_ws/argos_control/` | Leg math, single-leg bench tools |
-| `web/leg_viz/` | **Bench-only** PCA9685 web tester — do not run with ESP32 powered |
+### `/joint_states` never appears
 
----
+- bridge not running
+- wrong serial device
+- wrong micro-ROS transport or baud rate
+- ESP32 firmware not flashed or bootlooping
 
-## 8. Common pitfalls
+### Joints twitch or the wrong leg moves
 
-- **Two masters on the I2C bus.** Don't run `web/leg_viz/server.py` on the Pi
-  while the ESP32 firmware is powered. Both will try to drive the PCA9685
-  and both will lose.
-- **Pi 5V brownout from servos.** Servo current spikes will reset the Pi if
-  you share rails. Use a separate supply.
-- **micro-ROS transport mismatch.** If the agent says "client connection
-  timeout" forever, the firmware menuconfig transport doesn't match the
-  agent launch (UART vs USB-CDC, wrong baud).
-- **udev symlink missing after replug.** If `/dev/ttyESP32` disappears,
-  `lsusb` to confirm the device is enumerated, then check the udev rule
-  vendor/product IDs.
-- **MLX90640 not detected.** `i2cdetect -y 1` on the Pi must show `33`. If it
-  doesn't, check pull-ups and that I2C is enabled in `raspi-config`.
-- **Thermal node falls back to mock.** If you want the real camera and never
-  the simulated one, set `thermal_node.backend: mlx90640` and
-  `thermal_node.fallback_to_mock: false` in `mission_stack.yaml`.
+- channel map does not match the harness
+- servo direction sign is wrong
+- offset is wrong
+- more than one controller is driving the PCA9685
+
+### Lidar launch runs but `/scan` is empty
+
+- wrong serial alias
+- lidar motor not spinning
+- CP2102 cable is power-only or marginal
+
+### RealSense starts but topics are missing
+
+- USB 3 bandwidth / power issue
+- powered hub needed
+- camera name mismatch in the checker command
+
+### Thermal node runs but only mock data appears
+
+- MLX90640 libraries missing on the Pi
+- I2C not enabled
+- `0x33` not visible on bus 1
+- `fallback_to_mock` left enabled while hardware is disconnected

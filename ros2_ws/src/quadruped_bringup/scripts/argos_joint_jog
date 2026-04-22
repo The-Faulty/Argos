@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""Safely jog one or more robot joints through the ESP32 bridge.
+
+Use this on the fully assembled robot with only the micro-ROS bridge running.
+It publishes small, temporary offsets on /joint_command so you can confirm
+servo wiring, joint naming, and direction without launching the whole stack.
+"""
+
+from __future__ import annotations
+
+import argparse
+import sys
+import time
+
+
+JOINT_NAMES = [
+    "FR_coxa_joint",
+    "FR_femur_joint",
+    "FR_tibia_joint",
+    "FL_coxa_joint",
+    "FL_femur_joint",
+    "FL_tibia_joint",
+    "RR_coxa_joint",
+    "RR_femur_joint",
+    "RR_tibia_joint",
+    "RL_coxa_joint",
+    "RL_femur_joint",
+    "RL_tibia_joint",
+]
+
+
+def load_ros_modules() -> tuple[object, type, object, type]:
+    import rclpy
+    from rclpy.node import Node
+    from rclpy.qos import qos_profile_sensor_data
+    from sensor_msgs.msg import JointState
+
+    return rclpy, Node, qos_profile_sensor_data, JointState
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="Jog Argos joints through the ESP32 micro-ROS bridge.",
+    )
+    parser.add_argument(
+        "--joint",
+        action="append",
+        default=[],
+        help="Joint name to jog. Repeat to select multiple joints. Defaults to all joints.",
+    )
+    parser.add_argument(
+        "--list-joints",
+        action="store_true",
+        help="Print the known joint names and exit.",
+    )
+    parser.add_argument(
+        "--delta-rad",
+        type=float,
+        default=0.08,
+        help="Positive offset to apply while jogging. Default: 0.08 rad.",
+    )
+    parser.add_argument(
+        "--hold-seconds",
+        type=float,
+        default=0.8,
+        help="How long to hold the moved position. Default: 0.8 s.",
+    )
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=0.4,
+        help="How long to stream the zero pose between moves. Default: 0.4 s.",
+    )
+    parser.add_argument(
+        "--cycles",
+        type=int,
+        default=1,
+        help="How many times to repeat the selected joints. Default: 1.",
+    )
+    parser.add_argument(
+        "--bidirectional",
+        action="store_true",
+        help="Jog +delta and then -delta before returning to zero.",
+    )
+    parser.add_argument(
+        "--rate-hz",
+        type=float,
+        default=50.0,
+        help="Publish rate for /joint_command. Default: 50 Hz.",
+    )
+    parser.add_argument(
+        "--command-topic",
+        default="/joint_command",
+        help="Joint command topic. Default: /joint_command.",
+    )
+    parser.add_argument(
+        "--feedback-topic",
+        default="/joint_states",
+        help="Feedback topic used to confirm the MCU bridge is alive. Default: /joint_states.",
+    )
+    parser.add_argument(
+        "--feedback-timeout",
+        type=float,
+        default=5.0,
+        help="How long to wait for joint feedback before failing. Default: 5 s.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the planned jog sequence without publishing.",
+    )
+    return parser
+
+
+def validate_selected_joints(selected: list[str]) -> list[str]:
+    if not selected:
+        return list(JOINT_NAMES)
+
+    unknown = [joint for joint in selected if joint not in JOINT_NAMES]
+    if unknown:
+        raise ValueError(f"Unknown joints: {', '.join(unknown)}")
+    return selected
+
+
+def run_sequence(args: argparse.Namespace, selected: list[str]) -> int:
+    zero_positions = [0.0] * len(JOINT_NAMES)
+    print("Support the robot so no foot is carrying load before jogging joints.")
+    print("Keep the servo PSU on, the ESP32 connected, and an e-stop ready.")
+    print("Recommended bridge command:")
+    print("  ros2 launch quadruped_bringup esp32_bridge.launch.py\n")
+
+    if args.dry_run:
+        for cycle in range(args.cycles):
+            print(f"Cycle {cycle + 1}/{args.cycles}")
+            for joint in selected:
+                print(f"  {joint}: +{args.delta_rad:.3f} rad -> zero")
+                if args.bidirectional:
+                    print(f"  {joint}: -{args.delta_rad:.3f} rad -> zero")
+        return 0
+
+    try:
+        rclpy, Node, qos_profile_sensor_data, JointState = load_ros_modules()
+    except ImportError as exc:
+        print(
+            "ROS Python modules are not available. Source the workspace and make sure "
+            "rclpy plus sensor_msgs are installed."
+        )
+        print(f"Import error: {exc}")
+        return 1
+
+    class JointJogger(Node):
+        def __init__(self, command_topic: str, feedback_topic: str):
+            super().__init__("argos_joint_jog")
+            self._publisher = self.create_publisher(JointState, command_topic, 10)
+            self._feedback_seen = False
+            self._last_feedback_count = 0
+            self.create_subscription(
+                JointState,
+                feedback_topic,
+                self._feedback_callback,
+                qos_profile_sensor_data,
+            )
+
+        def _feedback_callback(self, msg: JointState) -> None:
+            self._feedback_seen = True
+            self._last_feedback_count = len(msg.position)
+
+        def wait_for_feedback(self, timeout_s: float) -> bool:
+            deadline = time.monotonic() + timeout_s
+            while rclpy.ok() and time.monotonic() < deadline:
+                rclpy.spin_once(self, timeout_sec=0.1)
+                if self._feedback_seen:
+                    return True
+            return False
+
+        def publish_positions(self, positions: list[float]) -> None:
+            message = JointState()
+            message.header.stamp = self.get_clock().now().to_msg()
+            message.name = list(JOINT_NAMES)
+            message.position = [float(value) for value in positions]
+            self._publisher.publish(message)
+
+        def publish_for(
+            self,
+            positions: list[float],
+            duration_s: float,
+            rate_hz: float,
+        ) -> None:
+            period_s = 1.0 / rate_hz
+            deadline = time.monotonic() + duration_s
+            while rclpy.ok() and time.monotonic() < deadline:
+                self.publish_positions(positions)
+                rclpy.spin_once(self, timeout_sec=0.0)
+                time.sleep(period_s)
+
+    rclpy.init(args=None)
+    node = JointJogger(args.command_topic, args.feedback_topic)
+
+    try:
+        if not node.wait_for_feedback(args.feedback_timeout):
+            print(
+                "No joint feedback arrived on "
+                f"{args.feedback_topic} within {args.feedback_timeout:.1f} s."
+            )
+            print("Start esp32_bridge.launch.py and confirm the MCU is publishing /joint_states.")
+            return 1
+
+        print(
+            f"Feedback received on {args.feedback_topic} "
+            f"({node._last_feedback_count} joint positions seen)."
+        )
+        node.publish_for(zero_positions, args.settle_seconds, args.rate_hz)
+
+        for cycle in range(args.cycles):
+            print(f"\nCycle {cycle + 1}/{args.cycles}")
+            for joint in selected:
+                joint_index = JOINT_NAMES.index(joint)
+                target = list(zero_positions)
+                target[joint_index] = args.delta_rad
+                print(f"  Jogging {joint} to +{args.delta_rad:.3f} rad")
+                node.publish_for(target, args.hold_seconds, args.rate_hz)
+                node.publish_for(zero_positions, args.settle_seconds, args.rate_hz)
+
+                if args.bidirectional:
+                    target[joint_index] = -args.delta_rad
+                    print(f"  Jogging {joint} to -{args.delta_rad:.3f} rad")
+                    node.publish_for(target, args.hold_seconds, args.rate_hz)
+                    node.publish_for(zero_positions, args.settle_seconds, args.rate_hz)
+
+        print("\nReturning to zero pose.")
+        node.publish_for(zero_positions, max(0.5, args.settle_seconds), args.rate_hz)
+        return 0
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def main() -> int:
+    parser = build_parser()
+    args = parser.parse_args()
+
+    if args.list_joints:
+        print("\n".join(JOINT_NAMES))
+        return 0
+
+    try:
+        selected = validate_selected_joints(args.joint)
+    except ValueError as exc:
+        print(exc)
+        return 1
+
+    return run_sequence(args, selected)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

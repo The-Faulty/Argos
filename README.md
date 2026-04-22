@@ -20,11 +20,24 @@ future work, not the current critical path.
 - `ros2_ws/src/argos_control`: ROS 2 package wrapper and node entry points
 - `ros2_ws/src/argos_mission`: ROS 2 package wrapper for mission/perception bench nodes
 - `ros2_ws/src/quadruped_bringup`: launch files and sensor bring-up assets
-- `ros2_ws/src/Argos_description`: robot description, frames, meshes, and RViz assets
+- `ros2_ws/src/argos_description`: robot description, frames, meshes, and RViz assets
 - `ros2_ws/argos_control`: leg math, control helpers, and single-leg bench tools
 - `ros2_ws/argos_mission`: mission state, gas hazard map, and thermal demo nodes
 - `firmware/esp32c6`: ESP-IDF + micro-ROS firmware for the C6 (servos, IMU, gas)
 - `web/leg_viz`: bench-only single-leg web visualizer + Pi PCA9685 bridge
+
+## Physical Robot Bring-up
+
+The repo now includes physical bring-up scripts in `quadruped_bringup`:
+
+- `ros2 run quadruped_bringup argos_component_check preflight`
+- `ros2 run quadruped_bringup argos_component_check full --include-thermal`
+- `ros2 run quadruped_bringup argos_joint_jog --bidirectional`
+
+Primary docs:
+
+- `docs/build_guide.md`
+- `docs/component_test_guide.md`
 
 ## Development environment
 

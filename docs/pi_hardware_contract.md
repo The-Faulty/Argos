@@ -88,4 +88,4 @@ parameters in `ros2_ws/src/quadruped_bringup/config/mission_stack.yaml`:
 - The ESP32-C6 firmware (`firmware/esp32c6/`) echoes `/joint_states` at 100 Hz.
   `publish_joint_states_preview` in `control_stack.yaml` is off by default —
   re-enable it only for ROS-only bench testing with the MCU disconnected.
-- The RPLiDAR launch defaults to `frame_id:=lidar_link` and publishes a static TF from `base_link` because the imported `Argos_description` model does not define a lidar frame.
+- The RPLiDAR launch defaults to `frame_id:=lidar_link`; the final `argos_description` model already defines that frame, so the extra static TF is disabled by default and only needed for lidar-only bench setups.

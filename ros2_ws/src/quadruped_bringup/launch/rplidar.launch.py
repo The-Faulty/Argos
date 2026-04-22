@@ -1,8 +1,9 @@
 """Launch the RPLiDAR A1M8 2D lidar node.
 
 The lidar publishes LaserScan messages on /scan (remappable via topic_name).
-A static TF broadcaster is included so the scan frame stays attached to the
-robot even though the imported description package does not define lidar_link.
+An optional static TF broadcaster is available for lidar-only bench setups, but
+it is off by default because the final argos_description model already defines
+lidar_link.
 
 Examples:
   ros2 launch quadruped_bringup rplidar.launch.py
@@ -45,8 +46,8 @@ def generate_launch_description():
     )
     publish_static_tf_arg = DeclareLaunchArgument(
         "publish_static_tf",
-        default_value="true",
-        description="Publish a static TF for the lidar frame.",
+        default_value="false",
+        description="Publish an override static TF for the lidar frame.",
     )
     parent_frame_arg = DeclareLaunchArgument(
         "parent_frame",
