@@ -14,21 +14,22 @@ import {
   DEFAULT_JOINT_LIMITS,
   DEFAULT_LEG_COMMAND,
   DEFAULT_SERVO_CHANNEL_MAP,
+  DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
   LEG_IDS,
 } from "../shared/robot-config.js";
 import { validateCommand } from "../shared/protocol.js";
 
 const PORT = Number(process.env.PORT || 8787);
-const TELEMETRY_INTERVAL_MS = 100;
+const TELEMETRY_INTERVAL_MS = 33;
 const BUILTIN_STATUS_INTERVAL_MS = 400;
 const ANIMATION_STATUS_INTERVAL_MS = 250;
-const CONTROL_INTERVAL_MS = 20;
+const CONTROL_INTERVAL_MS = 8;
 
 const PCA9685_ADDRESS = parseIntegerEnv("PI_PCA9685_ADDRESS", 0x40);
 const PCA9685_FREQUENCY = Number(process.env.PI_PCA9685_FREQUENCY || 50);
 const PI_I2C_BUS = Number(process.env.PI_I2C_BUS || 1);
-const SERVO_PWM_MIN_TICKS = Number(process.env.PI_SERVO_PWM_MIN_TICKS || 102);
-const SERVO_PWM_MAX_TICKS = Number(process.env.PI_SERVO_PWM_MAX_TICKS || 512);
+const SERVO_MIN_PULSE_US = Number(process.env.PI_SERVO_MIN_PULSE_US || 500);
+const SERVO_MAX_PULSE_US = Number(process.env.PI_SERVO_MAX_PULSE_US || 2500);
 const SERVO_SUPPLY_VOLTS = Number(process.env.PI_SERVO_SUPPLY_VOLTS || 7.4);
 const SERVO_SPEED_SAFETY_FACTOR = 0.8;
 const MOTION_TIME_SCALE = 1.15;
@@ -37,7 +38,7 @@ const SERVO_MAX_DEG = 180;
 const THIGH_CENTER_DEG = Number(process.env.PI_THIGH_CENTER_DEG || 90);
 const CALF_CENTER_DEG = Number(process.env.PI_CALF_CENTER_DEG || 90);
 const THIGH_SIGN = Number(process.env.PI_THIGH_SIGN || 1);
-const CALF_SIGN = Number(process.env.PI_CALF_SIGN || -1);
+const CALF_SIGN = Number(process.env.PI_CALF_SIGN || 1);
 const DRY_RUN = process.env.PI_DOG_DRY_RUN === "1";
 const calibration = createNeutralCalibration();
 
@@ -142,7 +143,9 @@ function removeServoCalibration(rawDeg, centerDeg, sign) {
 function servoDegToPcaTicks(servoDeg) {
   const clamped = clamp(servoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
   const ratio = clamped / 180;
-  return Math.round(SERVO_PWM_MIN_TICKS + ratio * (SERVO_PWM_MAX_TICKS - SERVO_PWM_MIN_TICKS));
+  const pulseUs = SERVO_MIN_PULSE_US + ratio * (SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US);
+  const periodUs = 1_000_000 / PCA9685_FREQUENCY;
+  return Math.round((pulseUs / periodUs) * 4096);
 }
 
 function builtinWalkTarget(legIndex, timeSec) {
@@ -186,6 +189,7 @@ function createStatus() {
       lastError: "",
       servoChannelMap: { ...DEFAULT_SERVO_CHANNEL_MAP[legId] },
       jointLimits: clone(DEFAULT_JOINT_LIMITS),
+      servoSpeedLimitDegPerSec: { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC },
     };
   }
 
@@ -292,6 +296,8 @@ class ServoActuator {
     this.moveStartMs = Date.now();
     this.moveDurationMs = 1;
     this.released = false;
+    this.hardwareMaxSpeedDegPerSec = servoSpeedDegPerSecFromVoltage(SERVO_SUPPLY_VOLTS) * SERVO_SPEED_SAFETY_FACTOR;
+    this.speedLimitDegPerSec = this.hardwareMaxSpeedDegPerSec;
   }
 
   updateChannel(channel) {
@@ -316,6 +322,10 @@ class ServoActuator {
     return this.lastEstimateRawDeg;
   }
 
+  effectiveMaxSpeedDegPerSec() {
+    return Math.max(1, Math.min(this.hardwareMaxSpeedDegPerSec, this.speedLimitDegPerSec));
+  }
+
   commandModelAngle(modelDeg) {
     const nowMs = Date.now();
     const targetRawDeg = clamp(
@@ -329,9 +339,36 @@ class ServoActuator {
     this.moveStartMs = nowMs;
     this.moveDurationMs = Math.max(
       CONTROL_INTERVAL_MS,
-      (Math.abs(this.targetRawDeg - currentRawDeg) / (servoSpeedDegPerSecFromVoltage(SERVO_SUPPLY_VOLTS) * SERVO_SPEED_SAFETY_FACTOR)) * 1000 * MOTION_TIME_SCALE,
+      (Math.abs(this.targetRawDeg - currentRawDeg) / this.effectiveMaxSpeedDegPerSec()) * 1000 * MOTION_TIME_SCALE,
     );
     this.released = false;
+  }
+
+  commandModelAngleImmediate(modelDeg) {
+    const targetRawDeg = clamp(
+      applyServoCalibration(modelDeg, this.centerDeg, this.sign),
+      SERVO_MIN_DEG,
+      SERVO_MAX_DEG,
+    );
+    this.startRawDeg = targetRawDeg;
+    this.targetRawDeg = targetRawDeg;
+    this.lastEstimateRawDeg = targetRawDeg;
+    this.lastWrittenRawDeg = Number.NaN;
+    this.moveStartMs = Date.now();
+    this.moveDurationMs = 1;
+    this.released = false;
+  }
+
+  setSpeedLimitDegPerSec(limitDegPerSec) {
+    const nowMs = Date.now();
+    const currentRawDeg = this.estimate(nowMs);
+    this.speedLimitDegPerSec = Math.max(1, limitDegPerSec);
+    this.startRawDeg = currentRawDeg;
+    this.moveStartMs = nowMs;
+    this.moveDurationMs = Math.max(
+      CONTROL_INTERVAL_MS,
+      (Math.abs(this.targetRawDeg - currentRawDeg) / this.effectiveMaxSpeedDegPerSec()) * 1000 * MOTION_TIME_SCALE,
+    );
   }
 
   release() {
@@ -380,6 +417,9 @@ class RaspberryPiController {
         },
       ]),
     );
+    for (const legId of LEG_IDS) {
+      this.setLegServoSpeedLimit(legId, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC);
+    }
   }
 
   attachWebSocketServer(wss) {
@@ -573,7 +613,14 @@ class RaspberryPiController {
     const pose = buildLegPoseFromServoAngles(servoAngles, calibration, {
       jointLimits: legStatus.jointLimits,
     });
-    this.commandLegPose(legId, pose, "direct_servo_angles", "direct_servo_angles");
+    const actuators = this.legs[legId];
+    this.updateMode("direct_servo_angles");
+    this.status.servosReleased = false;
+    legStatus.status = "direct_servo_angles";
+    legStatus.desired = pose;
+    this.clearLegError(legId);
+    actuators.thigh.commandModelAngleImmediate(pose.servoAnglesDeg.thigh);
+    actuators.calf.commandModelAngleImmediate(pose.servoAnglesDeg.calf);
   }
 
   setLegServoChannelMap(legId, thighChannel, calfChannel) {
@@ -590,6 +637,16 @@ class RaspberryPiController {
     const legStatus = this.status.legs[legId];
     legStatus.jointLimits = normalizeJointLimits(jointLimits);
     this.setLegFootTarget(legId, legStatus.desired?.foot ?? DEFAULT_LEG_COMMAND.foot, { internal: true });
+  }
+
+  setLegServoSpeedLimit(legId, servoSpeedLimitDegPerSec) {
+    const normalized = {
+      thigh: Math.max(1, servoSpeedLimitDegPerSec.thigh),
+      calf: Math.max(1, servoSpeedLimitDegPerSec.calf),
+    };
+    this.status.legs[legId].servoSpeedLimitDegPerSec = normalized;
+    this.legs[legId].thigh.setSpeedLimitDegPerSec(normalized.thigh);
+    this.legs[legId].calf.setSpeedLimitDegPerSec(normalized.calf);
   }
 
   runBuiltin(name) {
@@ -656,64 +713,74 @@ class RaspberryPiController {
     await this.flushOutputs();
   }
 
-  handleCommand(command) {
+  async handleCommand(command) {
     validateCommand(command);
     switch (command.type) {
       case "set_mode":
         this.updateMode(command.mode);
         this.status.servosReleased = false;
         this.setAck("mode updated");
-        return;
+        break;
       case "release_servos":
-        return this.releaseAllServos().then(() => {
-          this.setAck("servos released");
-        });
+        await this.releaseAllServos();
+        this.setAck("servos released");
+        return;
       case "run_builtin":
         this.runBuiltin(command.name);
         this.setAck(`builtin ${command.name}`);
-        return;
+        break;
       case "set_leg_foot_xy":
         this.setLegFootTarget(command.legId, { x: command.x, y: command.y });
         this.setAck("foot target accepted");
-        return;
+        break;
       case "set_leg_joint_angles":
         this.setLegJointAngles(command.legId, { thigh: command.thighDeg, calf: command.calfDeg });
         this.setAck("joint target accepted");
-        return;
+        break;
       case "set_leg_servo_angles":
         this.setLegServoAngles(command.legId, { thigh: command.thighServoDeg, calf: command.calfServoDeg });
         this.setAck("servo target accepted");
-        return;
+        break;
       case "set_leg_servo_channel_map":
         this.setLegServoChannelMap(command.legId, command.thighChannel, command.calfChannel);
         this.setAck("servo channel map updated");
-        return;
+        break;
       case "set_leg_joint_limits":
         this.setLegJointLimits(command.legId, {
           thighDeg: { min: command.thighMinDeg, max: command.thighMaxDeg },
           calfDeg: { min: command.calfMinDeg, max: command.calfMaxDeg },
         });
         this.setAck("joint limits updated");
-        return;
+        break;
+      case "set_leg_servo_speed_limit":
+        this.setLegServoSpeedLimit(command.legId, {
+          thigh: command.thighDegPerSec,
+          calf: command.calfDegPerSec,
+        });
+        this.setAck("servo speed limit updated");
+        break;
       case "play_animation":
         this.playAnimation(command.name);
         this.setAck("animation playing");
-        return;
+        break;
       case "pause_animation":
         this.pauseAnimation();
         this.setAck("animation paused");
-        return;
+        break;
       case "stop_animation":
         this.stopAnimation();
         this.setAck("animation stopped");
-        return;
+        break;
       case "hello":
       case "get_state":
         this.setAck(command.type === "hello" ? "hello" : "state");
-        return;
+        break;
       default:
         throw new Error(`Unsupported command type '${command.type}'.`);
     }
+
+    await this.flushOutputs();
+    this.refreshCurrentState();
   }
 
   async tick() {
@@ -781,6 +848,19 @@ const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/telemetry" });
 
 controller.attachWebSocketServer(wss);
+
+app.use((request, response, next) => {
+  const origin = request.headers.origin ?? "*";
+  response.header("Access-Control-Allow-Origin", origin);
+  response.header("Vary", "Origin");
+  response.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  response.header("Access-Control-Allow-Headers", "Content-Type");
+  if (request.method === "OPTIONS") {
+    response.sendStatus(204);
+    return;
+  }
+  next();
+});
 
 app.use(express.json({ limit: "1mb" }));
 
@@ -855,6 +935,20 @@ app.post("/api/animations/:id/stop", async (_request, response) => {
 wss.on("connection", (socket) => {
   socket.on("error", (error) => {
     logControllerError("WebSocket connection error", error);
+  });
+  socket.on("message", async (data) => {
+    try {
+      const message = JSON.parse(String(data));
+      if (message?.type !== "command") {
+        return;
+      }
+      await controller.handleCommand(message.command);
+      controller.broadcast("status", controller.status);
+    } catch (error) {
+      controller.setError(error.message);
+      logControllerError("WebSocket command failed", error);
+      safeSendWs(socket, JSON.stringify({ type: "error", message: error.message }));
+    }
   });
   safeSendWs(socket, JSON.stringify({ type: "status", payload: controller.status }));
 });

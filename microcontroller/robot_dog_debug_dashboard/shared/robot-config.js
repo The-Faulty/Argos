@@ -68,6 +68,18 @@ export const DEFAULT_JOINT_LIMITS = {
   calfDeg: { min: -165, max: -25 }
 };
 
+export const DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = {
+  thigh: 180,
+  calf: 180
+};
+
+export const DEFAULT_SERVO_UPDATE_RATE_HZ = 50;
+
+export const NEUTRAL_CALIBRATION = {
+  thetaThigh: 0,
+  thetaServo: -2.768896484375
+};
+
 export const DEFAULT_FULL_BODY_CLIP = {
   version: 2,
   name: "debug-step",

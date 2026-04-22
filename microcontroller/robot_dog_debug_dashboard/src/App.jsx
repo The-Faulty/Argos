@@ -14,6 +14,8 @@ import {
   DEFAULT_JOINT_LIMITS,
   DEFAULT_LEG_COMMAND,
   DEFAULT_SERVO_CHANNEL_MAP,
+  DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
+  DEFAULT_SERVO_UPDATE_RATE_HZ,
   LEG_DRAWING,
   LEG_GEOMETRY,
   LEG_IDS,
@@ -22,6 +24,34 @@ import {
 } from "../shared/robot-config.js";
 
 const calibration = createNeutralCalibration();
+const DRAG_COMMAND_INTERVAL_MS = 8;
+
+function stripTrailingSlash(value) {
+  return value.replace(/\/+$/, "");
+}
+
+function getBackendHttpBaseUrl() {
+  const configured = import.meta.env.VITE_BACKEND_URL?.trim();
+  if (configured) {
+    return stripTrailingSlash(configured);
+  }
+
+  if (import.meta.env.DEV) {
+    return `${window.location.protocol}//${window.location.hostname}:8787`;
+  }
+
+  return "";
+}
+
+function getBackendWsUrl() {
+  const backendHttpBaseUrl = getBackendHttpBaseUrl();
+  if (backendHttpBaseUrl) {
+    return `${backendHttpBaseUrl.replace(/^http/i, "ws")}/telemetry`;
+  }
+
+  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  return `${protocol}//${window.location.host}/telemetry`;
+}
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -65,12 +95,14 @@ function createLocalState() {
       lastError: null,
       servoChannelMap: { ...DEFAULT_SERVO_CHANNEL_MAP[legId] },
       jointLimits: clone(DEFAULT_JOINT_LIMITS),
+      servoSpeedLimitDegPerSec: { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC },
     };
   }
 
   return {
     connected: false,
     mode: "idle",
+    servoUpdateRateHz: DEFAULT_SERVO_UPDATE_RATE_HZ,
     servosReleased: false,
     activeAnimation: null,
     lastAck: null,
@@ -310,14 +342,21 @@ function ControlPanel({
   sendFoot,
   sendJoint,
   sendServo,
+  streamServo,
+  servoUpdateRateHz,
+  servoUpdateRateDraftHz,
+  setServoUpdateRateDraftHz,
+  sendServoUpdateRate,
   sendChannelMap,
   sendJointLimits,
+  sendServoSpeedLimit,
   runBuiltin,
   stopMotion,
 }) {
   const legDraft = draftCommand[selectedLegId];
   const channelMap = robotState.legs[selectedLegId]?.servoChannelMap ?? DEFAULT_SERVO_CHANNEL_MAP[selectedLegId];
   const jointLimits = robotState.legs[selectedLegId]?.jointLimits ?? DEFAULT_JOINT_LIMITS;
+  const servoSpeedLimit = robotState.legs[selectedLegId]?.servoSpeedLimitDegPerSec ?? DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
 
   function updateSection(section, key, value) {
     setDraftCommand((current) => ({
@@ -361,6 +400,34 @@ function ControlPanel({
     }));
   }
 
+  function updateServoSpeedLimit(key, value) {
+    setDraftCommand((current) => ({
+      ...current,
+      [selectedLegId]: {
+        ...current[selectedLegId],
+        servoSpeedLimitDegPerSec: {
+          ...current[selectedLegId].servoSpeedLimitDegPerSec,
+          [key]: Math.max(1, numberValue(value, 1)),
+        },
+      },
+    }));
+  }
+
+  function updateServoDraft(key, value) {
+    const nextServoAngles = {
+      ...legDraft.servoAnglesDeg,
+      [key]: Math.max(0, Math.min(180, numberValue(value))),
+    };
+    setDraftCommand((current) => ({
+      ...current,
+      [selectedLegId]: {
+        ...current[selectedLegId],
+        servoAnglesDeg: nextServoAngles,
+      },
+    }));
+    return nextServoAngles;
+  }
+
   return (
     <div className="panel">
       <div className="panel-title-row">
@@ -399,12 +466,35 @@ function ControlPanel({
           <h3>Servo Angles</h3>
           <label>
             Thigh servo
-            <input type="number" value={legDraft.servoAnglesDeg.thigh} onChange={(event) => updateSection("servoAnglesDeg", "thigh", event.target.value)} />
+            <input type="number" min="0" max="180" value={legDraft.servoAnglesDeg.thigh} onChange={(event) => updateSection("servoAnglesDeg", "thigh", Math.max(0, Math.min(180, numberValue(event.target.value))))} />
           </label>
           <label>
             Calf servo
-            <input type="number" value={legDraft.servoAnglesDeg.calf} onChange={(event) => updateSection("servoAnglesDeg", "calf", event.target.value)} />
+            <input type="number" min="0" max="180" value={legDraft.servoAnglesDeg.calf} onChange={(event) => updateSection("servoAnglesDeg", "calf", Math.max(0, Math.min(180, numberValue(event.target.value))))} />
           </label>
+          <label>
+            Thigh live slider
+            <input
+              type="range"
+              min="0"
+              max="180"
+              step="1"
+              value={legDraft.servoAnglesDeg.thigh}
+              onChange={(event) => streamServo(selectedLegId, updateServoDraft("thigh", event.target.value))}
+            />
+          </label>
+          <label>
+            Calf live slider
+            <input
+              type="range"
+              min="0"
+              max="180"
+              step="1"
+              value={legDraft.servoAnglesDeg.calf}
+              onChange={(event) => streamServo(selectedLegId, updateServoDraft("calf", event.target.value))}
+            />
+          </label>
+          <div className="map-readout">Live sliders stream raw `set_leg_servo_angles` commands straight to the ESP.</div>
           <button onClick={() => sendServo(selectedLegId, legDraft.servoAnglesDeg)}>Send servo target</button>
         </section>
 
@@ -446,6 +536,39 @@ function ControlPanel({
             Active: thigh {jointLimits.thighDeg.min}..{jointLimits.thighDeg.max}, calf {jointLimits.calfDeg.min}..{jointLimits.calfDeg.max}
           </div>
           <button onClick={() => sendJointLimits(selectedLegId, legDraft.jointLimits)}>Update joint limits</button>
+        </section>
+
+        <section className="control-card">
+          <h3>Servo Speed Limit</h3>
+          <label>
+            Thigh deg/sec
+            <input type="number" min="1" step="1" value={legDraft.servoSpeedLimitDegPerSec.thigh} onChange={(event) => updateServoSpeedLimit("thigh", event.target.value)} />
+          </label>
+          <label>
+            Calf deg/sec
+            <input type="number" min="1" step="1" value={legDraft.servoSpeedLimitDegPerSec.calf} onChange={(event) => updateServoSpeedLimit("calf", event.target.value)} />
+          </label>
+          <div className="map-readout">
+            Active: thigh {servoSpeedLimit.thigh} deg/sec, calf {servoSpeedLimit.calf} deg/sec
+          </div>
+          <button onClick={() => sendServoSpeedLimit(selectedLegId, legDraft.servoSpeedLimitDegPerSec)}>Update speed limit</button>
+        </section>
+
+        <section className="control-card">
+          <h3>Servo Update Rate</h3>
+          <label>
+            PCA9685 refresh Hz
+            <input
+              type="number"
+              min="40"
+              max="200"
+              step="1"
+              value={servoUpdateRateDraftHz}
+              onChange={(event) => setServoUpdateRateDraftHz(Math.max(40, Math.min(200, numberValue(event.target.value, DEFAULT_SERVO_UPDATE_RATE_HZ))))}
+            />
+          </label>
+          <div className="map-readout">Active: {servoUpdateRateHz} Hz</div>
+          <button onClick={() => sendServoUpdateRate(servoUpdateRateDraftHz)}>Update refresh rate</button>
         </section>
       </div>
 
@@ -647,6 +770,10 @@ function TelemetryPanel({ robotState, selectedLegId }) {
           <strong>{robotState.lastAck ?? "none"}</strong>
         </div>
         <div>
+          <label>Servo update rate</label>
+          <strong>{robotState.servoUpdateRateHz ?? "-"} Hz</strong>
+        </div>
+        <div>
           <label>Active animation</label>
           <strong>{robotState.activeAnimation ?? "none"}</strong>
         </div>
@@ -686,6 +813,12 @@ function TelemetryPanel({ robotState, selectedLegId }) {
           </p>
         </div>
         <div>
+          <h3>Servo speed limit</h3>
+          <p>
+            thigh {leg?.servoSpeedLimitDegPerSec?.thigh ?? "-"} deg/sec, calf {leg?.servoSpeedLimitDegPerSec?.calf ?? "-"} deg/sec
+          </p>
+        </div>
+        <div>
           <h3>Errors</h3>
           <p>{robotState.lastError || leg?.lastError || "No active errors."}</p>
         </div>
@@ -703,6 +836,7 @@ export default function App() {
   const [clip, setClip] = useState(DEFAULT_FULL_BODY_CLIP);
   const [previewTime, setPreviewTime] = useState(0);
   const [previewEnabled, setPreviewEnabled] = useState(false);
+  const [servoUpdateRateDraftHz, setServoUpdateRateDraftHz] = useState(DEFAULT_SERVO_UPDATE_RATE_HZ);
   const [importPlacement, setImportPlacement] = useState({ mode: "selected_leg", pair: "front" });
   const [draftCommand, setDraftCommand] = useState(() =>
     Object.fromEntries(
@@ -712,12 +846,18 @@ export default function App() {
           ...clone(DEFAULT_LEG_COMMAND),
           servoChannelMap: { ...DEFAULT_SERVO_CHANNEL_MAP[legId] },
           jointLimits: clone(DEFAULT_JOINT_LIMITS),
+          servoSpeedLimitDegPerSec: { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC },
         },
       ]),
     ),
   );
   const dragQueuedCommandRef = useRef(null);
-  const dragSendInFlightRef = useRef(false);
+  const dragFlushTimerRef = useRef(null);
+  const lastDragSentAtRef = useRef(0);
+  const servoQueuedCommandRef = useRef(null);
+  const servoFlushTimerRef = useRef(null);
+  const lastServoSentAtRef = useRef(0);
+  const telemetrySocketRef = useRef(null);
   const desiredPoseRef = useRef({});
   const jointLimitsRef = useRef({});
 
@@ -733,7 +873,7 @@ export default function App() {
   }, [robotState]);
 
   async function fetchStatus() {
-    const response = await fetch("/api/status");
+    const response = await fetch(`${getBackendHttpBaseUrl()}/api/status`);
     const payload = await response.json();
     setRobotState((current) => mergeState(current, payload));
     setDraftCommand((current) => {
@@ -741,6 +881,7 @@ export default function App() {
       for (const legId of LEG_IDS) {
         next[legId].servoChannelMap = payload.legs?.[legId]?.servoChannelMap ?? next[legId].servoChannelMap;
         next[legId].jointLimits = payload.legs?.[legId]?.jointLimits ?? next[legId].jointLimits;
+        next[legId].servoSpeedLimitDegPerSec = payload.legs?.[legId]?.servoSpeedLimitDegPerSec ?? next[legId].servoSpeedLimitDegPerSec;
       }
       return next;
     });
@@ -751,8 +892,8 @@ export default function App() {
 
   useEffect(() => {
     fetchStatus().catch((error) => setRobotState((current) => ({ ...current, lastError: error.message })));
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const socket = new WebSocket(`${protocol}//${window.location.host}/telemetry`);
+    const socket = new WebSocket(getBackendWsUrl());
+    telemetrySocketRef.current = socket;
 
     socket.onmessage = (event) => {
       try {
@@ -764,6 +905,7 @@ export default function App() {
             for (const legId of LEG_IDS) {
               next[legId].servoChannelMap = message.payload.legs?.[legId]?.servoChannelMap ?? next[legId].servoChannelMap;
               next[legId].jointLimits = message.payload.legs?.[legId]?.jointLimits ?? next[legId].jointLimits;
+              next[legId].servoSpeedLimitDegPerSec = message.payload.legs?.[legId]?.servoSpeedLimitDegPerSec ?? next[legId].servoSpeedLimitDegPerSec;
             }
             return next;
           });
@@ -782,11 +924,22 @@ export default function App() {
       }
     };
 
-    return () => socket.close();
+    return () => {
+      telemetrySocketRef.current = null;
+      if (dragFlushTimerRef.current) {
+        window.clearTimeout(dragFlushTimerRef.current);
+        dragFlushTimerRef.current = null;
+      }
+      if (servoFlushTimerRef.current) {
+        window.clearTimeout(servoFlushTimerRef.current);
+        servoFlushTimerRef.current = null;
+      }
+      socket.close();
+    };
   }, []);
 
   async function postJson(path, body) {
-    const response = await fetch(path, {
+    const response = await fetch(`${getBackendHttpBaseUrl()}${path}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -800,6 +953,15 @@ export default function App() {
 
   async function sendCommand(command) {
     await postJson("/api/command", { command });
+  }
+
+  async function sendRealtimeCommand(command) {
+    const socket = telemetrySocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ type: "command", command }));
+      return;
+    }
+    await sendCommand(command);
   }
 
   function applyDesiredFootLocally(legId, foot) {
@@ -834,31 +996,172 @@ export default function App() {
     return nextPose ?? pose;
   }
 
+  function clearDragFlushTimer() {
+    if (dragFlushTimerRef.current) {
+      window.clearTimeout(dragFlushTimerRef.current);
+      dragFlushTimerRef.current = null;
+    }
+  }
+
+  function clearServoFlushTimer() {
+    if (servoFlushTimerRef.current) {
+      window.clearTimeout(servoFlushTimerRef.current);
+      servoFlushTimerRef.current = null;
+    }
+  }
+
+  function scheduleQueuedDragFootCommand() {
+    if (!dragQueuedCommandRef.current) {
+      return;
+    }
+
+    const elapsed = performance.now() - lastDragSentAtRef.current;
+    if (elapsed >= DRAG_COMMAND_INTERVAL_MS) {
+      clearDragFlushTimer();
+      flushQueuedDragFootCommand();
+      return;
+    }
+
+    if (dragFlushTimerRef.current) {
+      return;
+    }
+
+    const delay = Math.max(0, DRAG_COMMAND_INTERVAL_MS - elapsed);
+    dragFlushTimerRef.current = window.setTimeout(() => {
+      dragFlushTimerRef.current = null;
+      flushQueuedDragFootCommand();
+    }, delay);
+  }
+
   function flushQueuedDragFootCommand() {
-    if (dragSendInFlightRef.current || !dragQueuedCommandRef.current) {
+    if (!dragQueuedCommandRef.current) {
       return;
     }
 
     const queued = dragQueuedCommandRef.current;
     dragQueuedCommandRef.current = null;
-    dragSendInFlightRef.current = true;
+    lastDragSentAtRef.current = performance.now();
 
-    sendCommand({ type: "set_leg_foot_xy", legId: queued.legId, x: queued.foot.x, y: queued.foot.y })
-      .catch((error) => {
+    const socket = telemetrySocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(
+          JSON.stringify({
+            type: "command",
+            command: { type: "set_leg_foot_xy", legId: queued.legId, x: queued.foot.x, y: queued.foot.y },
+          }),
+        );
+      } catch (error) {
         setRobotState((current) => ({ ...current, lastError: error.message }));
-      })
-      .finally(() => {
-        dragSendInFlightRef.current = false;
-        if (dragQueuedCommandRef.current) {
-          flushQueuedDragFootCommand();
-        }
+      }
+    } else {
+      sendCommand({ type: "set_leg_foot_xy", legId: queued.legId, x: queued.foot.x, y: queued.foot.y }).catch((error) => {
+        setRobotState((current) => ({ ...current, lastError: error.message }));
       });
+    }
+
+    if (dragQueuedCommandRef.current) {
+      scheduleQueuedDragFootCommand();
+    }
   }
 
   function queueLiveFootTarget(legId, foot) {
     const pose = applyDesiredFootLocally(legId, foot);
     dragQueuedCommandRef.current = { legId, foot: pose?.foot ?? foot };
-    flushQueuedDragFootCommand();
+    scheduleQueuedDragFootCommand();
+  }
+
+  function applyDesiredServoLocally(legId, servoAnglesDeg) {
+    const nextServoAngles = {
+      thigh: Math.max(0, Math.min(180, numberValue(servoAnglesDeg.thigh, 90))),
+      calf: Math.max(0, Math.min(180, numberValue(servoAnglesDeg.calf, 90))),
+    };
+    const jointLimits = jointLimitsRef.current[legId] ?? robotState.legs[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS;
+    const pose = buildLegPoseFromServoAngles(nextServoAngles, calibration, { jointLimits });
+    desiredPoseRef.current[legId] = pose;
+    setRobotState((current) =>
+      mergeState(current, {
+        mode: "direct_servo_angles",
+        servosReleased: false,
+        legs: {
+          [legId]: {
+            ...current.legs[legId],
+            desired: pose,
+          },
+        },
+      }),
+    );
+    setDraftCommand((current) => ({
+      ...current,
+      [legId]: {
+        ...current[legId],
+        servoAnglesDeg: nextServoAngles,
+      },
+    }));
+    return nextServoAngles;
+  }
+
+  function scheduleQueuedServoCommand() {
+    if (!servoQueuedCommandRef.current) {
+      return;
+    }
+
+    const elapsed = performance.now() - lastServoSentAtRef.current;
+    if (elapsed >= DRAG_COMMAND_INTERVAL_MS) {
+      clearServoFlushTimer();
+      flushQueuedServoCommand();
+      return;
+    }
+
+    if (servoFlushTimerRef.current) {
+      return;
+    }
+
+    const delay = Math.max(0, DRAG_COMMAND_INTERVAL_MS - elapsed);
+    servoFlushTimerRef.current = window.setTimeout(() => {
+      servoFlushTimerRef.current = null;
+      flushQueuedServoCommand();
+    }, delay);
+  }
+
+  function flushQueuedServoCommand() {
+    if (!servoQueuedCommandRef.current) {
+      return;
+    }
+
+    const queued = servoQueuedCommandRef.current;
+    servoQueuedCommandRef.current = null;
+    lastServoSentAtRef.current = performance.now();
+
+    const command = {
+      type: "set_leg_servo_angles",
+      legId: queued.legId,
+      thighServoDeg: queued.servoAnglesDeg.thigh,
+      calfServoDeg: queued.servoAnglesDeg.calf,
+    };
+
+    const socket = telemetrySocketRef.current;
+    if (socket?.readyState === WebSocket.OPEN) {
+      try {
+        socket.send(JSON.stringify({ type: "command", command }));
+      } catch (error) {
+        setRobotState((current) => ({ ...current, lastError: error.message }));
+      }
+    } else {
+      sendCommand(command).catch((error) => {
+        setRobotState((current) => ({ ...current, lastError: error.message }));
+      });
+    }
+
+    if (servoQueuedCommandRef.current) {
+      scheduleQueuedServoCommand();
+    }
+  }
+
+  function queueLiveServoTarget(legId, servoAnglesDeg) {
+    const nextServoAngles = applyDesiredServoLocally(legId, servoAnglesDeg);
+    servoQueuedCommandRef.current = { legId, servoAnglesDeg: nextServoAngles };
+    scheduleQueuedServoCommand();
   }
 
   async function connect() {
@@ -866,7 +1169,7 @@ export default function App() {
       setRobotState((current) => ({ ...current, lastError: "Select a serial port before connecting." }));
       return;
     }
-    await postJson("/api/connect", { path: selectedPort, baudRate: 115200 });
+    await postJson("/api/connect", { path: selectedPort, baudRate: 460800 });
     await fetchStatus();
   }
 
@@ -904,22 +1207,8 @@ export default function App() {
   }
 
   async function sendServo(legId, servoAnglesDeg) {
-    const jointLimits = robotState.legs[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS;
-    const pose = buildLegPoseFromServoAngles(servoAnglesDeg, calibration, { jointLimits });
-    desiredPoseRef.current[legId] = pose;
-    setRobotState((current) =>
-      mergeState(current, {
-        mode: "direct_servo_angles",
-        servosReleased: false,
-        legs: {
-          [legId]: {
-            ...current.legs[legId],
-            desired: pose,
-          },
-        },
-      }),
-    );
-    await sendCommand({ type: "set_leg_servo_angles", legId, thighServoDeg: servoAnglesDeg.thigh, calfServoDeg: servoAnglesDeg.calf });
+    const nextServoAngles = applyDesiredServoLocally(legId, servoAnglesDeg);
+    await sendCommand({ type: "set_leg_servo_angles", legId, thighServoDeg: nextServoAngles.thigh, calfServoDeg: nextServoAngles.calf });
   }
 
   async function sendChannelMap(legId, servoChannelMap) {
@@ -975,6 +1264,36 @@ export default function App() {
     });
   }
 
+  async function sendServoSpeedLimit(legId, servoSpeedLimitDegPerSec) {
+    const normalized = {
+      thigh: Math.max(1, numberValue(servoSpeedLimitDegPerSec.thigh, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC.thigh)),
+      calf: Math.max(1, numberValue(servoSpeedLimitDegPerSec.calf, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC.calf)),
+    };
+    setRobotState((current) =>
+      mergeState(current, {
+        legs: {
+          [legId]: {
+            ...current.legs[legId],
+            servoSpeedLimitDegPerSec: normalized,
+          },
+        },
+      }),
+    );
+    await sendCommand({
+      type: "set_leg_servo_speed_limit",
+      legId,
+      thighDegPerSec: normalized.thigh,
+      calfDegPerSec: normalized.calf,
+    });
+  }
+
+  async function sendServoUpdateRate(hz) {
+    const normalized = Math.max(40, Math.min(200, Math.round(numberValue(hz, DEFAULT_SERVO_UPDATE_RATE_HZ))));
+    setServoUpdateRateDraftHz(normalized);
+    setRobotState((current) => ({ ...current, servoUpdateRateHz: normalized }));
+    await sendCommand({ type: "set_servo_update_rate_hz", hz: normalized });
+  }
+
   async function runBuiltin(name) {
     await sendCommand({ type: "run_builtin", name });
     setRobotState((current) => ({ ...current, mode: name === "walk" ? "builtin_walk" : "builtin_crouch", servosReleased: false }));
@@ -986,7 +1305,11 @@ export default function App() {
   }
 
   async function releaseServos() {
-    await sendCommand({ type: "release_servos" });
+    clearDragFlushTimer();
+    clearServoFlushTimer();
+    dragQueuedCommandRef.current = null;
+    servoQueuedCommandRef.current = null;
+    await sendRealtimeCommand({ type: "release_servos" });
     setRobotState((current) => ({
       ...current,
       mode: "idle",
@@ -1125,8 +1448,14 @@ export default function App() {
         sendFoot={withError(sendFoot)}
         sendJoint={withError(sendJoint)}
         sendServo={withError(sendServo)}
+        streamServo={queueLiveServoTarget}
+        servoUpdateRateHz={robotState.servoUpdateRateHz}
+        servoUpdateRateDraftHz={servoUpdateRateDraftHz}
+        setServoUpdateRateDraftHz={setServoUpdateRateDraftHz}
+        sendServoUpdateRate={withError(sendServoUpdateRate)}
         sendChannelMap={withError(sendChannelMap)}
         sendJointLimits={withError(sendJointLimits)}
+        sendServoSpeedLimit={withError(sendServoSpeedLimit)}
         runBuiltin={withError(runBuiltin)}
         stopMotion={withError(stopMotion)}
       />

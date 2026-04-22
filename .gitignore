@@ -8,3 +8,12 @@ ros2_ws/build/
 ros2_ws/install/
 ros2_ws/log/
 .claude/worktrees/
+
+# Robot dog debug dashboard
+microcontroller/robot_dog_debug_dashboard/node_modules/
+microcontroller/robot_dog_debug_dashboard/dist/
+microcontroller/robot_dog_debug_dashboard/.arduino-build/
+microcontroller/robot_dog_debug_dashboard/coverage/
+microcontroller/robot_dog_debug_dashboard/.env.local
+microcontroller/robot_dog_debug_dashboard/.env.*.local
+npm-debug.log*

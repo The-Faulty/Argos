@@ -13,7 +13,7 @@
 
 #define NUM_LEGS 4
 #define INVALID_CHANNEL 255
-#define SERIAL_BAUD 115200
+#define SERIAL_BAUD 460800
 #define SERIAL_BUFFER_SIZE 320
 #define MAX_NAME_LEN 32
 #define MAX_ERROR_LEN 96
@@ -25,10 +25,11 @@
 static const float SERVO_SUPPLY_VOLTS = 7.4f;
 static const float SERVO_SPEED_SAFETY_FACTOR = 0.80f;
 static const float MOTION_TIME_SCALE = 1.15f;
+static const float DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = 180.0f;
 static const float THIGH_CENTER_DEG = 90.0f;
 static const float CALF_CENTER_DEG = 90.0f;
 static const float THIGH_SIGN = 1.0f;
-static const float CALF_SIGN = -1.0f;
+static const float CALF_SIGN = 1.0f;
 static const float SERVO_MIN_DEG = 0.0f;
 static const float SERVO_MAX_DEG = 180.0f;
 static const float DEFAULT_THIGH_MIN_DEG = -145.0f;
@@ -36,9 +37,17 @@ static const float DEFAULT_THIGH_MAX_DEG = 15.0f;
 static const float DEFAULT_CALF_MIN_DEG = -165.0f;
 static const float DEFAULT_CALF_MAX_DEG = -25.0f;
 static const uint8_t PCA9685_ADDRESS = 0x40;
-static const float PCA9685_FREQUENCY_HZ = 50.0f;
-static const uint16_t SERVO_PWM_MIN_TICKS = 102;
-static const uint16_t SERVO_PWM_MAX_TICKS = 512;
+static const float DEFAULT_PCA9685_FREQUENCY_HZ = 50.0f;
+static const float MIN_PCA9685_FREQUENCY_HZ = 40.0f;
+static const float MAX_PCA9685_FREQUENCY_HZ = 200.0f;
+static const uint8_t I2C_SDA_PIN = 6;
+static const uint8_t I2C_SCL_PIN = 7;
+static const float SERVO_MIN_PULSE_US = 500.0f;
+static const float SERVO_MAX_PULSE_US = 2500.0f;
+static const float NEUTRAL_THIGH_THETA = 0.0f;
+static const float NEUTRAL_SERVO_THETA = -2.768896484375f;
+static const float SERVO_SEARCH_STEP_DEG = 5.0f;
+static const float SERVO_REFINE_STEPS_DEG[] = {2.0f, 1.0f, 0.5f, 0.25f};
 
 typedef struct {
     float x;
@@ -70,6 +79,30 @@ typedef struct {
     bool hasSolution;
     bool success;
 } LegIKResult;
+
+typedef struct {
+    float modelThighDeg;
+    float modelCalfDeg;
+    float thetaThigh;
+    float thetaServo;
+    float thetaCalf;
+    LegGeometry geometry;
+    float error;
+    float servoPenalty;
+    float continuityPenalty;
+    bool valid;
+} FootServoCandidate;
+
+typedef struct {
+    float modelCalfDeg;
+    float thetaServo;
+    float thetaCalf;
+    LegGeometry geometry;
+    float error;
+    float servoPenalty;
+    float continuityPenalty;
+    bool valid;
+} JointServoCandidate;
 
 typedef struct {
     float thighDeg;
@@ -104,7 +137,8 @@ typedef struct {
     float maxDeg;
     float centerDeg;
     float sign;
-    float maxSpeedDegPerSec;
+    float hardwareMaxSpeedDegPerSec;
+    float speedLimitDegPerSec;
     float startDeg;
     float targetDeg;
     float estimatedDeg;
@@ -125,6 +159,7 @@ typedef struct {
     uint8_t thighChannel;
     uint8_t calfChannel;
     JointLimitsDeg jointLimits;
+    ServoAnglesDeg servoSpeedLimitDegPerSec;
     float lastThetaThigh;
     float lastThetaServo;
     char lastError[MAX_ERROR_LEN];
@@ -186,9 +221,9 @@ static AnimationClip g_animation;
 static RobotMode g_mode = MODE_IDLE;
 static char g_builtinName[MAX_NAME_LEN] = "";
 static char g_activeAnimationName[MAX_NAME_LEN] = "";
-static float g_thighNeutralAngle = 0.0f;
-static float g_servoNeutralAngle = 0.0f;
-static bool g_neutralInitialized = false;
+static float g_thighNeutralAngle = NEUTRAL_THIGH_THETA;
+static float g_servoNeutralAngle = NEUTRAL_SERVO_THETA;
+static bool g_neutralInitialized = true;
 static char g_serialBuffer[SERIAL_BUFFER_SIZE];
 static int g_serialIndex = 0;
 static uint32_t g_modeStartMs = 0;
@@ -196,6 +231,12 @@ static uint32_t g_lastTelemetryMs = 0;
 static uint32_t g_lastBuiltinStatusMs = 0;
 static uint32_t g_lastAnimationStatusMs = 0;
 static bool g_servosReleased = false;
+static float g_pwmFrequencyHz = DEFAULT_PCA9685_FREQUENCY_HZ;
+
+static bool i2cDevicePresent(uint8_t addr) {
+    Wire.beginTransmission(addr);
+    return Wire.endTransmission() == 0;
+}
 
 static float clampf(float x, float lo, float hi) {
     if (x < lo) return lo;
@@ -221,6 +262,95 @@ static float radToDeg(float radians) {
 
 static float degToRad(float degrees) {
     return degrees * (float)M_PI / 180.0f;
+}
+
+static float thetaToModelServoDegInline(float theta, float neutralTheta) {
+    return 90.0f + radToDeg(theta - neutralTheta);
+}
+
+static float servoRangePenalty(float modelDeg) {
+    if (modelDeg < 0.0f) {
+        return -modelDeg;
+    }
+    if (modelDeg > 180.0f) {
+        return modelDeg - 180.0f;
+    }
+    return 0.0f;
+}
+
+static float servoSolutionPenalty(float thetaThigh, float thetaServo) {
+    return
+        servoRangePenalty(thetaToModelServoDegInline(thetaThigh, g_thighNeutralAngle)) +
+        servoRangePenalty(thetaToModelServoDegInline(thetaServo, g_servoNeutralAngle));
+}
+
+static bool footCandidateBetter(float servoPenalty, float error, float bestServoPenalty, float bestError) {
+    if (error < (bestError - 0.5f)) {
+        return true;
+    }
+    if (error > (bestError + 0.5f)) {
+        return false;
+    }
+    if ((servoPenalty + 0.000001f) < bestServoPenalty) {
+        return true;
+    }
+    if (servoPenalty > (bestServoPenalty + 0.000001f)) {
+        return false;
+    }
+    return error < bestError;
+}
+
+static bool jointCandidateBetter(float servoPenalty, float error, float bestServoPenalty, float bestError) {
+    float tolerance = degToRad(0.75f);
+    if (error < (bestError - tolerance)) {
+        return true;
+    }
+    if (error > (bestError + tolerance)) {
+        return false;
+    }
+    if ((servoPenalty + 0.000001f) < bestServoPenalty) {
+        return true;
+    }
+    if (servoPenalty > (bestServoPenalty + 0.000001f)) {
+        return false;
+    }
+    return error < bestError;
+}
+
+static float footContinuityPenalty(float modelThighDeg, float modelCalfDeg, float startModelThighDeg, float startModelCalfDeg) {
+    return fabsf(modelThighDeg - startModelThighDeg) + fabsf(modelCalfDeg - startModelCalfDeg);
+}
+
+static bool footServoCandidateBetter(const FootServoCandidate *candidate, const FootServoCandidate *best) {
+    if (!candidate->valid) {
+        return false;
+    }
+    if (!best->valid) {
+        return true;
+    }
+    if (footCandidateBetter(candidate->servoPenalty, candidate->error, best->servoPenalty, best->error)) {
+        return true;
+    }
+    if (footCandidateBetter(best->servoPenalty, best->error, candidate->servoPenalty, candidate->error)) {
+        return false;
+    }
+    return candidate->continuityPenalty < best->continuityPenalty;
+}
+
+static bool jointServoCandidateBetter(const JointServoCandidate *candidate, const JointServoCandidate *best) {
+    if (!candidate->valid) {
+        return false;
+    }
+    if (!best->valid) {
+        return true;
+    }
+    if (jointCandidateBetter(candidate->servoPenalty, candidate->error, best->servoPenalty, best->error)) {
+        return true;
+    }
+    if (jointCandidateBetter(best->servoPenalty, best->error, candidate->servoPenalty, candidate->error)) {
+        return false;
+    }
+    return candidate->continuityPenalty < best->continuityPenalty;
 }
 
 static JointLimitsDeg normalizeJointLimits(JointLimitsDeg limits) {
@@ -383,136 +513,249 @@ static LegGeometry solveGeometry(float thetaThigh, float thetaServo) {
     return g;
 }
 
+static FootServoCandidate evaluateFootServoCandidate(
+    float modelThighDeg,
+    float modelCalfDeg,
+    Point2f target,
+    const JointLimitsDeg *limits,
+    float startModelThighDeg,
+    float startModelCalfDeg
+) {
+    FootServoCandidate candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    candidate.valid = false;
+
+    if (
+        modelThighDeg < SERVO_MIN_DEG ||
+        modelThighDeg > SERVO_MAX_DEG ||
+        modelCalfDeg < SERVO_MIN_DEG ||
+        modelCalfDeg > SERVO_MAX_DEG
+    ) {
+        return candidate;
+    }
+
+    candidate.modelThighDeg = modelThighDeg;
+    candidate.modelCalfDeg = modelCalfDeg;
+    candidate.thetaThigh = g_thighNeutralAngle + degToRad(modelThighDeg - 90.0f);
+    candidate.thetaServo = g_servoNeutralAngle + degToRad(modelCalfDeg - 90.0f);
+    candidate.geometry = solveGeometry(candidate.thetaThigh, candidate.thetaServo);
+
+    if (!geometryWithinJointLimits(&candidate.geometry, limits)) {
+        return candidate;
+    }
+
+    candidate.thetaCalf = candidate.geometry.thetaCalf;
+    candidate.error = dist2f(candidate.geometry.foot, target);
+    candidate.servoPenalty = servoSolutionPenalty(candidate.thetaThigh, candidate.thetaServo);
+    candidate.continuityPenalty = footContinuityPenalty(modelThighDeg, modelCalfDeg, startModelThighDeg, startModelCalfDeg);
+    candidate.valid = true;
+    return candidate;
+}
+
+static JointServoCandidate evaluateJointServoCandidate(
+    float thetaThigh,
+    float modelCalfDeg,
+    float targetThetaCalf,
+    const JointLimitsDeg *limits,
+    float startModelCalfDeg
+) {
+    JointServoCandidate candidate;
+    memset(&candidate, 0, sizeof(candidate));
+    candidate.valid = false;
+
+    if (modelCalfDeg < SERVO_MIN_DEG || modelCalfDeg > SERVO_MAX_DEG) {
+        return candidate;
+    }
+
+    candidate.modelCalfDeg = modelCalfDeg;
+    candidate.thetaServo = g_servoNeutralAngle + degToRad(modelCalfDeg - 90.0f);
+    candidate.geometry = solveGeometry(thetaThigh, candidate.thetaServo);
+
+    if (!geometryWithinJointLimits(&candidate.geometry, limits)) {
+        return candidate;
+    }
+
+    candidate.thetaCalf = candidate.geometry.thetaCalf;
+    candidate.error = fabsf(clampAngle(candidate.geometry.thetaCalf - targetThetaCalf));
+    candidate.servoPenalty = servoSolutionPenalty(thetaThigh, candidate.thetaServo);
+    candidate.continuityPenalty = fabsf(modelCalfDeg - startModelCalfDeg);
+    candidate.valid = true;
+    return candidate;
+}
+
+static FootServoCandidate refineFootServoCandidate(
+    FootServoCandidate best,
+    Point2f target,
+    const JointLimitsDeg *limits,
+    float startModelThighDeg,
+    float startModelCalfDeg
+) {
+    if (!best.valid) {
+        return best;
+    }
+
+    const size_t refineCount = sizeof(SERVO_REFINE_STEPS_DEG) / sizeof(SERVO_REFINE_STEPS_DEG[0]);
+    for (size_t i = 0; i < refineCount; ++i) {
+        float step = SERVO_REFINE_STEPS_DEG[i];
+        bool improved = true;
+
+        while (improved) {
+            improved = false;
+            const float neighbors[8][2] = {
+                {best.modelThighDeg + step, best.modelCalfDeg},
+                {best.modelThighDeg - step, best.modelCalfDeg},
+                {best.modelThighDeg, best.modelCalfDeg + step},
+                {best.modelThighDeg, best.modelCalfDeg - step},
+                {best.modelThighDeg + step, best.modelCalfDeg + step},
+                {best.modelThighDeg + step, best.modelCalfDeg - step},
+                {best.modelThighDeg - step, best.modelCalfDeg + step},
+                {best.modelThighDeg - step, best.modelCalfDeg - step}
+            };
+
+            for (int neighborIndex = 0; neighborIndex < 8; ++neighborIndex) {
+                FootServoCandidate candidate = evaluateFootServoCandidate(
+                    neighbors[neighborIndex][0],
+                    neighbors[neighborIndex][1],
+                    target,
+                    limits,
+                    startModelThighDeg,
+                    startModelCalfDeg
+                );
+                if (footServoCandidateBetter(&candidate, &best)) {
+                    best = candidate;
+                    improved = true;
+                }
+            }
+        }
+    }
+
+    return best;
+}
+
+static JointServoCandidate refineJointServoCandidate(
+    JointServoCandidate best,
+    float thetaThigh,
+    float targetThetaCalf,
+    const JointLimitsDeg *limits,
+    float startModelCalfDeg
+) {
+    if (!best.valid) {
+        return best;
+    }
+
+    const size_t refineCount = sizeof(SERVO_REFINE_STEPS_DEG) / sizeof(SERVO_REFINE_STEPS_DEG[0]);
+    for (size_t i = 0; i < refineCount; ++i) {
+        float step = SERVO_REFINE_STEPS_DEG[i];
+        bool improved = true;
+
+        while (improved) {
+            improved = false;
+            const float neighbors[2] = {
+                best.modelCalfDeg + step,
+                best.modelCalfDeg - step
+            };
+
+            for (int neighborIndex = 0; neighborIndex < 2; ++neighborIndex) {
+                JointServoCandidate candidate = evaluateJointServoCandidate(
+                    thetaThigh,
+                    neighbors[neighborIndex],
+                    targetThetaCalf,
+                    limits,
+                    startModelCalfDeg
+                );
+                if (jointServoCandidateBetter(&candidate, &best)) {
+                    best = candidate;
+                    improved = true;
+                }
+            }
+        }
+    }
+
+    return best;
+}
+
 static void solveAnglesForAbsoluteFoot(Point2f target, float startThetaThigh, float startThetaServo, const JointLimitsDeg *limits, float *outThetaThigh, float *outThetaServo, float *outFootError, bool *outHasSolution, bool *outSuccess) {
-    float bestThigh = startThetaThigh;
-    float bestServo = startThetaServo;
-    float stepThigh = 0.2f;
-    float stepServo = 0.2f;
-    LegGeometry bestGeometry = solveGeometry(bestThigh, bestServo);
-    float bestError = FLT_MAX;
+    float startModelThighDeg = clampf(thetaToModelServoDegInline(startThetaThigh, g_thighNeutralAngle), SERVO_MIN_DEG, SERVO_MAX_DEG);
+    float startModelCalfDeg = clampf(thetaToModelServoDegInline(startThetaServo, g_servoNeutralAngle), SERVO_MIN_DEG, SERVO_MAX_DEG);
+    FootServoCandidate best;
+    memset(&best, 0, sizeof(best));
+    best.valid = false;
 
-    if (geometryWithinJointLimits(&bestGeometry, limits)) {
-        bestError = dist2f(bestGeometry.foot, target);
-    }
-
-    for (int i = 0; i < 28; ++i) {
-        bool improved = false;
-        const float candidates[8][2] = {
-            {bestThigh + stepThigh, bestServo},
-            {bestThigh - stepThigh, bestServo},
-            {bestThigh, bestServo + stepServo},
-            {bestThigh, bestServo - stepServo},
-            {bestThigh + stepThigh, bestServo + stepServo},
-            {bestThigh + stepThigh, bestServo - stepServo},
-            {bestThigh - stepThigh, bestServo + stepServo},
-            {bestThigh - stepThigh, bestServo - stepServo}
-        };
-
-        for (int j = 0; j < 8; ++j) {
-            float thigh = clampAngle(candidates[j][0]);
-            float servo = clampAngle(candidates[j][1]);
-            LegGeometry geometry = solveGeometry(thigh, servo);
-            if (!geometryWithinJointLimits(&geometry, limits)) {
-                continue;
+    for (float modelThighDeg = SERVO_MIN_DEG; modelThighDeg <= SERVO_MAX_DEG; modelThighDeg += SERVO_SEARCH_STEP_DEG) {
+        for (float modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG) {
+            FootServoCandidate candidate = evaluateFootServoCandidate(
+                modelThighDeg,
+                modelCalfDeg,
+                target,
+                limits,
+                startModelThighDeg,
+                startModelCalfDeg
+            );
+            if (footServoCandidateBetter(&candidate, &best)) {
+                best = candidate;
             }
-
-            float error = dist2f(geometry.foot, target);
-            if (error < bestError) {
-                bestError = error;
-                bestThigh = thigh;
-                bestServo = servo;
-                bestGeometry = geometry;
-                improved = true;
-            }
-        }
-
-        if (!improved) {
-            stepThigh *= 0.5f;
-            stepServo *= 0.5f;
         }
     }
 
-    *outThetaThigh = bestThigh;
-    *outThetaServo = bestServo;
-    *outFootError = bestError;
-    *outHasSolution = bestGeometry.valid && isfinite(bestError);
-    *outSuccess = bestGeometry.valid && isfinite(bestError) && (bestError < 10.0f);
+    best = refineFootServoCandidate(best, target, limits, startModelThighDeg, startModelCalfDeg);
+
+    if (!best.valid) {
+        LegGeometry fallbackGeometry = solveGeometry(startThetaThigh, startThetaServo);
+        *outThetaThigh = startThetaThigh;
+        *outThetaServo = startThetaServo;
+        *outFootError = FLT_MAX;
+        *outHasSolution = false;
+        *outSuccess = false;
+        (void)fallbackGeometry;
+        return;
+    }
+
+    *outThetaThigh = best.thetaThigh;
+    *outThetaServo = best.thetaServo;
+    *outFootError = best.error;
+    *outHasSolution = best.geometry.valid && isfinite(best.error);
+    *outSuccess = best.geometry.valid && isfinite(best.error) && (best.error < 10.0f);
 }
 
 static void solveServoForJointAngles(float thetaThigh, float targetThetaCalf, float startThetaServo, const JointLimitsDeg *limits, float *outThetaServo, float *outJointError, bool *outHasSolution, bool *outSuccess) {
-    float bestServo = startThetaServo;
-    float stepServo = 0.2f;
-    LegGeometry bestGeometry = solveGeometry(thetaThigh, bestServo);
-    float bestError = FLT_MAX;
+    float startModelCalfDeg = clampf(thetaToModelServoDegInline(startThetaServo, g_servoNeutralAngle), SERVO_MIN_DEG, SERVO_MAX_DEG);
+    JointServoCandidate best;
+    memset(&best, 0, sizeof(best));
+    best.valid = false;
 
-    if (geometryWithinJointLimits(&bestGeometry, limits)) {
-        bestError = fabsf(clampAngle(bestGeometry.thetaCalf - targetThetaCalf));
-    }
-
-    for (int i = 0; i < 28; ++i) {
-        bool improved = false;
-        const float candidates[2] = {
-            bestServo + stepServo,
-            bestServo - stepServo
-        };
-
-        for (int j = 0; j < 2; ++j) {
-            float servo = clampAngle(candidates[j]);
-            LegGeometry geometry = solveGeometry(thetaThigh, servo);
-            if (!geometryWithinJointLimits(&geometry, limits)) {
-                continue;
-            }
-
-            float error = fabsf(clampAngle(geometry.thetaCalf - targetThetaCalf));
-            if (error < bestError) {
-                bestError = error;
-                bestServo = servo;
-                bestGeometry = geometry;
-                improved = true;
-            }
-        }
-
-        if (!improved) {
-            stepServo *= 0.5f;
+    for (float modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG) {
+        JointServoCandidate candidate = evaluateJointServoCandidate(
+            thetaThigh,
+            modelCalfDeg,
+            targetThetaCalf,
+            limits,
+            startModelCalfDeg
+        );
+        if (jointServoCandidateBetter(&candidate, &best)) {
+            best = candidate;
         }
     }
 
-    *outThetaServo = bestServo;
-    *outJointError = bestError;
-    *outHasSolution = bestGeometry.valid && isfinite(bestError);
-    *outSuccess = bestGeometry.valid && isfinite(bestError) && (bestError < degToRad(3.0f));
+    best = refineJointServoCandidate(best, thetaThigh, targetThetaCalf, limits, startModelCalfDeg);
+
+    if (!best.valid) {
+        *outThetaServo = startThetaServo;
+        *outJointError = FLT_MAX;
+        *outHasSolution = false;
+        *outSuccess = false;
+        return;
+    }
+
+    *outThetaServo = best.thetaServo;
+    *outJointError = best.error;
+    *outHasSolution = best.geometry.valid && isfinite(best.error);
+    *outSuccess = best.geometry.valid && isfinite(best.error) && (best.error < degToRad(3.0f));
 }
 
 static void robotDogLegInitNeutral(void) {
-    float thetaThigh;
-    float thetaServo;
-    float footError;
-    bool hasSolution;
-    bool success;
-    Point2f neutralFootAbs = FOOT_ORIGIN_OFFSET;
-    JointLimitsDeg limits = defaultJointLimits();
-
-    solveAnglesForAbsoluteFoot(
-        neutralFootAbs,
-        -((float)M_PI / 4.0f),
-        (float)M_PI / 6.0f,
-        &limits,
-        &thetaThigh,
-        &thetaServo,
-        &footError,
-        &hasSolution,
-        &success
-    );
-
-    if (hasSolution) {
-        g_thighNeutralAngle = thetaThigh;
-        g_servoNeutralAngle = thetaServo;
-        g_neutralInitialized = true;
-    } else {
-        g_thighNeutralAngle = 0.0f;
-        g_servoNeutralAngle = 0.0f;
-        g_neutralInitialized = false;
-    }
+    g_thighNeutralAngle = NEUTRAL_THIGH_THETA;
+    g_servoNeutralAngle = NEUTRAL_SERVO_THETA;
+    g_neutralInitialized = true;
 }
 
 static float thetaToModelServoDeg(float theta, float neutralTheta) {
@@ -575,8 +818,15 @@ static float removeServoCalibration(float rawDeg, float centerDeg, float sign) {
 static uint16_t servoDegToPcaTicks(float servoDeg) {
     float clamped = clampf(servoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     float ratio = clamped / 180.0f;
-    float ticks = SERVO_PWM_MIN_TICKS + ratio * (float)(SERVO_PWM_MAX_TICKS - SERVO_PWM_MIN_TICKS);
+    float pulseUs = SERVO_MIN_PULSE_US + ratio * (SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US);
+    float periodUs = 1000000.0f / g_pwmFrequencyHz;
+    float ticks = (pulseUs / periodUs) * 4096.0f;
     return (uint16_t)roundf(ticks);
+}
+
+static void applyPca9685Frequency(float hz) {
+    g_pwmFrequencyHz = clampf(hz, MIN_PCA9685_FREQUENCY_HZ, MAX_PCA9685_FREQUENCY_HZ);
+    g_pwm.setPWMFreq(g_pwmFrequencyHz);
 }
 
 static float smoothServoReadEstimate(const SmoothServo *s);
@@ -593,11 +843,28 @@ static void smoothServoRelease(SmoothServo *s) {
     s->attached = false;
 }
 
-static void smoothServoWriteEstimate(SmoothServo *s) {
-    float est = smoothServoReadEstimate(s);
+static void smoothServoWriteRaw(SmoothServo *s, float rawDeg) {
     if (s->attached) {
-        g_pwm.setPWM(s->channel, 0, servoDegToPcaTicks(est));
+        g_pwm.setPWM(s->channel, 0, servoDegToPcaTicks(rawDeg));
     }
+}
+
+static void smoothServoWriteEstimate(SmoothServo *s) {
+    smoothServoWriteRaw(s, smoothServoReadEstimate(s));
+}
+
+static float smoothServoEffectiveMaxSpeedDegPerSec(const SmoothServo *s) {
+    float limit = s->speedLimitDegPerSec;
+    if (limit <= 0.0f) {
+        limit = s->hardwareMaxSpeedDegPerSec;
+    }
+    if (limit > s->hardwareMaxSpeedDegPerSec) {
+        limit = s->hardwareMaxSpeedDegPerSec;
+    }
+    if (limit < 1.0f) {
+        limit = 1.0f;
+    }
+    return limit;
 }
 
 static void smoothServoBegin(SmoothServo *s, uint8_t channel, float initialDeg, float minDeg, float maxDeg, float centerDeg, float sign, float supplyVolts) {
@@ -607,7 +874,8 @@ static void smoothServoBegin(SmoothServo *s, uint8_t channel, float initialDeg, 
     s->maxDeg = maxDeg;
     s->centerDeg = centerDeg;
     s->sign = sign;
-    s->maxSpeedDegPerSec = servoSpeedDegPerSecFromVoltage(supplyVolts) * SERVO_SPEED_SAFETY_FACTOR;
+    s->hardwareMaxSpeedDegPerSec = servoSpeedDegPerSecFromVoltage(supplyVolts) * SERVO_SPEED_SAFETY_FACTOR;
+    s->speedLimitDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
     s->startDeg = clampf(initialDeg, minDeg, maxDeg);
     s->targetDeg = s->startDeg;
     s->estimatedDeg = s->startDeg;
@@ -646,8 +914,9 @@ static void smoothServoCommandRaw(SmoothServo *s, float rawTargetDeg) {
 
     float delta = fabsf(s->targetDeg - s->startDeg);
     float durationSec = 0.0f;
-    if (s->maxSpeedDegPerSec > 0.0f) {
-        durationSec = delta / s->maxSpeedDegPerSec;
+    float effectiveMaxSpeed = smoothServoEffectiveMaxSpeedDegPerSec(s);
+    if (effectiveMaxSpeed > 0.0f) {
+        durationSec = delta / effectiveMaxSpeed;
     }
     durationSec *= MOTION_TIME_SCALE;
 
@@ -669,11 +938,65 @@ static void smoothServoCommandRaw(SmoothServo *s, float rawTargetDeg) {
     }
 
     s->moving = true;
+    smoothServoWriteEstimate(s);
+}
+
+static void smoothServoCommandRawImmediate(SmoothServo *s, float rawTargetDeg) {
+    if (s->channel != INVALID_CHANNEL) {
+        s->attached = true;
+    }
+    rawTargetDeg = clampf(rawTargetDeg, s->minDeg, s->maxDeg);
+    s->startDeg = rawTargetDeg;
+    s->targetDeg = rawTargetDeg;
+    s->estimatedDeg = rawTargetDeg;
+    s->moveStartUs = micros();
+    s->moveDurationUs = 1;
+    s->moving = false;
+    smoothServoWriteRaw(s, rawTargetDeg);
 }
 
 static void smoothServoCommandModelDeg(SmoothServo *s, float modelDeg) {
     float raw = applyServoCalibration(modelDeg, s->centerDeg, s->sign);
     smoothServoCommandRaw(s, raw);
+}
+
+static void smoothServoCommandModelDegImmediate(SmoothServo *s, float modelDeg) {
+    float raw = applyServoCalibration(modelDeg, s->centerDeg, s->sign);
+    smoothServoCommandRawImmediate(s, raw);
+}
+
+static void smoothServoSetSpeedLimitDegPerSec(SmoothServo *s, float speedLimitDegPerSec) {
+    s->speedLimitDegPerSec = speedLimitDegPerSec;
+    if (!s->attached) {
+        return;
+    }
+
+    float currentEstimate = smoothServoReadEstimate(s);
+    s->estimatedDeg = currentEstimate;
+    s->startDeg = currentEstimate;
+    s->moveStartUs = micros();
+
+    float delta = fabsf(s->targetDeg - s->startDeg);
+    if (delta <= 0.01f) {
+        s->moveDurationUs = 1;
+        s->moving = false;
+        s->estimatedDeg = s->targetDeg;
+        smoothServoWriteEstimate(s);
+        return;
+    }
+
+    float durationSec = delta / smoothServoEffectiveMaxSpeedDegPerSec(s);
+    durationSec *= MOTION_TIME_SCALE;
+    if (durationSec < 0.04f) {
+        durationSec = 0.04f;
+    }
+
+    s->moveDurationUs = (uint32_t)(durationSec * 1000000.0f);
+    if (s->moveDurationUs < 1000) {
+        s->moveDurationUs = 1000;
+    }
+    s->moving = true;
+    smoothServoWriteEstimate(s);
 }
 
 static void smoothServoUpdate(SmoothServo *s) {
@@ -687,8 +1010,7 @@ static void smoothServoUpdate(SmoothServo *s) {
             s->moving = false;
         }
     }
-
-    smoothServoWriteEstimate(s);
+    smoothServoWriteRaw(s, s->estimatedDeg);
 }
 
 static ServoAnglesDeg getCurrentServoAngles(const RobotLegState *leg) {
@@ -771,6 +1093,8 @@ static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config) {
     leg->thighChannel = config->thighChannel;
     leg->calfChannel = config->calfChannel;
     leg->jointLimits = defaultJointLimits();
+    leg->servoSpeedLimitDegPerSec.thigh = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
+    leg->servoSpeedLimitDegPerSec.calf = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
     leg->lastThetaThigh = g_thighNeutralAngle;
     leg->lastThetaServo = g_servoNeutralAngle;
     leg->desiredFoot.x = 0.0f;
@@ -824,11 +1148,29 @@ static void robotLegSetJointLimits(int legIndex, JointLimitsDeg limits) {
     robotLegCommandJointAngles(legIndex, leg->desiredJointAngles.thighDeg, leg->desiredJointAngles.calfDeg);
 }
 
+static void robotLegSetServoSpeedLimit(int legIndex, float thighDegPerSec, float calfDegPerSec) {
+    RobotLegState *leg = &g_legs[legIndex];
+    leg->servoSpeedLimitDegPerSec.thigh = thighDegPerSec;
+    leg->servoSpeedLimitDegPerSec.calf = calfDegPerSec;
+    smoothServoSetSpeedLimitDegPerSec(&leg->thigh, thighDegPerSec);
+    smoothServoSetSpeedLimitDegPerSec(&leg->calf, calfDegPerSec);
+}
+
 static void robotLegCommandServo(int legIndex, float thighServoDeg, float calfServoDeg) {
     RobotLegState *leg = &g_legs[legIndex];
     g_servosReleased = false;
     smoothServoCommandModelDeg(&leg->thigh, thighServoDeg);
     smoothServoCommandModelDeg(&leg->calf, calfServoDeg);
+    leg->desiredServoAngles.thigh = clampf(thighServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
+    leg->desiredServoAngles.calf = clampf(calfServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
+    updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, true);
+}
+
+static void robotLegCommandServoImmediate(int legIndex, float thighServoDeg, float calfServoDeg) {
+    RobotLegState *leg = &g_legs[legIndex];
+    g_servosReleased = false;
+    smoothServoCommandModelDegImmediate(&leg->thigh, thighServoDeg);
+    smoothServoCommandModelDegImmediate(&leg->calf, calfServoDeg);
     leg->desiredServoAngles.thigh = clampf(thighServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     leg->desiredServoAngles.calf = clampf(calfServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, true);
@@ -1023,6 +1365,8 @@ static void sendStateMessage(const char *typeName) {
     jsonPrintEscaped(g_activeAnimationName);
     Serial.print("\",\"servosReleased\":");
     Serial.print(g_servosReleased ? "true" : "false");
+    Serial.print(",\"servoUpdateRateHz\":");
+    Serial.print(g_pwmFrequencyHz, 3);
     Serial.print(",\"firmwareMs\":");
     Serial.print(millis());
     Serial.print(",\"legs\":{");
@@ -1044,6 +1388,10 @@ static void sendStateMessage(const char *typeName) {
         Serial.print((int)leg->thighChannel);
         Serial.print(",\"calf\":");
         Serial.print((int)leg->calfChannel);
+        Serial.print("},\"servoSpeedLimitDegPerSec\":{\"thigh\":");
+        Serial.print(leg->thigh.speedLimitDegPerSec, 3);
+        Serial.print(",\"calf\":");
+        Serial.print(leg->calf.speedLimitDegPerSec, 3);
         Serial.print("},\"jointLimits\":{\"thighDeg\":{\"min\":");
         Serial.print(leg->jointLimits.thighDeg.min, 3);
         Serial.print(",\"max\":");
@@ -1234,6 +1582,23 @@ static void processCommandLine(const char *line) {
         return;
     }
 
+    if (strcmp(type, "set_servo_update_rate_hz") == 0) {
+        float hz = DEFAULT_PCA9685_FREQUENCY_HZ;
+        if (!jsonExtractFloat(line, "hz", &hz)) {
+            sendError(seq, "set_servo_update_rate_hz missing hz");
+            return;
+        }
+
+        if (hz < MIN_PCA9685_FREQUENCY_HZ || hz > MAX_PCA9685_FREQUENCY_HZ) {
+            sendError(seq, "servo update rate must be between 40 and 200 hz");
+            return;
+        }
+
+        applyPca9685Frequency(hz);
+        sendAck(seq, "servo update rate updated");
+        return;
+    }
+
     if (strcmp(type, "release_servos") == 0) {
         releaseAllServos();
         sendAck(seq, "servos released");
@@ -1329,7 +1694,7 @@ static void processCommandLine(const char *line) {
         }
 
         setMode(MODE_DIRECT_SERVO_ANGLES);
-        robotLegCommandServo(legIndex, thighServoDeg, calfServoDeg);
+        robotLegCommandServoImmediate(legIndex, thighServoDeg, calfServoDeg);
         sendAck(seq, "servo target accepted");
         return;
     }
@@ -1389,6 +1754,35 @@ static void processCommandLine(const char *line) {
         limits.calfDeg.max = calfMaxDeg;
         robotLegSetJointLimits(legIndex, limits);
         sendAck(seq, "joint limits updated");
+        return;
+    }
+
+    if (strcmp(type, "set_leg_servo_speed_limit") == 0) {
+        char legId[24] = "";
+        float thighDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
+        float calfDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
+        if (
+            !jsonExtractString(line, "legId", legId, sizeof(legId)) ||
+            !jsonExtractFloat(line, "thighDegPerSec", &thighDegPerSec) ||
+            !jsonExtractFloat(line, "calfDegPerSec", &calfDegPerSec)
+        ) {
+            sendError(seq, "servo speed limit command missing fields");
+            return;
+        }
+
+        int legIndex = legIndexFromId(legId);
+        if (legIndex < 0) {
+            sendError(seq, "unknown leg");
+            return;
+        }
+
+        if (thighDegPerSec <= 0.0f || calfDegPerSec <= 0.0f) {
+            sendError(seq, "servo speed limits must be positive");
+            return;
+        }
+
+        robotLegSetServoSpeedLimit(legIndex, thighDegPerSec, calfDegPerSec);
+        sendAck(seq, "servo speed limit updated");
         return;
     }
 
@@ -1480,11 +1874,34 @@ static void processCommandLine(const char *line) {
 
 void setup() {
     Serial.begin(SERIAL_BAUD);
-    delay(300);
+    unsigned long serialStartMs = millis();
+    while (!Serial && (millis() - serialStartMs) < 5000) {
+        delay(10);
+    }
+    delay(100);
+
     Serial.println("Starting up");
+#if defined(ESP32)
+    Wire.setPins(I2C_SDA_PIN, I2C_SCL_PIN);
+#endif
     Wire.begin();
+
+    if (!i2cDevicePresent(PCA9685_ADDRESS)) {
+        Serial.print("PCA9685 not found on I2C at 0x");
+        Serial.println(PCA9685_ADDRESS, HEX);
+        Serial.println("Check SDA/SCL wiring, board power, and address pins.");
+        while (true) {
+            delay(1000);
+        }
+    }
+
     g_pwm.begin();
-    g_pwm.setPWMFreq(PCA9685_FREQUENCY_HZ);
+    applyPca9685Frequency(DEFAULT_PCA9685_FREQUENCY_HZ);
+    Serial.print("PCA9685 OK at 0x");
+    Serial.print(PCA9685_ADDRESS, HEX);
+    Serial.print(", PWM freq = ");
+    Serial.print(g_pwmFrequencyHz, 0);
+    Serial.println(" Hz");
     robotDogLegInitNeutral();
     animationReset(&g_animation);
 

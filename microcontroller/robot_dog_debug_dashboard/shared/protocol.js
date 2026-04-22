@@ -45,6 +45,24 @@ export function validateCommand(command) {
     }
   }
 
+  if (command.type === "set_leg_servo_speed_limit") {
+    if (typeof command.legId !== "string" || !isKnownLegId(command.legId)) {
+      throw new Error(`Unknown leg id: ${command.legId}`);
+    }
+
+    for (const key of ["thighDegPerSec", "calfDegPerSec"]) {
+      if (!Number.isFinite(command[key]) || command[key] <= 0) {
+        throw new Error(`${key} must be a positive number.`);
+      }
+    }
+  }
+
+  if (command.type === "set_servo_update_rate_hz") {
+    if (!Number.isFinite(command.hz) || command.hz < 40 || command.hz > 200) {
+      throw new Error("hz must be a number between 40 and 200.");
+    }
+  }
+
   if (command.type === "release_servos" && "legId" in command) {
     throw new Error("release_servos must not target a single leg.");
   }

@@ -4,7 +4,7 @@ import { WebSocketServer } from "ws";
 import { ReadlineParser, SerialPort } from "serialport";
 import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, buildLegPoseFromServoAngles, createNeutralCalibration, normalizeJointLimits } from "../shared/kinematics.js";
 import { createUploadFrames, validateClip } from "../shared/animation.js";
-import { DEFAULT_JOINT_LIMITS, DEFAULT_LEG_COMMAND, DEFAULT_SERVO_CHANNEL_MAP, LEG_IDS } from "../shared/robot-config.js";
+import { DEFAULT_JOINT_LIMITS, DEFAULT_LEG_COMMAND, DEFAULT_SERVO_CHANNEL_MAP, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, DEFAULT_SERVO_UPDATE_RATE_HZ, LEG_IDS } from "../shared/robot-config.js";
 import { parseWireMessage, toWireMessage, validateCommand } from "../shared/protocol.js";
 
 const PORT = Number(process.env.PORT || 8787);
@@ -54,6 +54,13 @@ function safeJson(response, statusCode, payload) {
   }
 }
 
+async function handleRealtimeCommand(rawCommand, wss) {
+  const command = validateCommand(rawCommand);
+  bridge.applyDerivedLocalState(command);
+  await bridge.send(command);
+  bridge.broadcast(wss, "status", bridge.status);
+}
+
 function createStatus() {
   const legs = {};
   for (const legId of LEG_IDS) {
@@ -65,6 +72,7 @@ function createStatus() {
       lastError: null,
       servoChannelMap: { ...DEFAULT_SERVO_CHANNEL_MAP[legId] },
       jointLimits: clone(DEFAULT_JOINT_LIMITS),
+      servoSpeedLimitDegPerSec: { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC },
     };
   }
 
@@ -72,6 +80,7 @@ function createStatus() {
     connected: false,
     connectedPort: null,
     mode: "idle",
+    servoUpdateRateHz: DEFAULT_SERVO_UPDATE_RATE_HZ,
     servosReleased: false,
     activeAnimation: null,
     lastAck: null,
@@ -224,6 +233,11 @@ class BridgeState {
       return;
     }
 
+    if (command.type === "set_servo_update_rate_hz") {
+      this.status.servoUpdateRateHz = command.hz;
+      return;
+    }
+
     if (!command.legId || !this.status.legs[command.legId]) {
       return;
     }
@@ -287,6 +301,13 @@ class BridgeState {
       });
     }
 
+    if (command.type === "set_leg_servo_speed_limit") {
+      this.status.legs[command.legId].servoSpeedLimitDegPerSec = {
+        thigh: command.thighDegPerSec,
+        calf: command.calfDegPerSec,
+      };
+    }
+
   }
 
   normalizeStatePayload(payload) {
@@ -295,6 +316,7 @@ class BridgeState {
     next.connectedPort = this.status.connectedPort;
     next.ports = this.status.ports;
     next.mode = payload.mode ?? next.mode;
+    next.servoUpdateRateHz = payload.servoUpdateRateHz ?? next.servoUpdateRateHz;
     next.servosReleased = payload.servosReleased ?? next.servosReleased;
     next.activeAnimation = payload.activeAnimation ?? next.activeAnimation;
     next.lastAck = payload.lastAck ?? next.lastAck;
@@ -311,6 +333,7 @@ class BridgeState {
           ...leg,
           servoChannelMap: leg.servoChannelMap ?? next.legs[legId].servoChannelMap,
           jointLimits: normalizeJointLimits(leg.jointLimits ?? next.legs[legId].jointLimits),
+          servoSpeedLimitDegPerSec: leg.servoSpeedLimitDegPerSec ?? next.legs[legId].servoSpeedLimitDegPerSec,
           desired: leg.desired?.foot
             ? buildLegPoseFromFoot(leg.desired.foot, calibration, {
                 startThetaThigh: next.legs[legId].desired?.geometry?.thetaThigh,
@@ -379,6 +402,19 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: "/telemetry" });
 
+app.use((request, response, next) => {
+  const origin = request.headers.origin ?? "*";
+  response.header("Access-Control-Allow-Origin", origin);
+  response.header("Vary", "Origin");
+  response.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  response.header("Access-Control-Allow-Headers", "Content-Type");
+  if (request.method === "OPTIONS") {
+    response.sendStatus(204);
+    return;
+  }
+  next();
+});
+
 app.use(express.json({ limit: "1mb" }));
 
 app.get("/api/status", async (_request, response) => {
@@ -393,7 +429,7 @@ app.get("/api/status", async (_request, response) => {
 app.post("/api/connect", async (request, response) => {
   try {
     const path = String(request.body.path || "");
-    const baudRate = Number(request.body.baudRate || 115200);
+    const baudRate = Number(request.body.baudRate || 460800);
     await bridge.connect({ path, baudRate }, wss);
     safeJson(response, 200, { ok: true, status: bridge.status });
   } catch (error) {
@@ -415,6 +451,7 @@ app.post("/api/command", async (request, response) => {
     const command = validateCommand(request.body.command);
     bridge.applyDerivedLocalState(command);
     await bridge.send(command);
+    bridge.broadcast(wss, "status", bridge.status);
     safeJson(response, 200, { ok: true });
   } catch (error) {
     safeJson(response, 500, { error: error.message });
@@ -461,6 +498,19 @@ app.post("/api/animations/:id/stop", async (request, response) => {
 wss.on("connection", (socket) => {
   socket.on("error", (error) => {
     logBridgeError("WebSocket connection error", error);
+  });
+  socket.on("message", async (data) => {
+    try {
+      const message = JSON.parse(String(data));
+      if (message?.type !== "command") {
+        return;
+      }
+      await handleRealtimeCommand(message.command, wss);
+    } catch (error) {
+      bridge.status.lastError = error.message;
+      logBridgeError("WebSocket command failed", error);
+      safeSendWs(socket, JSON.stringify({ type: "error", message: error.message }));
+    }
   });
   safeSendWs(socket, JSON.stringify({ type: "status", payload: bridge.status }));
 });
