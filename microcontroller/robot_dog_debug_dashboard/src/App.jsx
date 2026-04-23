@@ -248,7 +248,7 @@ function LegDetail({ legId, legState, title, highlight = false, interactive = fa
           return <circle key={key} cx={point.x} cy={point.y} r="5" fill="#121212" />;
         })}
       </svg>
-      {interactive ? <p className="muted-copy">Drag the blue foot target to stream live XY commands to the selected leg.</p> : null}
+      {interactive ? <p className="muted-copy">Drag the blue foot target to solve in the dashboard and stream live servo commands to the selected leg.</p> : null}
       <div className="stats-grid">
         <div>
           <label>Thigh joint</label>
@@ -446,6 +446,7 @@ function ControlPanel({
             Y
             <input type="number" value={legDraft.foot.y} onChange={(event) => updateSection("foot", "y", event.target.value)} />
           </label>
+          <div className="map-readout">Foot targets are solved in the dashboard and sent as raw servo angles.</div>
           <button onClick={() => sendFoot(selectedLegId, legDraft.foot)}>Send foot target</button>
         </section>
 
@@ -459,6 +460,7 @@ function ControlPanel({
             Calf deg
             <input type="number" value={legDraft.jointAnglesDeg.calf} onChange={(event) => updateSection("jointAnglesDeg", "calf", event.target.value)} />
           </label>
+          <div className="map-readout">Joint targets are solved in the dashboard and sent as raw servo angles.</div>
           <button onClick={() => sendJoint(selectedLegId, legDraft.jointAnglesDeg)}>Send joint target</button>
         </section>
 
@@ -881,7 +883,6 @@ export default function App() {
       for (const legId of LEG_IDS) {
         next[legId].servoChannelMap = payload.legs?.[legId]?.servoChannelMap ?? next[legId].servoChannelMap;
         next[legId].jointLimits = payload.legs?.[legId]?.jointLimits ?? next[legId].jointLimits;
-        next[legId].servoSpeedLimitDegPerSec = payload.legs?.[legId]?.servoSpeedLimitDegPerSec ?? next[legId].servoSpeedLimitDegPerSec;
       }
       return next;
     });
@@ -905,7 +906,6 @@ export default function App() {
             for (const legId of LEG_IDS) {
               next[legId].servoChannelMap = message.payload.legs?.[legId]?.servoChannelMap ?? next[legId].servoChannelMap;
               next[legId].jointLimits = message.payload.legs?.[legId]?.jointLimits ?? next[legId].jointLimits;
-              next[legId].servoSpeedLimitDegPerSec = message.payload.legs?.[legId]?.servoSpeedLimitDegPerSec ?? next[legId].servoSpeedLimitDegPerSec;
             }
             return next;
           });
@@ -976,7 +976,7 @@ export default function App() {
     desiredPoseRef.current[legId] = nextPose;
     setRobotState((current) =>
       mergeState(current, {
-        mode: "direct_foot_xy",
+        mode: "direct_servo_angles",
         servosReleased: false,
         legs: {
           [legId]: {
@@ -991,6 +991,8 @@ export default function App() {
       [legId]: {
         ...current[legId],
         foot: { ...(nextPose?.foot ?? foot) },
+        jointAnglesDeg: { ...(nextPose?.jointAnglesDeg ?? current[legId].jointAnglesDeg) },
+        servoAnglesDeg: { ...(nextPose?.servoAnglesDeg ?? current[legId].servoAnglesDeg) },
       },
     }));
     return nextPose ?? pose;
@@ -1041,21 +1043,22 @@ export default function App() {
     const queued = dragQueuedCommandRef.current;
     dragQueuedCommandRef.current = null;
     lastDragSentAtRef.current = performance.now();
+    const command = {
+      type: "set_leg_servo_angles",
+      legId: queued.legId,
+      thighServoDeg: queued.servoAnglesDeg.thigh,
+      calfServoDeg: queued.servoAnglesDeg.calf,
+    };
 
     const socket = telemetrySocketRef.current;
     if (socket?.readyState === WebSocket.OPEN) {
       try {
-        socket.send(
-          JSON.stringify({
-            type: "command",
-            command: { type: "set_leg_foot_xy", legId: queued.legId, x: queued.foot.x, y: queued.foot.y },
-          }),
-        );
+        socket.send(JSON.stringify({ type: "command", command }));
       } catch (error) {
         setRobotState((current) => ({ ...current, lastError: error.message }));
       }
     } else {
-      sendCommand({ type: "set_leg_foot_xy", legId: queued.legId, x: queued.foot.x, y: queued.foot.y }).catch((error) => {
+      sendCommand(command).catch((error) => {
         setRobotState((current) => ({ ...current, lastError: error.message }));
       });
     }
@@ -1067,7 +1070,13 @@ export default function App() {
 
   function queueLiveFootTarget(legId, foot) {
     const pose = applyDesiredFootLocally(legId, foot);
-    dragQueuedCommandRef.current = { legId, foot: pose?.foot ?? foot };
+    dragQueuedCommandRef.current = {
+      legId,
+      servoAnglesDeg: {
+        thigh: pose?.servoAnglesDeg?.thigh ?? desiredPoseRef.current[legId]?.servoAnglesDeg?.thigh ?? 90,
+        calf: pose?.servoAnglesDeg?.calf ?? desiredPoseRef.current[legId]?.servoAnglesDeg?.calf ?? 90,
+      },
+    };
     scheduleQueuedDragFootCommand();
   }
 
@@ -1169,7 +1178,7 @@ export default function App() {
       setRobotState((current) => ({ ...current, lastError: "Select a serial port before connecting." }));
       return;
     }
-    await postJson("/api/connect", { path: selectedPort, baudRate: 460800 });
+    await postJson("/api/connect", { path: selectedPort, baudRate: 921600 });
     await fetchStatus();
   }
 
@@ -1180,8 +1189,13 @@ export default function App() {
 
   async function sendFoot(legId, foot) {
     const pose = applyDesiredFootLocally(legId, foot);
-    const nextFoot = pose?.foot ?? foot;
-    await sendCommand({ type: "set_leg_foot_xy", legId, x: nextFoot.x, y: nextFoot.y });
+    const nextServoAngles = pose?.servoAnglesDeg ?? desiredPoseRef.current[legId]?.servoAnglesDeg ?? { thigh: 90, calf: 90 };
+    await sendRealtimeCommand({
+      type: "set_leg_servo_angles",
+      legId,
+      thighServoDeg: nextServoAngles.thigh,
+      calfServoDeg: nextServoAngles.calf,
+    });
   }
 
   async function sendJoint(legId, jointAnglesDeg) {
@@ -1193,7 +1207,7 @@ export default function App() {
     desiredPoseRef.current[legId] = pose;
     setRobotState((current) =>
       mergeState(current, {
-        mode: "direct_joint_angles",
+        mode: "direct_servo_angles",
         servosReleased: false,
         legs: {
           [legId]: {
@@ -1203,7 +1217,21 @@ export default function App() {
         },
       }),
     );
-    await sendCommand({ type: "set_leg_joint_angles", legId, thighDeg: jointAnglesDeg.thigh, calfDeg: jointAnglesDeg.calf });
+    setDraftCommand((current) => ({
+      ...current,
+      [legId]: {
+        ...current[legId],
+        jointAnglesDeg: { ...jointAnglesDeg },
+        foot: { ...(pose?.foot ?? current[legId].foot) },
+        servoAnglesDeg: { ...(pose?.servoAnglesDeg ?? current[legId].servoAnglesDeg) },
+      },
+    }));
+    await sendRealtimeCommand({
+      type: "set_leg_servo_angles",
+      legId,
+      thighServoDeg: pose.servoAnglesDeg.thigh,
+      calfServoDeg: pose.servoAnglesDeg.calf,
+    });
   }
 
   async function sendServo(legId, servoAnglesDeg) {
@@ -1269,6 +1297,13 @@ export default function App() {
       thigh: Math.max(1, numberValue(servoSpeedLimitDegPerSec.thigh, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC.thigh)),
       calf: Math.max(1, numberValue(servoSpeedLimitDegPerSec.calf, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC.calf)),
     };
+    setDraftCommand((current) => ({
+      ...current,
+      [legId]: {
+        ...current[legId],
+        servoSpeedLimitDegPerSec: normalized,
+      },
+    }));
     setRobotState((current) =>
       mergeState(current, {
         legs: {

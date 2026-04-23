@@ -13,7 +13,7 @@
 
 #define NUM_LEGS 4
 #define INVALID_CHANNEL 255
-#define SERIAL_BAUD 460800
+#define SERIAL_BAUD 921600
 #define SERIAL_BUFFER_SIZE 320
 #define MAX_NAME_LEN 32
 #define MAX_ERROR_LEN 96
@@ -28,8 +28,10 @@ static const float MOTION_TIME_SCALE = 1.15f;
 static const float DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = 180.0f;
 static const float THIGH_CENTER_DEG = 90.0f;
 static const float CALF_CENTER_DEG = 90.0f;
-static const float THIGH_SIGN = 1.0f;
-static const float CALF_SIGN = 1.0f;
+static const float LEFT_THIGH_SIGN = 1.0f;
+static const float LEFT_CALF_SIGN = 1.0f;
+static const float RIGHT_THIGH_SIGN = -1.0f;
+static const float RIGHT_CALF_SIGN = -1.0f;
 static const float SERVO_MIN_DEG = 0.0f;
 static const float SERVO_MAX_DEG = 180.0f;
 static const float DEFAULT_THIGH_MIN_DEG = -145.0f;
@@ -105,6 +107,14 @@ typedef struct {
 } JointServoCandidate;
 
 typedef struct {
+    uint32_t count;
+    uint32_t successCount;
+    uint32_t lastUs;
+    uint32_t maxUs;
+    double totalUs;
+} SolverTimingStats;
+
+typedef struct {
     float thighDeg;
     float calfDeg;
 } JointAnglesDeg;
@@ -128,6 +138,8 @@ typedef struct {
     const char *id;
     uint8_t thighChannel;
     uint8_t calfChannel;
+    float thighSign;
+    float calfSign;
 } LegHardwareConfig;
 
 typedef struct {
@@ -209,10 +221,10 @@ static const Point2f SERVO_PIVOT = {-20.0f, -22.0f};
 static const Point2f FOOT_ORIGIN_OFFSET = {40.0f, -140.0f};
 
 static const LegHardwareConfig LEG_CONFIGS[NUM_LEGS] = {
-    {"front_left", 0, 1},
-    {"front_right", 2, 3},
-    {"rear_left", 4, 5},
-    {"rear_right", 6, 7}
+    {"front_left", 0, 1, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
+    {"front_right", 2, 3, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN},
+    {"rear_left", 4, 5, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
+    {"rear_right", 6, 7, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN}
 };
 
 static Adafruit_PWMServoDriver g_pwm = Adafruit_PWMServoDriver(PCA9685_ADDRESS);
@@ -232,6 +244,8 @@ static uint32_t g_lastBuiltinStatusMs = 0;
 static uint32_t g_lastAnimationStatusMs = 0;
 static bool g_servosReleased = false;
 static float g_pwmFrequencyHz = DEFAULT_PCA9685_FREQUENCY_HZ;
+static SolverTimingStats g_footSolveStats;
+static SolverTimingStats g_jointSolveStats;
 
 static bool i2cDevicePresent(uint8_t addr) {
     Wire.beginTransmission(addr);
@@ -351,6 +365,29 @@ static bool jointServoCandidateBetter(const JointServoCandidate *candidate, cons
         return false;
     }
     return candidate->continuityPenalty < best->continuityPenalty;
+}
+
+static void resetSolverTimingStats(SolverTimingStats *stats) {
+    memset(stats, 0, sizeof(*stats));
+}
+
+static void recordSolverTiming(SolverTimingStats *stats, uint32_t elapsedUs, bool success) {
+    stats->count += 1;
+    if (success) {
+        stats->successCount += 1;
+    }
+    stats->lastUs = elapsedUs;
+    if (elapsedUs > stats->maxUs) {
+        stats->maxUs = elapsedUs;
+    }
+    stats->totalUs += (double)elapsedUs;
+}
+
+static double solverTimingAverageUs(const SolverTimingStats *stats) {
+    if (stats->count == 0) {
+        return 0.0;
+    }
+    return stats->totalUs / (double)stats->count;
 }
 
 static JointLimitsDeg normalizeJointLimits(JointLimitsDeg limits) {
@@ -752,6 +789,78 @@ static void solveServoForJointAngles(float thetaThigh, float targetThetaCalf, fl
     *outSuccess = best.geometry.valid && isfinite(best.error) && (best.error < degToRad(3.0f));
 }
 
+static void runSolverBenchmark(uint32_t iterations, SolverTimingStats *footStats, SolverTimingStats *jointStats) {
+    static const Point2f footTargets[] = {
+        {-60.0f, 0.0f},
+        {-30.0f, 0.0f},
+        {0.0f, 0.0f},
+        {20.0f, -8.0f},
+        {30.0f, 0.0f}
+    };
+    static const JointAnglesDeg jointTargets[] = {
+        {-42.0f, -154.0f},
+        {-30.0f, -140.0f},
+        {-18.0f, -120.0f},
+        {-55.0f, -163.0f},
+        {-48.0f, -150.0f}
+    };
+
+    RobotLegState *leg = &g_legs[0];
+    float thetaThigh = leg->lastThetaThigh;
+    float thetaServo = leg->lastThetaServo;
+
+    resetSolverTimingStats(footStats);
+    resetSolverTimingStats(jointStats);
+
+    for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+        for (size_t targetIndex = 0; targetIndex < (sizeof(footTargets) / sizeof(footTargets[0])); ++targetIndex) {
+            uint32_t startedUs = micros();
+            LegIKResult ik = robotDogLegIK(
+                footTargets[targetIndex].x,
+                footTargets[targetIndex].y,
+                thetaThigh,
+                thetaServo,
+                &leg->jointLimits
+            );
+            uint32_t elapsedUs = micros() - startedUs;
+            recordSolverTiming(footStats, elapsedUs, ik.hasSolution);
+            if (ik.hasSolution) {
+                thetaThigh = ik.thetaThigh;
+                thetaServo = ik.thetaServo;
+            }
+        }
+    }
+
+    thetaThigh = leg->lastThetaThigh;
+    thetaServo = leg->lastThetaServo;
+
+    for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
+        for (size_t targetIndex = 0; targetIndex < (sizeof(jointTargets) / sizeof(jointTargets[0])); ++targetIndex) {
+            float solvedThetaServo = thetaServo;
+            float jointError = 0.0f;
+            bool hasSolution = false;
+            bool success = false;
+            uint32_t startedUs = micros();
+            solveServoForJointAngles(
+                degToRad(jointTargets[targetIndex].thighDeg),
+                degToRad(jointTargets[targetIndex].calfDeg),
+                thetaServo,
+                &leg->jointLimits,
+                &solvedThetaServo,
+                &jointError,
+                &hasSolution,
+                &success
+            );
+            uint32_t elapsedUs = micros() - startedUs;
+            recordSolverTiming(jointStats, elapsedUs, hasSolution && success);
+            if (hasSolution) {
+                thetaThigh = degToRad(jointTargets[targetIndex].thighDeg);
+                thetaServo = solvedThetaServo;
+            }
+        }
+    }
+}
+
 static void robotDogLegInitNeutral(void) {
     g_thighNeutralAngle = NEUTRAL_THIGH_THETA;
     g_servoNeutralAngle = NEUTRAL_SERVO_THETA;
@@ -886,19 +995,7 @@ static void smoothServoBegin(SmoothServo *s, uint8_t channel, float initialDeg, 
 }
 
 static float smoothServoReadEstimate(const SmoothServo *s) {
-    if (!s->moving) {
-        return s->estimatedDeg;
-    }
-
-    uint32_t nowUs = micros();
-    uint32_t elapsedUs = nowUs - s->moveStartUs;
-    if (elapsedUs >= s->moveDurationUs) {
-        return s->targetDeg;
-    }
-
-    float t = (float)elapsedUs / (float)s->moveDurationUs;
-    float eased = easeInOutSmoothStep(t);
-    return lerpf(s->startDeg, s->targetDeg, eased);
+    return s->estimatedDeg;
 }
 
 static void smoothServoCommandRaw(SmoothServo *s, float rawTargetDeg) {
@@ -906,38 +1003,13 @@ static void smoothServoCommandRaw(SmoothServo *s, float rawTargetDeg) {
         s->attached = true;
     }
     rawTargetDeg = clampf(rawTargetDeg, s->minDeg, s->maxDeg);
-    float currentEstimate = smoothServoReadEstimate(s);
+    float currentEstimate = s->estimatedDeg;
     s->estimatedDeg = currentEstimate;
     s->startDeg = currentEstimate;
     s->targetDeg = rawTargetDeg;
     s->moveStartUs = micros();
-
-    float delta = fabsf(s->targetDeg - s->startDeg);
-    float durationSec = 0.0f;
-    float effectiveMaxSpeed = smoothServoEffectiveMaxSpeedDegPerSec(s);
-    if (effectiveMaxSpeed > 0.0f) {
-        durationSec = delta / effectiveMaxSpeed;
-    }
-    durationSec *= MOTION_TIME_SCALE;
-
-    if (delta > 0.1f && durationSec < 0.04f) {
-        durationSec = 0.04f;
-    }
-
-    if (delta <= 0.01f) {
-        s->moveDurationUs = 1;
-        s->moving = false;
-        s->estimatedDeg = s->targetDeg;
-        smoothServoWriteEstimate(s);
-        return;
-    }
-
-    s->moveDurationUs = (uint32_t)(durationSec * 1000000.0f);
-    if (s->moveDurationUs < 1000) {
-        s->moveDurationUs = 1000;
-    }
-
-    s->moving = true;
+    s->moveDurationUs = 1;
+    s->moving = fabsf(s->targetDeg - s->estimatedDeg) > 0.01f;
     smoothServoWriteEstimate(s);
 }
 
@@ -971,45 +1043,38 @@ static void smoothServoSetSpeedLimitDegPerSec(SmoothServo *s, float speedLimitDe
         return;
     }
 
-    float currentEstimate = smoothServoReadEstimate(s);
+    float currentEstimate = s->estimatedDeg;
     s->estimatedDeg = currentEstimate;
     s->startDeg = currentEstimate;
     s->moveStartUs = micros();
-
-    float delta = fabsf(s->targetDeg - s->startDeg);
-    if (delta <= 0.01f) {
-        s->moveDurationUs = 1;
-        s->moving = false;
-        s->estimatedDeg = s->targetDeg;
-        smoothServoWriteEstimate(s);
-        return;
-    }
-
-    float durationSec = delta / smoothServoEffectiveMaxSpeedDegPerSec(s);
-    durationSec *= MOTION_TIME_SCALE;
-    if (durationSec < 0.04f) {
-        durationSec = 0.04f;
-    }
-
-    s->moveDurationUs = (uint32_t)(durationSec * 1000000.0f);
-    if (s->moveDurationUs < 1000) {
-        s->moveDurationUs = 1000;
-    }
-    s->moving = true;
+    s->moveDurationUs = 1;
+    s->moving = fabsf(s->targetDeg - s->estimatedDeg) > 0.01f;
     smoothServoWriteEstimate(s);
 }
 
 static void smoothServoUpdate(SmoothServo *s) {
-    float est = smoothServoReadEstimate(s);
-    s->estimatedDeg = est;
+    uint32_t nowUs = micros();
 
     if (s->moving) {
-        uint32_t nowUs = micros();
-        if ((nowUs - s->moveStartUs) >= s->moveDurationUs) {
-            s->estimatedDeg = s->targetDeg;
-            s->moving = false;
+        uint32_t elapsedUs = nowUs - s->moveStartUs;
+        if (elapsedUs > 0) {
+            float effectiveMaxSpeed = smoothServoEffectiveMaxSpeedDegPerSec(s) / MOTION_TIME_SCALE;
+            float maxDelta = effectiveMaxSpeed * ((float)elapsedUs / 1000000.0f);
+            float remaining = s->targetDeg - s->estimatedDeg;
+            float step = clampf(remaining, -maxDelta, maxDelta);
+
+            if (fabsf(remaining) <= fmaxf(0.01f, maxDelta)) {
+                s->estimatedDeg = s->targetDeg;
+                s->moving = false;
+            } else {
+                s->estimatedDeg = clampf(s->estimatedDeg + step, s->minDeg, s->maxDeg);
+            }
         }
     }
+
+    s->startDeg = s->estimatedDeg;
+    s->moveStartUs = nowUs;
+    s->moveDurationUs = 1;
     smoothServoWriteRaw(s, s->estimatedDeg);
 }
 
@@ -1088,8 +1153,8 @@ static void setLegError(RobotLegState *leg, const char *message) {
 }
 
 static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config) {
-    smoothServoBegin(&leg->thigh, config->thighChannel, THIGH_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, THIGH_CENTER_DEG, THIGH_SIGN, SERVO_SUPPLY_VOLTS);
-    smoothServoBegin(&leg->calf, config->calfChannel, CALF_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, CALF_CENTER_DEG, CALF_SIGN, SERVO_SUPPLY_VOLTS);
+    smoothServoBegin(&leg->thigh, config->thighChannel, THIGH_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, THIGH_CENTER_DEG, config->thighSign, SERVO_SUPPLY_VOLTS);
+    smoothServoBegin(&leg->calf, config->calfChannel, CALF_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, CALF_CENTER_DEG, config->calfSign, SERVO_SUPPLY_VOLTS);
     leg->thighChannel = config->thighChannel;
     leg->calfChannel = config->calfChannel;
     leg->jointLimits = defaultJointLimits();
@@ -1178,7 +1243,9 @@ static void robotLegCommandServoImmediate(int legIndex, float thighServoDeg, flo
 
 static bool robotLegCommandFoot(int legIndex, float footX, float footY) {
     RobotLegState *leg = &g_legs[legIndex];
+    uint32_t startedUs = micros();
     LegIKResult ik = robotDogLegIK(footX, footY, leg->lastThetaThigh, leg->lastThetaServo, &leg->jointLimits);
+    recordSolverTiming(&g_footSolveStats, micros() - startedUs, ik.hasSolution && ik.success);
     if (!ik.hasSolution) {
         setLegError(leg, "IK failed for foot target");
         return false;
@@ -1203,8 +1270,10 @@ static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfD
     float jointError;
     bool hasSolution;
     bool success;
+    uint32_t startedUs = micros();
 
     solveServoForJointAngles(thetaThigh, degToRad(limitedAngles.calfDeg), leg->lastThetaServo, &leg->jointLimits, &thetaServo, &jointError, &hasSolution, &success);
+    recordSolverTiming(&g_jointSolveStats, micros() - startedUs, hasSolution && success);
     if (!hasSolution) {
         setLegError(leg, "Joint angle solve failed");
         return false;
@@ -1355,6 +1424,34 @@ static void sendAnimationProgress(void) {
     Serial.println("}");
 }
 
+static void sendSolverTimingStatsJson(const char *name, const SolverTimingStats *stats) {
+    Serial.print("\"");
+    Serial.print(name);
+    Serial.print("\":{\"count\":");
+    Serial.print(stats->count);
+    Serial.print(",\"successCount\":");
+    Serial.print(stats->successCount);
+    Serial.print(",\"lastUs\":");
+    Serial.print(stats->lastUs);
+    Serial.print(",\"maxUs\":");
+    Serial.print(stats->maxUs);
+    Serial.print(",\"avgUs\":");
+    Serial.print(solverTimingAverageUs(stats), 3);
+    Serial.print("}");
+}
+
+static void sendBenchmarkResult(int seq, uint32_t iterations, const SolverTimingStats *footStats, const SolverTimingStats *jointStats) {
+    Serial.print("{\"type\":\"benchmark_result\",\"seq\":");
+    Serial.print(seq);
+    Serial.print(",\"iterations\":");
+    Serial.print(iterations);
+    Serial.print(",\"results\":{");
+    sendSolverTimingStatsJson("foot", footStats);
+    Serial.print(",");
+    sendSolverTimingStatsJson("joint", jointStats);
+    Serial.println("}}");
+}
+
 static void sendStateMessage(const char *typeName) {
     Serial.print("{\"type\":\"");
     Serial.print(typeName);
@@ -1401,28 +1498,12 @@ static void sendStateMessage(const char *typeName) {
         Serial.print(",\"max\":");
         Serial.print(leg->jointLimits.calfDeg.max, 3);
         Serial.print("}},\"desired\":{");
-        Serial.print("\"foot\":{\"x\":");
-        Serial.print(leg->desiredFoot.x, 3);
-        Serial.print(",\"y\":");
-        Serial.print(leg->desiredFoot.y, 3);
-        Serial.print("},\"jointAnglesDeg\":{\"thigh\":");
-        Serial.print(leg->desiredJointAngles.thighDeg, 3);
-        Serial.print(",\"calf\":");
-        Serial.print(leg->desiredJointAngles.calfDeg, 3);
-        Serial.print("},\"servoAnglesDeg\":{\"thigh\":");
+        Serial.print("\"servoAnglesDeg\":{\"thigh\":");
         Serial.print(leg->desiredServoAngles.thigh, 3);
         Serial.print(",\"calf\":");
         Serial.print(leg->desiredServoAngles.calf, 3);
         Serial.print("}},\"current\":{");
-        Serial.print("\"foot\":{\"x\":");
-        Serial.print(leg->currentFoot.x, 3);
-        Serial.print(",\"y\":");
-        Serial.print(leg->currentFoot.y, 3);
-        Serial.print("},\"jointAnglesDeg\":{\"thigh\":");
-        Serial.print(leg->currentJointAngles.thighDeg, 3);
-        Serial.print(",\"calf\":");
-        Serial.print(leg->currentJointAngles.calfDeg, 3);
-        Serial.print("},\"servoAnglesDeg\":{\"thigh\":");
+        Serial.print("\"servoAnglesDeg\":{\"thigh\":");
         Serial.print(leg->currentServoAngles.thigh, 3);
         Serial.print(",\"calf\":");
         Serial.print(leg->currentServoAngles.calf, 3);
@@ -1605,6 +1686,22 @@ static void processCommandLine(const char *line) {
         return;
     }
 
+    if (strcmp(type, "benchmark_solver") == 0) {
+        int iterations = 200;
+        jsonExtractInt(line, "iterations", &iterations);
+        if (iterations <= 0 || iterations > 2000) {
+            sendError(seq, "benchmark iterations must be between 1 and 2000");
+            return;
+        }
+
+        SolverTimingStats footStats;
+        SolverTimingStats jointStats;
+        runSolverBenchmark((uint32_t)iterations, &footStats, &jointStats);
+        sendBenchmarkResult(seq, (uint32_t)iterations, &footStats, &jointStats);
+        sendAck(seq, "solver benchmark complete");
+        return;
+    }
+
     if (strcmp(type, "run_builtin") == 0) {
         char name[MAX_NAME_LEN] = "";
         if (!jsonExtractString(line, "name", name, sizeof(name))) {
@@ -1694,7 +1791,7 @@ static void processCommandLine(const char *line) {
         }
 
         setMode(MODE_DIRECT_SERVO_ANGLES);
-        robotLegCommandServoImmediate(legIndex, thighServoDeg, calfServoDeg);
+        robotLegCommandServo(legIndex, thighServoDeg, calfServoDeg);
         sendAck(seq, "servo target accepted");
         return;
     }

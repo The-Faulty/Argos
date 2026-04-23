@@ -429,7 +429,7 @@ app.get("/api/status", async (_request, response) => {
 app.post("/api/connect", async (request, response) => {
   try {
     const path = String(request.body.path || "");
-    const baudRate = Number(request.body.baudRate || 460800);
+    const baudRate = Number(request.body.baudRate || 921600);
     await bridge.connect({ path, baudRate }, wss);
     safeJson(response, 200, { ok: true, status: bridge.status });
   } catch (error) {

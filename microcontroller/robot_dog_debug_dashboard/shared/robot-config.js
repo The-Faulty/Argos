@@ -24,7 +24,7 @@ export const LEG_DRAWING = {
   scale: 1.4,
   stageWidth: 420,
   stageHeight: 420,
-  offset: { x: 210, y: 170 }
+  offset: { x: 210, y: 145 }
 };
 
 export const LEG_GEOMETRY = {
