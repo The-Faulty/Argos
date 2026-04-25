@@ -435,30 +435,40 @@ static void init_servos(void) {
 }
 
 static void init_gas_adc(void) {
-    adc_oneshot_unit_init_cfg_t init_cfg = {
-        .unit_id = ADC_UNIT_1,
-    };
+    // Discover unit + channel from the configured GPIO so the same code works
+    // on ESP32 (where GPIO4 is ADC2_CH0) and on ESP32-C6 (where GPIO0..6 are
+    // ADC1_CH0..6). On plain ESP32, ADC2 is muxed with WiFi — but Argos uses
+    // UART transport, so ADC2 is fine to use here.
+    adc_unit_t    discovered_unit;
+    adc_channel_t discovered_channel;
+    if (adc_oneshot_io_to_channel(CONFIG_ARGOS_GAS_ADC_GPIO,
+                                  &discovered_unit,
+                                  &discovered_channel) != ESP_OK) {
+        ESP_LOGE("GAS", "GPIO %d is not an ADC pin", CONFIG_ARGOS_GAS_ADC_GPIO);
+        return;
+    }
+    s_adc_channel = discovered_channel;
+
+    adc_oneshot_unit_init_cfg_t init_cfg = { .unit_id = discovered_unit };
     if (adc_oneshot_new_unit(&init_cfg, &s_adc_handle) != ESP_OK) {
         ESP_LOGE("GAS", "adc_oneshot_new_unit failed");
         return;
     }
 
-    // ESP32-C6 ADC1 maps GPIO0..GPIO6 to channel 0..6 directly.
-    s_adc_channel = (adc_channel_t)CONFIG_ARGOS_GAS_ADC_GPIO;
-
     adc_oneshot_chan_cfg_t cfg = {
-        .atten    = ADC_ATTEN_DB_11,    // ~0..3.1 V usable
+        .atten    = ADC_ATTEN_DB_12,    // ~0..3.1 V usable (DB_11 is deprecated)
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
     adc_oneshot_config_channel(s_adc_handle, s_adc_channel, &cfg);
 
-    adc_cali_curve_fitting_config_t cali_cfg = {
-        .unit_id  = ADC_UNIT_1,
-        .chan     = s_adc_channel,
-        .atten    = ADC_ATTEN_DB_11,
+    // Plain ESP32 (Xtensa) only supports line-fitting calibration; the
+    // curve-fitting scheme is for RISC-V parts (C3/C6/H2/etc.).
+    adc_cali_line_fitting_config_t cali_cfg = {
+        .unit_id  = discovered_unit,
+        .atten    = ADC_ATTEN_DB_12,
         .bitwidth = ADC_BITWIDTH_DEFAULT,
     };
-    if (adc_cali_create_scheme_curve_fitting(&cali_cfg, &s_adc_cali) != ESP_OK) {
+    if (adc_cali_create_scheme_line_fitting(&cali_cfg, &s_adc_cali) != ESP_OK) {
         ESP_LOGW("GAS", "ADC calibration unavailable, using linear fallback");
         s_adc_cali = NULL;
     }
@@ -503,14 +513,10 @@ static void micro_ros_task(void *arg) {
     rcl_init_options_t init_options = rcl_get_zero_initialized_init_options();
     RCCHECK(rcl_init_options_init(&init_options, allocator));
 
-#ifdef CONFIG_MICRO_ROS_ESP_XRCE_DDS_MIDDLEWARE
-    rmw_init_options_t *rmw_options = rcl_init_options_get_rmw_init_options(&init_options);
-    RCCHECK(rmw_uros_options_set_udp_address(CONFIG_MICRO_ROS_AGENT_IP,
-                                             CONFIG_MICRO_ROS_AGENT_PORT,
-                                             rmw_options));
-    ESP_LOGI("UROS", "ping agent…");
-    rmw_uros_ping_agent(1000, 3);
-#endif
+    // Transport selection happens at component-config time (UART for the
+    // HUZZAH32 build via CONFIG_RMW_UXRCE_TRANSPORT_CUSTOM=y); no runtime
+    // address setup is needed. The earlier WiFi/UDP setup block was removed
+    // when we moved off the C6's ESP-NETIF transport.
 
     rcl_ret_t rc = rclc_support_init_with_options(&support, 0, NULL, &init_options, &allocator);
     if (rc != RCL_RET_OK) {
@@ -579,12 +585,12 @@ static void micro_ros_task(void *arg) {
     rcl_timer_t control_timer, gas_timer;
     const uint32_t control_period_ms = 1000U / CONFIG_ARGOS_IMU_RATE_HZ;
     const uint32_t gas_period_ms     = 1000U / CONFIG_ARGOS_GAS_RATE_HZ;
-    RCCHECK(rclc_timer_init_default2(&control_timer, &support,
-                                     RCL_MS_TO_NS(control_period_ms),
-                                     control_timer_callback, true));
-    RCCHECK(rclc_timer_init_default2(&gas_timer, &support,
-                                     RCL_MS_TO_NS(gas_period_ms),
-                                     gas_timer_callback, true));
+    RCCHECK(rclc_timer_init_default(&control_timer, &support,
+                                    RCL_MS_TO_NS(control_period_ms),
+                                    control_timer_callback));
+    RCCHECK(rclc_timer_init_default(&gas_timer, &support,
+                                    RCL_MS_TO_NS(gas_period_ms),
+                                    gas_timer_callback));
 
     // 3 subs + 2 timers = 5 handles
     rclc_executor_t executor;
@@ -603,15 +609,16 @@ static void micro_ros_task(void *arg) {
         usleep(1000);
     }
 
-    // (unreachable but tidy) — reverse creation order
-    rcl_subscription_fini(&s_pwm_rate_sub, &node);
-    rcl_subscription_fini(&s_release_sub, &node);
-    rcl_subscription_fini(&joint_cmd_sub, &node);
-    rcl_publisher_fini(&imu_pub, &node);
-    rcl_publisher_fini(&mag_pub, &node);
-    rcl_publisher_fini(&joint_states_pub, &node);
-    rcl_publisher_fini(&gas_pub, &node);
-    rcl_node_fini(&node);
+    // (unreachable but tidy) — reverse creation order. (void) casts silence
+    // -Werror=unused-result on the rcl_*_fini return codes.
+    (void)rcl_subscription_fini(&s_pwm_rate_sub, &node);
+    (void)rcl_subscription_fini(&s_release_sub, &node);
+    (void)rcl_subscription_fini(&joint_cmd_sub, &node);
+    (void)rcl_publisher_fini(&imu_pub, &node);
+    (void)rcl_publisher_fini(&mag_pub, &node);
+    (void)rcl_publisher_fini(&joint_states_pub, &node);
+    (void)rcl_publisher_fini(&gas_pub, &node);
+    (void)rcl_node_fini(&node);
     vTaskDelete(NULL);
 }
 
