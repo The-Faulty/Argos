@@ -34,6 +34,7 @@
 #include <sensor_msgs/msg/imu.h>
 #include <sensor_msgs/msg/joint_state.h>
 #include <sensor_msgs/msg/magnetic_field.h>
+#include <std_msgs/msg/bool.h>
 #include <std_msgs/msg/float32.h>
 #include <uros_network_interfaces.h>
 
@@ -151,12 +152,21 @@ static rcl_publisher_t mag_pub;
 static rcl_publisher_t joint_states_pub;
 static rcl_publisher_t gas_pub;
 static rcl_subscription_t joint_cmd_sub;
+static rcl_subscription_t s_release_sub;
+static rcl_subscription_t s_pwm_rate_sub;
 
 static sensor_msgs__msg__Imu              imu_msg;
 static sensor_msgs__msg__MagneticField    mag_msg;
 static sensor_msgs__msg__JointState       joint_states_msg;
 static sensor_msgs__msg__JointState       joint_cmd_msg;
 static std_msgs__msg__Float32             gas_msg;
+static std_msgs__msg__Bool                s_release_msg;
+static std_msgs__msg__Float32             s_pwm_rate_msg;
+
+// Bounds for /dashboard/servo_update_rate_hz — mirrors
+// dashboard/shared/robot-config.js SERVO_UPDATE_RATE_BOUNDS_HZ.
+#define ARGOS_SERVO_UPDATE_RATE_MIN_HZ 40
+#define ARGOS_SERVO_UPDATE_RATE_MAX_HZ 200
 
 static lsm9ds0_am_sensor_t *sensor_am;
 static lsm9ds0_g_sensor_t  *sensor_g;
@@ -174,6 +184,13 @@ static adc_oneshot_unit_handle_t s_adc_handle = NULL;
 static adc_cali_handle_t         s_adc_cali = NULL;
 static adc_channel_t             s_adc_channel;
 static float                     s_gas_filtered_mv = 0.0f;
+
+// Latched "released" state. Set true when the dashboard publishes
+// /release_servos=true; cleared only by publishing /release_servos=false.
+// While latched, control_timer_callback skips apply_latest_to_servos() even
+// if /joint_command is still streaming — otherwise a 100 Hz Pi feed would
+// silently re-energize the servos a tick after the user hit "release".
+static bool                      s_release_latched = false;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -240,6 +257,50 @@ static void joint_cmd_callback(const void *msgin) {
     }
 }
 
+// /release_servos — dashboard-driven emergency limp. `true` releases the
+// PCA9685 channels immediately and latches that state; the user must send
+// `false` on the same topic to clear the latch (so an in-flight /joint_command
+// burst can't silently re-energize the robot).
+static void release_callback(const void *msgin) {
+    const std_msgs__msg__Bool *m = (const std_msgs__msg__Bool *)msgin;
+    if (!m) return;
+
+    if (m->data) {
+        if (!s_release_latched) {
+            ESP_LOGW("REL", "release_servos=true — servos going limp");
+        }
+        pca9685_release_all();
+        s_release_latched = true;
+        s_watchdog_tripped = true;  // treat as "waiting for a fresh command"
+    } else {
+        if (s_release_latched) {
+            ESP_LOGI("REL", "release_servos=false — latch cleared");
+        }
+        s_release_latched = false;
+    }
+}
+
+// /dashboard/servo_update_rate_hz — live PCA9685 PWM-frequency retune.
+// The dashboard Settings panel publishes this when the user drags the slider.
+// We clamp to a safe window here too: firmware is the last line of defense
+// against a bogus Pi-side value bricking the servos.
+static void pwm_rate_callback(const void *msgin) {
+    const std_msgs__msg__Float32 *m = (const std_msgs__msg__Float32 *)msgin;
+    if (!m) return;
+    float hz = m->data;
+    if (hz < ARGOS_SERVO_UPDATE_RATE_MIN_HZ) hz = ARGOS_SERVO_UPDATE_RATE_MIN_HZ;
+    if (hz > ARGOS_SERVO_UPDATE_RATE_MAX_HZ) hz = ARGOS_SERVO_UPDATE_RATE_MAX_HZ;
+    uint16_t freq_hz = (uint16_t)(hz + 0.5f);
+    esp_err_t err = pca9685_set_pwm_freq(freq_hz);
+    if (err != ESP_OK) {
+        ESP_LOGW("PWM", "set_pwm_freq(%u) failed: %s", (unsigned)freq_hz,
+                 esp_err_to_name(err));
+    } else {
+        ESP_LOGI("PWM", "servo update rate now %u Hz (from dashboard)",
+                 (unsigned)freq_hz);
+    }
+}
+
 // ─── Timer callbacks ──────────────────────────────────────────────────────
 
 static void stamp_header_now(builtin_interfaces__msg__Time *stamp) {
@@ -260,7 +321,12 @@ static void control_timer_callback(rcl_timer_t *timer, int64_t last_call_time) {
     // joint_states echo below keeps publishing the last command — that's
     // intentional, downstream consumers can see "MCU still alive, but
     // commands have stopped".
-    if (age_ms > CONFIG_ARGOS_JOINT_CMD_TIMEOUT_MS) {
+    if (s_release_latched) {
+        // Dashboard asked for limp servos and has not cleared the latch. Keep
+        // the channels zeroed even while /joint_command keeps streaming — the
+        // release primitive already ran in release_callback(); no need to
+        // re-issue it every tick.
+    } else if (age_ms > CONFIG_ARGOS_JOINT_CMD_TIMEOUT_MS) {
         if (!s_watchdog_tripped) {
             ESP_LOGW("WD", "joint command stale (%lld ms) — releasing servos", age_ms);
             pca9685_release_all();
@@ -494,6 +560,21 @@ static void micro_ros_task(void *arg) {
         ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
         "/gas"));
 
+    // ── /release_servos ─────────────────────────────────────────────────
+    RCCHECK(rclc_subscription_init_default(
+        &s_release_sub, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Bool),
+        "/release_servos"));
+
+    // ── /dashboard/servo_update_rate_hz ─────────────────────────────────
+    // Live PCA9685 PWM-rate retune. Subscribed by pwm_rate_callback above,
+    // which clamps to [ARGOS_SERVO_UPDATE_RATE_MIN_HZ, _MAX_HZ] before
+    // handing off to pca9685_set_pwm_freq.
+    RCCHECK(rclc_subscription_init_default(
+        &s_pwm_rate_sub, &node,
+        ROSIDL_GET_MSG_TYPE_SUPPORT(std_msgs, msg, Float32),
+        "/dashboard/servo_update_rate_hz"));
+
     // ── timers ──────────────────────────────────────────────────────────
     rcl_timer_t control_timer, gas_timer;
     const uint32_t control_period_ms = 1000U / CONFIG_ARGOS_IMU_RATE_HZ;
@@ -505,11 +586,15 @@ static void micro_ros_task(void *arg) {
                                      RCL_MS_TO_NS(gas_period_ms),
                                      gas_timer_callback, true));
 
-    // 1 sub + 2 timers = 3 handles
+    // 3 subs + 2 timers = 5 handles
     rclc_executor_t executor;
-    RCCHECK(rclc_executor_init(&executor, &support.context, 3, &allocator));
+    RCCHECK(rclc_executor_init(&executor, &support.context, 5, &allocator));
     RCCHECK(rclc_executor_add_subscription(&executor, &joint_cmd_sub, &joint_cmd_msg,
                                            &joint_cmd_callback, ON_NEW_DATA));
+    RCCHECK(rclc_executor_add_subscription(&executor, &s_release_sub, &s_release_msg,
+                                           &release_callback, ON_NEW_DATA));
+    RCCHECK(rclc_executor_add_subscription(&executor, &s_pwm_rate_sub, &s_pwm_rate_msg,
+                                           &pwm_rate_callback, ON_NEW_DATA));
     RCCHECK(rclc_executor_add_timer(&executor, &control_timer));
     RCCHECK(rclc_executor_add_timer(&executor, &gas_timer));
 
@@ -518,7 +603,9 @@ static void micro_ros_task(void *arg) {
         usleep(1000);
     }
 
-    // (unreachable but tidy)
+    // (unreachable but tidy) — reverse creation order
+    rcl_subscription_fini(&s_pwm_rate_sub, &node);
+    rcl_subscription_fini(&s_release_sub, &node);
     rcl_subscription_fini(&joint_cmd_sub, &node);
     rcl_publisher_fini(&imu_pub, &node);
     rcl_publisher_fini(&mag_pub, &node);

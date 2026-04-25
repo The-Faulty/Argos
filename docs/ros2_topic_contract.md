@@ -30,6 +30,25 @@ required for the current expo demo.
 - `/thermal/image_raw` (`sensor_msgs/Image`, `32FC1`): MLX90640-style thermal image
 - `/thermal/camera_info` (`sensor_msgs/CameraInfo`): thermal camera intrinsics
 
+## Dashboard bridge topics
+
+Published and consumed by `argos_control.dashboard_bridge_node` and the Pi
+Node server (`dashboard/pi_server/server.js`). All names come from
+`ros2_ws/argos_control/ros_support.py::TOPICS` — change the string in one
+place only.
+
+| Topic | Type | Publisher | Subscriber | Notes |
+| --- | --- | --- | --- | --- |
+| `/control_mode` | `std_msgs/String` | dashboard (Node server) | `dashboard_bridge_node`, `gait_planner_node` | `auto` or `manual`. Manual mode suppresses gait_planner raw writes so both sources never fight the bus. |
+| `/dashboard/foot_targets` | `geometry_msgs/PoseArray` | dashboard | `dashboard_bridge_node` | 4 poses, body-frame, order FR/FL/RR/RL. Bridge runs IK and forwards to `/joint_command/raw`. |
+| `/dashboard/joint_angles` | `sensor_msgs/JointState` | dashboard | `dashboard_bridge_node` | 12 positions in `JOINT_NAMES` order (or name-indexed). Used by direct-joint mode. |
+| `/dashboard/servo_overrides` | `std_msgs/String` (JSON) | dashboard | `dashboard_bridge_node` | Per-joint `{invert, offset_rad}`. Persisted atomically to `~/.argos/servo_overrides.json`. |
+| `/dashboard/joint_limits` | `std_msgs/String` (JSON) | dashboard | `dashboard_bridge_node` | Per-joint `{min_rad, max_rad}` (or `min_deg/max_deg`). Bridge intersects with firmware defaults, applies before `Kinematics.clamp_joint_matrix`. Persisted to `~/.argos/joint_limits.json`. Only safety gate on `/dashboard/joint_angles` — `safety_node` sits on the pre-mux channel and never sees dashboard output. |
+| `/dashboard/stance_play` | `std_msgs/String` | dashboard | `dashboard_bridge_node` | Named stance lookup from `~/.argos/stances.json`. |
+| `/dashboard/servo_speed_limits` | `std_msgs/String` (JSON) | dashboard | `dashboard_bridge_node` | Per-joint `{joint_name: deg_per_sec}`. Bridge rate-limits `/joint_command/raw` deltas so slider jumps ramp instead of snapping. Persisted to `~/.argos/servo_speed_limits.json`. |
+| `/dashboard/servo_update_rate_hz` | `std_msgs/Float32` | dashboard | ESP32-C6 firmware | PCA9685 PWM refresh frequency in Hz. Firmware clamps to `[40, 200]` before calling `pca9685_set_pwm_freq`. Persisted on the Pi at `~/.argos/servo_update_rate.json`. |
+| `/release_servos` | `std_msgs/Bool` | dashboard | ESP32-C6 firmware | `True` releases the PCA9685 outputs — used on Disconnect for e-stop. |
+
 ## Mission topics
 
 - `/victim_detections` (`visualization_msgs/MarkerArray`): thermal hotspot markers

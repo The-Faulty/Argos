@@ -27,6 +27,13 @@ extern "C" {
 
 esp_err_t pca9685_init(i2c_port_t port, uint8_t addr, uint16_t freq_hz);
 
+// Change the PWM output frequency at runtime. Follows the datasheet reset
+// sequence (SLEEP=1 → prescale → SLEEP=0 → RESTART) so it is safe to call
+// mid-flight. The dashboard Settings panel drives this via
+// /dashboard/servo_update_rate_hz; clamp the caller value before passing it
+// in — the driver itself no-ops freq_hz == 0 or the current frequency.
+esp_err_t pca9685_set_pwm_freq(uint16_t freq_hz);
+
 // Set one channel's pulse width in microseconds. 0 releases the channel
 // (full off, servo goes limp). Range-clamped internally.
 esp_err_t pca9685_set_pulse_us(uint16_t pulse_us, uint8_t channel);

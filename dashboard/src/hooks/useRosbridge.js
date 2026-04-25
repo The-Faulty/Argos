@@ -1,0 +1,190 @@
+// Pi-server telemetry socket hook.
+//
+// The browser speaks to the Pi-side Node server (not rosbridge directly) —
+// one WS per tab, the server fans every client the cached snapshot of every
+// ROS topic we care about. This halves network traffic vs per-browser
+// rosbridge clients and lets us swap the transport later without touching UI.
+//
+// Shape of what `data` holds (filled progressively as messages arrive):
+//   {
+//     connected: { ws: bool, ros: bool, lastEvent: {...} },
+//     mode: string,
+//     rotate_settings, servo_overrides, joint_limits, stances,
+//     joint_states: {name, position, ...} | null,
+//     imu: {_euler_rad: {roll,pitch,yaw}, ...} | null,
+//     gas: {data: number} | null,
+//     gait_mode: {data: string} | null,
+//     control_mode: {data: string} | null,
+//     leg_ids, joint_names, mode_options,
+//     recording: {active, rowCount, ...},
+//     lastError: string | null,
+//   }
+//
+// Auto-reconnect with capped backoff so the UI recovers silently if the Pi
+// server restarts mid-demo.
+
+import { useEffect, useRef, useState } from "react";
+
+const DEFAULT_URL = (() => {
+  if (typeof window === "undefined") return "ws://localhost:8787/telemetry";
+  const proto = window.location.protocol === "https:" ? "wss" : "ws";
+  return `${proto}://${window.location.host}/telemetry`;
+})();
+
+const INITIAL_BACKOFF_MS = 500;
+const MAX_BACKOFF_MS = 8_000;
+
+export function useRosbridge({ url = DEFAULT_URL } = {}) {
+  const [data, setData] = useState(() => ({
+    connected: { ws: false, ros: false, lastEvent: null },
+    mode: "idle",
+    rotate_settings: null,
+    servo_overrides: {},
+    joint_limits: {},
+    servo_speed: null,
+    servo_update_rate: null,
+    stances: {},
+    joint_states: null,
+    imu: null,
+    gas: null,
+    gait_mode: null,
+    control_mode: null,
+    leg_ids: ["FR", "FL", "RR", "RL"],
+    joint_names: [],
+    mode_options: [],
+    recording: { active: false, rowCount: 0 },
+    lastError: null,
+  }));
+
+  const wsRef = useRef(null);
+  const backoffRef = useRef(INITIAL_BACKOFF_MS);
+  const reconnectTimerRef = useRef(null);
+  const aliveRef = useRef(true);
+
+  useEffect(() => {
+    aliveRef.current = true;
+
+    function connect() {
+      if (!aliveRef.current) return;
+      const ws = new WebSocket(url);
+      wsRef.current = ws;
+
+      ws.addEventListener("open", () => {
+        backoffRef.current = INITIAL_BACKOFF_MS;
+        setData((prev) => ({ ...prev, connected: { ...prev.connected, ws: true } }));
+      });
+
+      ws.addEventListener("close", () => {
+        setData((prev) => ({ ...prev, connected: { ...prev.connected, ws: false } }));
+        scheduleReconnect();
+      });
+
+      ws.addEventListener("error", () => {
+        // `close` fires right after — no separate handling needed, just let
+        // the reconnect kick in from the close event.
+      });
+
+      ws.addEventListener("message", (event) => {
+        try {
+          const msg = JSON.parse(event.data);
+          setData((prev) => reduce(prev, msg));
+        } catch (err) {
+          setData((prev) => ({ ...prev, lastError: String(err.message || err) }));
+        }
+      });
+    }
+
+    function scheduleReconnect() {
+      if (!aliveRef.current) return;
+      if (reconnectTimerRef.current) return;
+      const delay = backoffRef.current;
+      backoffRef.current = Math.min(MAX_BACKOFF_MS, delay * 2);
+      reconnectTimerRef.current = setTimeout(() => {
+        reconnectTimerRef.current = null;
+        connect();
+      }, delay);
+    }
+
+    connect();
+
+    return () => {
+      aliveRef.current = false;
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {
+          /* already closed */
+        }
+      }
+    };
+  }, [url]);
+
+  // Allow components (e.g. the Twist joystick or debug console) to send a
+  // command straight down the WS instead of the HTTP API.
+  function send(obj) {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(obj));
+  }
+
+  return { data, send };
+}
+
+function reduce(prev, msg) {
+  switch (msg.type) {
+    case "snapshot":
+      return {
+        ...prev,
+        connected: { ...prev.connected, ...(msg.telemetry?.connected ?? {}) },
+        mode: msg.mode ?? prev.mode,
+        rotate_settings: msg.rotate_settings ?? prev.rotate_settings,
+        servo_overrides: msg.servo_overrides ?? prev.servo_overrides,
+        joint_limits: msg.joint_limits ?? prev.joint_limits,
+        servo_speed: msg.servo_speed ?? prev.servo_speed,
+        servo_update_rate: msg.servo_update_rate ?? prev.servo_update_rate,
+        stances: msg.stances ?? prev.stances,
+        joint_states: msg.telemetry?.joint_states ?? prev.joint_states,
+        imu: msg.telemetry?.imu ?? prev.imu,
+        gas: msg.telemetry?.gas ?? prev.gas,
+        gait_mode: msg.telemetry?.gait_mode ?? prev.gait_mode,
+        control_mode: msg.telemetry?.control_mode ?? prev.control_mode,
+        leg_ids: msg.leg_ids ?? prev.leg_ids,
+        joint_names: msg.joint_names ?? prev.joint_names,
+        mode_options: msg.mode_options ?? prev.mode_options,
+      };
+    case "connected":
+      return { ...prev, connected: { ...prev.connected, ...(msg.connected ?? {}) } };
+    case "joint_states":
+      return { ...prev, joint_states: msg.msg };
+    case "imu":
+      return { ...prev, imu: msg.msg };
+    case "gas":
+      return { ...prev, gas: msg.msg };
+    case "gait_mode":
+      return { ...prev, gait_mode: msg.msg };
+    case "control_mode":
+      return { ...prev, control_mode: msg.msg };
+    case "mode":
+      return { ...prev, mode: msg.mode };
+    case "settings:rotate":
+      return { ...prev, rotate_settings: msg.payload };
+    case "settings:servo_overrides":
+      return { ...prev, servo_overrides: msg.payload };
+    case "settings:joint_limits":
+      return { ...prev, joint_limits: msg.payload };
+    case "settings:servo_speed":
+      return { ...prev, servo_speed: msg.payload };
+    case "settings:servo_update_rate":
+      return { ...prev, servo_update_rate: msg.payload };
+    case "stances":
+      return { ...prev, stances: msg.payload };
+    case "recording":
+      return { ...prev, recording: msg.status };
+    case "disconnect":
+      return { ...prev, mode: "idle" };
+    case "error":
+      return { ...prev, lastError: msg.error };
+    default:
+      return prev;
+  }
+}

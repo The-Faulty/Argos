@@ -60,6 +60,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ros-humble-rqt-topic \
     ros-humble-rqt-publisher \
     ros-humble-micro-ros-agent \
+    # ROS 2 packages — dashboard bridge (browser <-> ROS via rosbridge)
+    ros-humble-rosbridge-server \
+    # Dashboard Node server runtime (React SPA + /telemetry WS on port 8787)
+    nodejs \
+    npm \
     # Misc tools
     apt-utils \
     iputils-ping \

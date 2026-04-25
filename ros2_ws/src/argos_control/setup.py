@@ -38,6 +38,7 @@ setup(
             "argos-safety = argos_control.safety_node:main",
             "argos-joint-command-publisher = argos_control.joint_command_publisher_node:main",
             "argos-demo-commander = argos_control.demo_commander_node:main",
+            "argos-dashboard-bridge = argos_control.dashboard_bridge_node:main",
         ],
     },
 )

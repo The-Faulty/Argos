@@ -7,6 +7,21 @@
 - RealSense D435/D455: USB 3.0 camera device
 - MLX90640: I2C address `0x33`
 
+## Network ports
+
+The Pi listens on these ports when the dashboard stack is running
+(`enable_dashboard:=true` on `full_system.launch.py`):
+
+- **8787** — Argos dashboard (Node/Express server, HTTP + WebSocket
+  `/telemetry`). Bound to `0.0.0.0`, LAN-visible. Browser endpoint.
+  Served by `dashboard/pi_server/server.js`.
+- **9090** — `rosbridge_websocket`. Bound to `localhost` only. The Node
+  server on 8787 proxies browser traffic into it; do **not** expose it
+  to the LAN directly — it has no authentication and would let any host
+  issue raw ROS calls.
+
+Full dashboard walkthrough: [`docs/dashboard_guide.md`](dashboard_guide.md).
+
 ## MLX90640 setup on the Pi
 
 1. Enable I2C in Raspberry Pi configuration.

@@ -72,6 +72,40 @@ esp_err_t pca9685_init(i2c_port_t port, uint8_t addr, uint16_t freq_hz) {
     return ESP_OK;
 }
 
+esp_err_t pca9685_set_pwm_freq(uint16_t freq_hz) {
+    if (!s_inited) return ESP_ERR_INVALID_STATE;
+    if (freq_hz == 0) return ESP_ERR_INVALID_ARG;
+    if (freq_hz == s_freq_hz) return ESP_OK;
+
+    uint8_t prev_mode1 = 0;
+    (void)pca9685_read_reg(PCA9685_REG_MODE1, &prev_mode1);
+
+    // Datasheet 7.3.5: prescale writes are ignored unless SLEEP=1.
+    esp_err_t err = pca9685_write_reg(PCA9685_REG_MODE1,
+                                      (prev_mode1 | PCA9685_MODE1_SLEEP) & ~PCA9685_MODE1_RESTART);
+    if (err != ESP_OK) return err;
+
+    uint8_t prescale = (uint8_t)((PCA9685_INTERNAL_CLK_HZ / (4096UL * freq_hz)) - 1);
+    err = pca9685_write_reg(PCA9685_REG_PRESCALE, prescale);
+    if (err != ESP_OK) return err;
+
+    // Restore previous mode with SLEEP cleared so the oscillator wakes.
+    err = pca9685_write_reg(PCA9685_REG_MODE1, prev_mode1 & ~PCA9685_MODE1_SLEEP);
+    if (err != ESP_OK) return err;
+
+    vTaskDelay(pdMS_TO_TICKS(1));
+
+    uint8_t mode1 = 0;
+    if (pca9685_read_reg(PCA9685_REG_MODE1, &mode1) == ESP_OK) {
+        pca9685_write_reg(PCA9685_REG_MODE1, mode1 | PCA9685_MODE1_RESTART);
+    }
+
+    s_freq_hz = freq_hz;
+    ESP_LOGI(TAG, "PWM freq set to %u Hz (prescale=%u)",
+             (unsigned)s_freq_hz, (unsigned)prescale);
+    return ESP_OK;
+}
+
 esp_err_t pca9685_set_pulse_us(uint16_t pulse_us, uint8_t channel) {
     if (!s_inited) return ESP_ERR_INVALID_STATE;
     if (channel >= PCA9685_NUM_CHANNELS) return ESP_ERR_INVALID_ARG;

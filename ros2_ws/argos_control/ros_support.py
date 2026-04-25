@@ -50,6 +50,29 @@ class Topics:
     foothold_status: str = "/foothold/status"
     foothold_safe: str = "/foothold/safe"
     foothold_markers: str = "/foothold/markers"
+    # Dashboard bridge topics — consumed by dashboard_bridge_node.py.
+    # The dashboard never writes to /joint_command directly; it goes through
+    # /joint_command/raw so foothold_checker + safety_node keep enforcing limits.
+    dashboard_foot_targets: str = "/dashboard/foot_targets"
+    dashboard_joint_angles: str = "/dashboard/joint_angles"
+    dashboard_servo_overrides: str = "/dashboard/servo_overrides"
+    # Per-leg joint min/max limits (radians). The dashboard Settings drawer
+    # publishes a JSON map {joint_name: {min_rad, max_rad}} which the bridge
+    # applies before the coupled bell-crank envelope clamp. Values here can
+    # only further TIGHTEN the firmware/Config.py defaults — they cannot
+    # loosen the hardware safety envelope.
+    dashboard_joint_limits: str = "/dashboard/joint_limits"
+    dashboard_stance_play: str = "/dashboard/stance_play"
+    # Per-joint speed ceiling (deg/s). The dashboard bridge rate-limits
+    # outgoing /joint_command/raw deltas so slider jumps ramp instead of
+    # snapping. See dashboard/shared/robot-config.js
+    # DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC for the defaults.
+    dashboard_servo_speed_limits: str = "/dashboard/servo_speed_limits"
+    # PCA9685 PWM refresh frequency. ESP32 firmware subscribes and reconfigures
+    # pca9685_set_pwm_freq on the next tick.
+    dashboard_servo_update_rate_hz: str = "/dashboard/servo_update_rate_hz"
+    release_servos: str = "/release_servos"
+    control_mode: str = "/control_mode"
 
 
 TOPICS = Topics()

@@ -8,6 +8,30 @@ import numpy as np
 import math as m
 
 
+# Per-joint servo calibration table — mirrors the s_servo_cal array in
+# firmware/esp32c6/main/main.c (lines ~107-124). Any time that C table
+# changes, update this list too. The dashboard uses this list to know
+# which PCA9685 channel each joint lives on and what polarity to use.
+SERVO_CAL_PER_JOINT = [
+    # FR_coxa, FR_femur, FR_tibia
+    {"joint": "FR_coxa_joint",  "channel": 0,  "direction":  1, "offset_deg": 0.0, "min_deg": 45.0, "max_deg": 135.0},
+    {"joint": "FR_femur_joint", "channel": 1,  "direction":  1, "offset_deg": 0.0, "min_deg": 50.0, "max_deg": 115.0},
+    {"joint": "FR_tibia_joint", "channel": 2,  "direction":  1, "offset_deg": 0.0, "min_deg":  5.0, "max_deg": 180.0},
+    # FL_coxa, FL_femur, FL_tibia
+    {"joint": "FL_coxa_joint",  "channel": 3,  "direction":  1, "offset_deg": 0.0, "min_deg": 45.0, "max_deg": 135.0},
+    {"joint": "FL_femur_joint", "channel": 4,  "direction":  1, "offset_deg": 0.0, "min_deg": 50.0, "max_deg": 115.0},
+    {"joint": "FL_tibia_joint", "channel": 5,  "direction":  1, "offset_deg": 0.0, "min_deg":  5.0, "max_deg": 180.0},
+    # RR_coxa, RR_femur, RR_tibia — rear hip polarity flipped
+    {"joint": "RR_coxa_joint",  "channel": 6,  "direction": -1, "offset_deg": 0.0, "min_deg": 45.0, "max_deg": 135.0},
+    {"joint": "RR_femur_joint", "channel": 7,  "direction":  1, "offset_deg": 0.0, "min_deg": 50.0, "max_deg": 115.0},
+    {"joint": "RR_tibia_joint", "channel": 8,  "direction":  1, "offset_deg": 0.0, "min_deg":  5.0, "max_deg": 180.0},
+    # RL_coxa, RL_femur, RL_tibia — rear hip polarity flipped
+    {"joint": "RL_coxa_joint",  "channel": 9,  "direction": -1, "offset_deg": 0.0, "min_deg": 45.0, "max_deg": 135.0},
+    {"joint": "RL_femur_joint", "channel": 10, "direction":  1, "offset_deg": 0.0, "min_deg": 50.0, "max_deg": 115.0},
+    {"joint": "RL_tibia_joint", "channel": 11, "direction":  1, "offset_deg": 0.0, "min_deg":  5.0, "max_deg": 180.0},
+]
+
+
 class Configuration:
     """Stores every tunable parameter for the Argos quadruped."""
 
@@ -380,3 +404,28 @@ class Configuration:
 
         changed = bool(reasons)
         return (clamped_hip, clamped_top, clamped_bot), changed, "; ".join(reasons)
+
+
+if __name__ == "__main__":
+    # Self-test: the dashboard and firmware both depend on SERVO_CAL_PER_JOINT
+    # staying consistent with ros_support.JOINT_NAMES. Run `python -m
+    # argos_control.Config` after editing the table to catch typos early.
+    from argos_control.ros_support import JOINT_NAMES
+
+    assert len(SERVO_CAL_PER_JOINT) == 12, (
+        f"Expected 12 calibration entries, got {len(SERVO_CAL_PER_JOINT)}"
+    )
+
+    channels = [entry["channel"] for entry in SERVO_CAL_PER_JOINT]
+    assert len(set(channels)) == 12, f"Duplicate channel numbers: {channels}"
+    for ch in channels:
+        assert 0 <= ch <= 15, f"PCA9685 channel {ch} outside [0, 15]"
+
+    cal_names = [entry["joint"] for entry in SERVO_CAL_PER_JOINT]
+    assert cal_names == list(JOINT_NAMES), (
+        "SERVO_CAL_PER_JOINT joint order must match ros_support.JOINT_NAMES:\n"
+        f"  cal : {cal_names}\n"
+        f"  ros : {list(JOINT_NAMES)}"
+    )
+
+    print("Config.py self-test passed: 12 unique channels, names match JOINT_NAMES.")

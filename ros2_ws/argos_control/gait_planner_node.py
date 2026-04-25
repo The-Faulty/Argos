@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import rclpy
 from geometry_msgs.msg import PoseArray, Twist
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.node import Node
 from sensor_msgs.msg import Imu, JointState
 from std_msgs.msg import Bool, Int32MultiArray, String
@@ -76,6 +77,20 @@ class GaitPlannerNode(Node):
         self.declare_parameter("block_on_unsafe_footholds", False)
         self.declare_parameter("foothold_update_timeout_s", 0.4)
 
+        # Dashboard-tuneable gait parameters. These map into self.config so
+        # that runtime edits via rosbridge SetParameters take effect on the
+        # next gait tick without a node restart. Units match the dashboard's
+        # GAIT_TUNABLE_PARAMS: delta_* in mm, swing_time in ms, rotate cap in rad/s.
+        tmp_config = Configuration()
+        self.declare_parameter("delta_x_mm", tmp_config.delta_x * 1000.0)
+        self.declare_parameter("delta_y_mm", tmp_config.delta_y * 1000.0)
+        self.declare_parameter("swing_time_ms", tmp_config.swing_time * 1000.0)
+        self.declare_parameter("rotate_rate_max", tmp_config.max_yaw_rate)
+        # Body height (mm, negative downward). The dashboard Body-height
+        # slider POSTs here; value is negated at read time because self.config
+        # stores it in meters with the measured negative convention.
+        self.declare_parameter("default_z_ref_mm", tmp_config.default_z_ref * 1000.0)
+
         command_topic = self.get_parameter("command_topic").value
         gait_mode_topic = self.get_parameter("gait_mode_topic").value
         joint_command_raw_topic = self.get_parameter("joint_command_raw_topic").value
@@ -139,6 +154,10 @@ class GaitPlannerNode(Node):
         self.current_twist = zero_twist()
         self.current_mode = str(self.get_parameter("default_mode").value).strip().lower()
         self.estop_active = False
+        # control_mode comes from the dashboard — "manual" suppresses raw joint
+        # publishes while keeping the gait state machine ticking, so we don't
+        # snap mid-swing when control returns to "auto".
+        self.control_mode = "auto"
         self.imu_euler = np.zeros(3, dtype=float)
         self.imu_received = False
         self.push_recovery_until_ns = 0
@@ -166,6 +185,9 @@ class GaitPlannerNode(Node):
         )
         self.create_subscription(Twist, command_topic, self._command_callback, 10)
         self.create_subscription(String, gait_mode_topic, self._mode_callback, 10)
+        self.create_subscription(
+            String, TOPICS.control_mode, self._control_mode_callback, 10
+        )
         self.create_subscription(Bool, estop_topic, self._estop_callback, 10)
         self.create_subscription(Imu, imu_topic, self._imu_callback, 10)
         self.create_subscription(
@@ -176,7 +198,62 @@ class GaitPlannerNode(Node):
         )
         self.create_timer(1.0 / update_rate_hz, self._update)
 
+        # Seed self.config from the declared dashboard-tuneable parameters so
+        # launch-time overrides (and on_set callbacks) share one code path.
+        self._apply_dashboard_params()
+        self.add_on_set_parameters_callback(self._on_parameter_change)
+
         self._apply_gait_profile(self.current_mode)
+
+    def _apply_dashboard_params(self):
+        """Copy dashboard-facing ROS parameters into self.config."""
+        self.config.delta_x = float(self.get_parameter("delta_x_mm").value) / 1000.0
+        self.config.delta_y = float(self.get_parameter("delta_y_mm").value) / 1000.0
+        self.config.swing_time = (
+            float(self.get_parameter("swing_time_ms").value) / 1000.0
+        )
+        self.config.max_yaw_rate = float(
+            self.get_parameter("rotate_rate_max").value
+        )
+        self.config.default_z_ref = (
+            float(self.get_parameter("default_z_ref_mm").value) / 1000.0
+        )
+
+    def _on_parameter_change(self, params):
+        """Live-update self.config when the dashboard calls SetParameters.
+
+        Every dashboard-tuneable param is re-read here so the change takes
+        effect mid-gait without needing a node restart. The stabilizer /
+        push-recovery attributes are consumed every tick in
+        `_apply_imu_stabilization` and `_update_push_recovery`, so mutating
+        them in place is enough.
+        """
+        for p in params:
+            if p.name == "delta_x_mm":
+                self.config.delta_x = float(p.value) / 1000.0
+            elif p.name == "delta_y_mm":
+                self.config.delta_y = float(p.value) / 1000.0
+            elif p.name == "swing_time_ms":
+                self.config.swing_time = float(p.value) / 1000.0
+            elif p.name == "rotate_rate_max":
+                self.config.max_yaw_rate = float(p.value)
+            elif p.name == "default_z_ref_mm":
+                self.config.default_z_ref = float(p.value) / 1000.0
+            elif p.name == "use_imu_stabilization":
+                self.use_imu_stabilization = bool(p.value)
+            elif p.name == "imu_filter_alpha":
+                self.imu_filter_alpha = clamp(float(p.value), 0.0, 1.0)
+            elif p.name == "stabilization_roll_gain":
+                self.stabilization_roll_gain = max(0.0, float(p.value))
+            elif p.name == "stabilization_pitch_gain":
+                self.stabilization_pitch_gain = max(0.0, float(p.value))
+            elif p.name == "stabilization_max_correction_rad":
+                self.stabilization_max_correction_rad = max(0.0, float(p.value))
+            elif p.name == "enable_push_recovery":
+                self.enable_push_recovery = bool(p.value)
+            elif p.name == "push_recovery_tilt_threshold_rad":
+                self.push_recovery_tilt_threshold_rad = max(0.0, float(p.value))
+        return SetParametersResult(successful=True)
 
     def _command_callback(self, msg: Twist):
         # Just store it — the timer loop reads it every tick
@@ -208,6 +285,35 @@ class GaitPlannerNode(Node):
     def _estop_callback(self, msg: Bool):
         # Immediately freeze motion when e-stop fires
         self.estop_active = bool(msg.data)
+
+    def _control_mode_callback(self, msg: String):
+        """Handle manual/auto mode toggles from the dashboard.
+
+        In manual mode the dashboard owns joint targets, so we stop
+        publishing raw commands. On the manual->auto transition we force
+        the mode to crouch and re-apply the crouch gait profile so the
+        robot doesn't jerk mid-swing when control returns to the gait planner.
+        """
+        new_mode = msg.data.strip().lower()
+        if new_mode not in {"auto", "manual"}:
+            self.get_logger().warning(
+                f"Ignoring unsupported control_mode '{msg.data}'"
+            )
+            return
+        if new_mode == self.control_mode:
+            return
+
+        prev_mode = self.control_mode
+        self.control_mode = new_mode
+        self.get_logger().info(
+            f"Control mode: {prev_mode} -> {new_mode}"
+        )
+
+        if prev_mode == "manual" and new_mode == "auto":
+            # Force crouch so IK has a known-good starting pose on re-entry
+            self.current_mode = "crouch"
+            self._apply_gait_profile("crouch")
+            self.state.ticks = 0
 
     def _imu_callback(self, msg: Imu):
         sample = np.asarray(euler_from_imu(msg), dtype=float)
@@ -539,7 +645,11 @@ class GaitPlannerNode(Node):
             self.state.ticks += 1
 
         msg = joint_state_from_matrix(self.get_clock().now().to_msg(), angles)
-        self.raw_joint_pub.publish(msg)
+        # In manual mode the dashboard_bridge_node publishes /joint_command/raw
+        # directly; the gait state machine still runs so a manual->auto
+        # transition has fresh foot positions to continue from.
+        if self.control_mode != "manual":
+            self.raw_joint_pub.publish(msg)
 
 
 def main(args=None):

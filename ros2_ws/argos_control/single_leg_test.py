@@ -19,7 +19,7 @@ except ImportError:
     from Kinematics import leg_explicit_inverse_kinematics
 
 
-PCA9685_I2C_ADDRESS = 0x40   # default I2C address for the PCA9685 servo driver
+PCA9685_I2C_ADDRESS = 0x00   # Argos board strap (matches firmware default)
 
 # PCA9685 channel assignments for this test leg.
 HIP_CH = 2   # hip abductor servo

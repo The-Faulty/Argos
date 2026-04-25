@@ -24,7 +24,7 @@ future work, not the current critical path.
 - `ros2_ws/argos_control`: leg math, control helpers, and single-leg bench tools
 - `ros2_ws/argos_mission`: mission state, gas hazard map, and thermal demo nodes
 - `firmware/esp32c6`: ESP-IDF + micro-ROS firmware for the C6 (servos, IMU, gas)
-- `web/leg_viz`: bench-only single-leg web visualizer + Pi PCA9685 bridge
+- `dashboard`: React/Node web dashboard served from the Pi — see `docs/dashboard_guide.md`
 
 ## Physical Robot Bring-up
 
@@ -112,12 +112,27 @@ Full stack with mission nodes:
 ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_mission:=true start_rviz:=true
 ```
 
+## Web dashboard
+
+The dashboard replaces the retired `web/leg_viz/` single-leg tool with a
+full-robot control + telemetry panel. Launch it with the rest of the
+stack:
+
+```bash
+ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_dashboard:=true
+```
+
+Then open `http://<pi-ip>:8787` in a browser on the same LAN. Full setup
+and feature walkthrough: `docs/dashboard_guide.md`.
+
 ## Notes
 
 - `ROS_DOMAIN_ID` is set to `42` to match the Pi/ESP32-C6 design.
 - On the Pi, the intended serial aliases are `/dev/ttyLIDAR` and `/dev/ttyESP32`.
-- The single-leg tester can be run without ROS from `argos_control`.
 - The control library is now wrapped as a ROS 2 package so `colcon` can see it.
+- The web dashboard (React + Node) is documented in `docs/dashboard_guide.md`
+  and listens on port `8787`; `rosbridge_websocket` on `9090` is bound to
+  localhost (the Node server proxies).
 - The mission bench stack is optional and not part of the current expo-critical path.
 - The ROS 2 topic contract is documented in `docs/ros2_topic_contract.md`.
 - The Pi device and bring-up contract is documented in `docs/pi_hardware_contract.md`.

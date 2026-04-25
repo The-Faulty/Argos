@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git checkout *)",
+      "Bash(python -c \"import sys; sys.path.insert\\(0, 'ros2_ws'\\); from argos_control.Config import Configuration; from argos_control.Kinematics import leg_explicit_inverse_kinematics; cfg = Configuration\\(\\); print\\('OK', cfg.default_z_ref\\)\")",
+      "Bash(python -m py_compile argos_control/dashboard_bridge_node.py)",
+      "Bash(python -m py_compile argos_control/gait_planner_node.py)",
+      "Bash(python -m py_compile argos_control/ros_support.py)",
+      "Bash(python -m py_compile argos_control/Config.py)",
+      "Bash(python dashboard/tests/fixtures/generate_golden.py)",
+      "Bash(python -m py_compile src/quadruped_bringup/launch/rosbridge.launch.py)",
+      "Bash(python -m py_compile src/quadruped_bringup/launch/dashboard.launch.py)",
+      "Bash(python -m py_compile src/quadruped_bringup/launch/full_system.launch.py)",
+      "Bash(python -m py_compile src/quadruped_bringup/launch/control_stack.launch.py)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

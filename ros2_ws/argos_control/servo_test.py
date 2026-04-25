@@ -10,7 +10,7 @@ Usage:
 import sys
 import time
 
-PCA9685_I2C_ADDRESS = 0x40
+PCA9685_I2C_ADDRESS = 0x00  # Argos board strap (matches firmware default)
 PWM_MIN_US = 370
 PWM_MAX_US = 2400
 PWM_FREQ = 50
