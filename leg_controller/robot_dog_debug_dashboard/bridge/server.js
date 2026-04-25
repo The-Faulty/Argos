@@ -6,6 +6,7 @@ import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, buildLegPoseFromServ
 import { createUploadFrames, validateClip } from "../shared/animation.js";
 import { DEFAULT_JOINT_LIMITS, DEFAULT_LEG_COMMAND, DEFAULT_SERVO_CHANNEL_MAP, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, LEG_IDS } from "../shared/robot-config.js";
 import { parseWireMessage, toWireMessage, validateCommand } from "../shared/protocol.js";
+import { extractJsonMessageCandidate } from "../shared/serial-wire.js";
 
 const PORT = Number(process.env.PORT || 8787);
 const calibration = createNeutralCalibration();
@@ -144,8 +145,13 @@ class BridgeState {
       this.broadcastEvent(wss, { type: "error", message: error.message });
     });
     this.parser.on("data", (line) => {
+      const candidate = extractJsonMessageCandidate(line);
+      if (!candidate) {
+        return;
+      }
+
       try {
-        const message = parseWireMessage(String(line).trim());
+        const message = parseWireMessage(candidate);
         this.handleIncomingMessage(message, wss);
       } catch (error) {
         this.status.lastError = error.message;

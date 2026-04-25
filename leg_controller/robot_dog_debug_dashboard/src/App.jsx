@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { toCanvasPoint, robotOverviewGeometry } from "../shared/kinematics.js";
-import { DEFAULT_DRIVE_COMMAND, DEFAULT_JOINT_LIMITS, DEFAULT_LEG_COMMAND, DEFAULT_SERVO_CHANNEL_MAP, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, LEG_DRAWING, LEG_IDS, LEG_LABELS } from "../shared/robot-config.js";
+import { DEFAULT_DRIVE_COMMAND, DEFAULT_JOINT_LIMITS, DEFAULT_LEG_COMMAND, DEFAULT_SERVO_CHANNEL_MAP, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, DEFAULT_SERVO_TRIM_DEG, LEG_DRAWING, LEG_IDS, LEG_LABELS } from "../shared/robot-config.js";
 
 const INPUT_ACTIONS = ["forward", "backward", "strafeLeft", "strafeRight", "rotateLeft", "rotateRight"];
 const KEY_TO_ACTION = {
@@ -68,6 +68,7 @@ function createLocalState() {
       servoChannelMap: { ...DEFAULT_SERVO_CHANNEL_MAP[legId] },
       jointLimits: clone(DEFAULT_JOINT_LIMITS),
       servoSpeedLimitDegPerSec: { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC },
+      servoTrimDeg: { ...DEFAULT_SERVO_TRIM_DEG },
     };
   }
 
@@ -240,7 +241,37 @@ function RobotOverview({ robotState, poseSource = "desired" }) {
   );
 }
 
-function LegDebugPanel({ legId, legState, source }) {
+function TrimField({ label, value, onChange }) {
+  return (
+    <label className="inline-field">
+      {label}
+      <input
+        type="number"
+        min="-45"
+        max="45"
+        step="1"
+        value={value}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function LegDebugPanel({ legId, legState, source, applyServoTrim, resetServoTrim }) {
+  const [draftTrim, setDraftTrim] = useState(() => ({
+    hipYaw: legState?.servoTrimDeg?.hipYaw ?? 0,
+    thigh: legState?.servoTrimDeg?.thigh ?? 0,
+    calf: legState?.servoTrimDeg?.calf ?? 0,
+  }));
+
+  useEffect(() => {
+    setDraftTrim({
+      hipYaw: legState?.servoTrimDeg?.hipYaw ?? 0,
+      thigh: legState?.servoTrimDeg?.thigh ?? 0,
+      calf: legState?.servoTrimDeg?.calf ?? 0,
+    });
+  }, [legState?.servoTrimDeg?.hipYaw, legState?.servoTrimDeg?.thigh, legState?.servoTrimDeg?.calf]);
+
   const geometry = legState?.[source]?.geometry;
   if (!geometry) {
     return (
@@ -293,6 +324,39 @@ function LegDebugPanel({ legId, legState, source }) {
           </strong>
         </div>
       </div>
+      <div className="panel-title-row">
+        <h4>Neutral Trim</h4>
+        <div className="toolbar">
+          <button type="button" className="accent-button" onClick={() => applyServoTrim(legId, draftTrim)}>Apply</button>
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => {
+              setDraftTrim({ hipYaw: 0, thigh: 0, calf: 0 });
+              resetServoTrim(legId);
+            }}
+          >
+            Zero
+          </button>
+        </div>
+      </div>
+      <div className="toolbar">
+        <TrimField
+          label="Hip yaw"
+          value={draftTrim.hipYaw}
+          onChange={(value) => setDraftTrim((current) => ({ ...current, hipYaw: value }))}
+        />
+        <TrimField
+          label="Thigh"
+          value={draftTrim.thigh}
+          onChange={(value) => setDraftTrim((current) => ({ ...current, thigh: value }))}
+        />
+        <TrimField
+          label="Calf"
+          value={draftTrim.calf}
+          onChange={(value) => setDraftTrim((current) => ({ ...current, calf: value }))}
+        />
+      </div>
     </section>
   );
 }
@@ -307,6 +371,7 @@ export default function App() {
   const lastDriveSignatureRef = useRef("");
 
   const driveCommand = useMemo(() => deriveDriveCommand(activeInputs), [activeInputs]);
+  const hasMotion = driveCommand.vx !== 0 || driveCommand.vy !== 0 || driveCommand.yawRate !== 0;
 
   async function postJson(path, body) {
     const response = await fetch(`${getBackendHttpBaseUrl()}${path}`, {
@@ -414,7 +479,6 @@ export default function App() {
     }
     lastDriveSignatureRef.current = signature;
 
-    const hasMotion = driveCommand.vx !== 0 || driveCommand.vy !== 0 || driveCommand.yawRate !== 0;
     const command = hasMotion
       ? { type: "set_drive_command", drive: driveCommand }
       : { type: "stop_motion" };
@@ -422,7 +486,23 @@ export default function App() {
     sendCommand(command).catch((error) => {
       setRobotState((current) => ({ ...current, lastError: error.message }));
     });
-  }, [driveCommand]);
+  }, [driveCommand, hasMotion]);
+
+  useEffect(() => {
+    if (!hasMotion) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      sendCommand({ type: "set_drive_command", drive: deriveDriveCommand(activeInputs) }).catch((error) => {
+        setRobotState((current) => ({ ...current, lastError: error.message }));
+      });
+    }, 100);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [activeInputs, hasMotion]);
 
   function withError(handler) {
     return (...args) => handler(...args).catch((error) => {
@@ -455,6 +535,52 @@ export default function App() {
   async function panicRelease() {
     clearActions();
     await sendCommand({ type: "panic_release" });
+  }
+
+  async function applyServoTrim(legId, trim) {
+    setRobotState((current) => ({
+      ...current,
+      legs: {
+        ...current.legs,
+        [legId]: {
+          ...current.legs[legId],
+          servoTrimDeg: {
+            hipYaw: trim.hipYaw ?? DEFAULT_SERVO_TRIM_DEG.hipYaw,
+            thigh: trim.thigh ?? DEFAULT_SERVO_TRIM_DEG.thigh,
+            calf: trim.calf ?? DEFAULT_SERVO_TRIM_DEG.calf,
+          },
+        },
+      },
+    }));
+
+    await sendCommand({
+      type: "set_leg_servo_trim",
+      legId,
+      hipYawOffsetDeg: trim.hipYaw ?? DEFAULT_SERVO_TRIM_DEG.hipYaw,
+      thighOffsetDeg: trim.thigh ?? DEFAULT_SERVO_TRIM_DEG.thigh,
+      calfOffsetDeg: trim.calf ?? DEFAULT_SERVO_TRIM_DEG.calf,
+    });
+  }
+
+  async function resetServoTrim(legId) {
+    setRobotState((current) => ({
+      ...current,
+      legs: {
+        ...current.legs,
+        [legId]: {
+          ...current.legs[legId],
+          servoTrimDeg: { ...DEFAULT_SERVO_TRIM_DEG },
+        },
+      },
+    }));
+
+    await sendCommand({
+      type: "set_leg_servo_trim",
+      legId,
+      hipYawOffsetDeg: 0,
+      thighOffsetDeg: 0,
+      calfOffsetDeg: 0,
+    });
   }
 
   return (
@@ -531,7 +657,14 @@ export default function App() {
           <RobotOverview robotState={robotState} poseSource={poseSource} />
           <section className="details-grid">
             {LEG_IDS.map((legId) => (
-              <LegDebugPanel key={legId} legId={legId} legState={robotState.legs[legId]} source={poseSource} />
+              <LegDebugPanel
+                key={legId}
+                legId={legId}
+                legState={robotState.legs[legId]}
+                source={poseSource}
+                applyServoTrim={withError(applyServoTrim)}
+                resetServoTrim={withError(resetServoTrim)}
+              />
             ))}
           </section>
         </>

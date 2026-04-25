@@ -751,7 +751,7 @@ static void smoothServoUpdate(SmoothServo *s) {
             s->moving = false;
         }
     }
-
+    smoothServoWriteEstimate(s);
 }
 
 static ServoAnglesDeg getCurrentServoAngles(const RobotLegState *leg) {

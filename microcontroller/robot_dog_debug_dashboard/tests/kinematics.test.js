@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, createNeutralCalibration, geometryWithinJointLimits, normalizeJointLimits } from "../shared/kinematics.js";
+import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, buildLegPoseFromServoAngles, createNeutralCalibration, geometryWithinJointLimits, normalizeJointLimits } from "../shared/kinematics.js";
 
 const calibration = createNeutralCalibration();
 
@@ -98,4 +98,12 @@ test("leftward reachable foot targets keep their full workspace", () => {
   assert.ok(Math.abs(pose.foot.y) < 1.5);
   assert.ok(pose.servoAnglesDeg.thigh >= 0 && pose.servoAnglesDeg.thigh <= 180);
   assert.ok(pose.servoAnglesDeg.calf >= 0 && pose.servoAnglesDeg.calf <= 180);
+});
+
+test("hip servo angle changes the lateral foot projection", () => {
+  const neutralPose = buildLegPoseFromServoAngles({ hip: 90, thigh: 90, calf: 90 }, calibration);
+  const abductedPose = buildLegPoseFromServoAngles({ hip: 120, thigh: 90, calf: 90 }, calibration);
+
+  assert.ok(Math.abs(neutralPose.foot.z ?? 0) < 0.001);
+  assert.ok(Math.abs((abductedPose.foot.z ?? 0) - (neutralPose.foot.z ?? 0)) > 1);
 });

@@ -24,3 +24,35 @@ test("validateCommand accepts high-level drive commands", () => {
 test("validateCommand rejects invalid motion mode", () => {
   assert.throws(() => validateCommand({ type: "set_motion_mode", mode: "fly" }));
 });
+
+test("validateCommand accepts flattened full-body pose commands", () => {
+  const command = validateCommand({
+    type: "apply_full_body_pose",
+    FLHipYawDeg: 90,
+    FLThighDeg: 70,
+    FLCalfDeg: 85,
+    FRHipYawDeg: 90,
+    FRThighDeg: 72,
+    FRCalfDeg: 88,
+    RLHipYawDeg: 90,
+    RLThighDeg: 71,
+    RLCalfDeg: 86,
+    RRHipYawDeg: 90,
+    RRThighDeg: 73,
+    RRCalfDeg: 89,
+  });
+
+  assert.equal(command.type, "apply_full_body_pose");
+});
+
+test("validateCommand accepts per-leg servo trim commands", () => {
+  const command = validateCommand({
+    type: "set_leg_servo_trim",
+    legId: "front_left",
+    hipYawOffsetDeg: 2,
+    thighOffsetDeg: -6,
+    calfOffsetDeg: 4,
+  });
+
+  assert.equal(command.legId, "front_left");
+});

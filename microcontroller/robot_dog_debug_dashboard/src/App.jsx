@@ -87,7 +87,9 @@ function numberValue(value, fallback = 0) {
 function createLocalState() {
   const legs = {};
   for (const legId of LEG_IDS) {
-    const desired = buildLegPoseFromFoot(DEFAULT_LEG_COMMAND.foot, calibration);
+    const desired = buildLegPoseFromFoot(DEFAULT_LEG_COMMAND.foot, calibration, {
+      hipServoDeg: DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
+    });
     legs[legId] = {
       desired,
       current: desired,
@@ -251,6 +253,10 @@ function LegDetail({ legId, legState, title, highlight = false, interactive = fa
       {interactive ? <p className="muted-copy">Drag the blue foot target to solve in the dashboard and stream live servo commands to the selected leg.</p> : null}
       <div className="stats-grid">
         <div>
+          <label>Hip servo</label>
+          <strong>{legState.servoAnglesDeg.hip.toFixed(1)} deg</strong>
+        </div>
+        <div>
           <label>Thigh joint</label>
           <strong>{legState.jointAnglesDeg.thigh.toFixed(1)} deg</strong>
         </div>
@@ -265,6 +271,10 @@ function LegDetail({ legId, legState, title, highlight = false, interactive = fa
         <div>
           <label>Calf servo</label>
           <strong>{legState.servoAnglesDeg.calf.toFixed(1)} deg</strong>
+        </div>
+        <div>
+          <label>Foot lateral</label>
+          <strong>{(legState.foot.z ?? 0).toFixed(1)} mm</strong>
         </div>
       </div>
     </div>
@@ -467,12 +477,27 @@ function ControlPanel({
         <section className="control-card">
           <h3>Servo Angles</h3>
           <label>
+            Hip servo
+            <input type="number" min="0" max="180" value={legDraft.servoAnglesDeg.hip} onChange={(event) => updateSection("servoAnglesDeg", "hip", Math.max(0, Math.min(180, numberValue(event.target.value))))} />
+          </label>
+          <label>
             Thigh servo
             <input type="number" min="0" max="180" value={legDraft.servoAnglesDeg.thigh} onChange={(event) => updateSection("servoAnglesDeg", "thigh", Math.max(0, Math.min(180, numberValue(event.target.value))))} />
           </label>
           <label>
             Calf servo
             <input type="number" min="0" max="180" value={legDraft.servoAnglesDeg.calf} onChange={(event) => updateSection("servoAnglesDeg", "calf", Math.max(0, Math.min(180, numberValue(event.target.value))))} />
+          </label>
+          <label>
+            Hip live slider
+            <input
+              type="range"
+              min="0"
+              max="180"
+              step="1"
+              value={legDraft.servoAnglesDeg.hip}
+              onChange={(event) => streamServo(selectedLegId, updateServoDraft("hip", event.target.value))}
+            />
           </label>
           <label>
             Thigh live slider
@@ -503,6 +528,10 @@ function ControlPanel({
         <section className="control-card">
           <h3>PCA9685 Channel Map</h3>
           <label>
+            Hip channel
+            <input type="number" min="0" max="15" value={legDraft.servoChannelMap.hip} onChange={(event) => updateChannelMap("hip", event.target.value)} />
+          </label>
+          <label>
             Thigh channel
             <input type="number" min="0" max="15" value={legDraft.servoChannelMap.thigh} onChange={(event) => updateChannelMap("thigh", event.target.value)} />
           </label>
@@ -511,7 +540,7 @@ function ControlPanel({
             <input type="number" min="0" max="15" value={legDraft.servoChannelMap.calf} onChange={(event) => updateChannelMap("calf", event.target.value)} />
           </label>
           <div className="map-readout">
-            Active map: thigh {channelMap.thigh}, calf {channelMap.calf}
+            Active map: hip {channelMap.hip}, thigh {channelMap.thigh}, calf {channelMap.calf}
           </div>
           <button onClick={() => sendChannelMap(selectedLegId, legDraft.servoChannelMap)}>Update servo channels</button>
         </section>
@@ -543,6 +572,10 @@ function ControlPanel({
         <section className="control-card">
           <h3>Servo Speed Limit</h3>
           <label>
+            Hip deg/sec
+            <input type="number" min="1" step="1" value={legDraft.servoSpeedLimitDegPerSec.hip} onChange={(event) => updateServoSpeedLimit("hip", event.target.value)} />
+          </label>
+          <label>
             Thigh deg/sec
             <input type="number" min="1" step="1" value={legDraft.servoSpeedLimitDegPerSec.thigh} onChange={(event) => updateServoSpeedLimit("thigh", event.target.value)} />
           </label>
@@ -551,7 +584,7 @@ function ControlPanel({
             <input type="number" min="1" step="1" value={legDraft.servoSpeedLimitDegPerSec.calf} onChange={(event) => updateServoSpeedLimit("calf", event.target.value)} />
           </label>
           <div className="map-readout">
-            Active: thigh {servoSpeedLimit.thigh} deg/sec, calf {servoSpeedLimit.calf} deg/sec
+            Active: hip {servoSpeedLimit.hip} deg/sec, thigh {servoSpeedLimit.thigh} deg/sec, calf {servoSpeedLimit.calf} deg/sec
           </div>
           <button onClick={() => sendServoSpeedLimit(selectedLegId, legDraft.servoSpeedLimitDegPerSec)}>Update speed limit</button>
         </section>
@@ -792,19 +825,19 @@ function TelemetryPanel({ robotState, selectedLegId }) {
         <div>
           <h3>Desired servo</h3>
           <p>
-            thigh {leg?.desired.servoAnglesDeg.thigh.toFixed(1)} deg, calf {leg?.desired.servoAnglesDeg.calf.toFixed(1)} deg
+            hip {leg?.desired.servoAnglesDeg.hip.toFixed(1)} deg, thigh {leg?.desired.servoAnglesDeg.thigh.toFixed(1)} deg, calf {leg?.desired.servoAnglesDeg.calf.toFixed(1)} deg
           </p>
         </div>
         <div>
           <h3>Current servo</h3>
           <p>
-            thigh {leg?.current.servoAnglesDeg.thigh.toFixed(1)} deg, calf {leg?.current.servoAnglesDeg.calf.toFixed(1)} deg
+            hip {leg?.current.servoAnglesDeg.hip.toFixed(1)} deg, thigh {leg?.current.servoAnglesDeg.thigh.toFixed(1)} deg, calf {leg?.current.servoAnglesDeg.calf.toFixed(1)} deg
           </p>
         </div>
         <div>
           <h3>PCA9685 map</h3>
           <p>
-            thigh ch {leg?.servoChannelMap?.thigh ?? "-"}, calf ch {leg?.servoChannelMap?.calf ?? "-"}
+            hip ch {leg?.servoChannelMap?.hip ?? "-"}, thigh ch {leg?.servoChannelMap?.thigh ?? "-"}, calf ch {leg?.servoChannelMap?.calf ?? "-"}
           </p>
         </div>
         <div>
@@ -817,8 +850,12 @@ function TelemetryPanel({ robotState, selectedLegId }) {
         <div>
           <h3>Servo speed limit</h3>
           <p>
-            thigh {leg?.servoSpeedLimitDegPerSec?.thigh ?? "-"} deg/sec, calf {leg?.servoSpeedLimitDegPerSec?.calf ?? "-"} deg/sec
+            hip {leg?.servoSpeedLimitDegPerSec?.hip ?? "-"} deg/sec, thigh {leg?.servoSpeedLimitDegPerSec?.thigh ?? "-"} deg/sec, calf {leg?.servoSpeedLimitDegPerSec?.calf ?? "-"} deg/sec
           </p>
+        </div>
+        <div>
+          <h3>Foot lateral offset</h3>
+          <p>{leg?.current?.foot?.z?.toFixed(1) ?? "0.0"} mm</p>
         </div>
         <div>
           <h3>Errors</h3>
@@ -968,6 +1005,7 @@ export default function App() {
     const currentPose = desiredPoseRef.current[legId] ?? robotState.legs[legId]?.desired;
     const jointLimits = jointLimitsRef.current[legId] ?? robotState.legs[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS;
     const pose = buildLegPoseFromFoot(foot, calibration, {
+      hipServoDeg: currentPose?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
       startThetaThigh: currentPose?.geometry?.thetaThigh,
       startThetaServo: currentPose?.geometry?.thetaServo,
       jointLimits,
@@ -1046,6 +1084,7 @@ export default function App() {
     const command = {
       type: "set_leg_servo_angles",
       legId: queued.legId,
+      hipServoDeg: queued.servoAnglesDeg.hip,
       thighServoDeg: queued.servoAnglesDeg.thigh,
       calfServoDeg: queued.servoAnglesDeg.calf,
     };
@@ -1073,6 +1112,7 @@ export default function App() {
     dragQueuedCommandRef.current = {
       legId,
       servoAnglesDeg: {
+        hip: pose?.servoAnglesDeg?.hip ?? desiredPoseRef.current[legId]?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
         thigh: pose?.servoAnglesDeg?.thigh ?? desiredPoseRef.current[legId]?.servoAnglesDeg?.thigh ?? 90,
         calf: pose?.servoAnglesDeg?.calf ?? desiredPoseRef.current[legId]?.servoAnglesDeg?.calf ?? 90,
       },
@@ -1082,6 +1122,7 @@ export default function App() {
 
   function applyDesiredServoLocally(legId, servoAnglesDeg) {
     const nextServoAngles = {
+      hip: Math.max(0, Math.min(180, numberValue(servoAnglesDeg.hip, DEFAULT_LEG_COMMAND.servoAnglesDeg.hip))),
       thigh: Math.max(0, Math.min(180, numberValue(servoAnglesDeg.thigh, 90))),
       calf: Math.max(0, Math.min(180, numberValue(servoAnglesDeg.calf, 90))),
     };
@@ -1104,6 +1145,8 @@ export default function App() {
       ...current,
       [legId]: {
         ...current[legId],
+        foot: { ...(pose?.foot ?? current[legId].foot) },
+        jointAnglesDeg: { ...(pose?.jointAnglesDeg ?? current[legId].jointAnglesDeg) },
         servoAnglesDeg: nextServoAngles,
       },
     }));
@@ -1145,6 +1188,7 @@ export default function App() {
     const command = {
       type: "set_leg_servo_angles",
       legId: queued.legId,
+      hipServoDeg: queued.servoAnglesDeg.hip,
       thighServoDeg: queued.servoAnglesDeg.thigh,
       calfServoDeg: queued.servoAnglesDeg.calf,
     };
@@ -1189,10 +1233,11 @@ export default function App() {
 
   async function sendFoot(legId, foot) {
     const pose = applyDesiredFootLocally(legId, foot);
-    const nextServoAngles = pose?.servoAnglesDeg ?? desiredPoseRef.current[legId]?.servoAnglesDeg ?? { thigh: 90, calf: 90 };
+    const nextServoAngles = pose?.servoAnglesDeg ?? desiredPoseRef.current[legId]?.servoAnglesDeg ?? DEFAULT_LEG_COMMAND.servoAnglesDeg;
     await sendRealtimeCommand({
       type: "set_leg_servo_angles",
       legId,
+      hipServoDeg: nextServoAngles.hip,
       thighServoDeg: nextServoAngles.thigh,
       calfServoDeg: nextServoAngles.calf,
     });
@@ -1201,6 +1246,7 @@ export default function App() {
   async function sendJoint(legId, jointAnglesDeg) {
     const jointLimits = robotState.legs[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS;
     const pose = buildLegPoseFromJointAngles(jointAnglesDeg, calibration, {
+      hipServoDeg: robotState.legs[legId]?.desired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
       startThetaServo: robotState.legs[legId]?.desired?.geometry?.thetaServo,
       jointLimits,
     });
@@ -1229,6 +1275,7 @@ export default function App() {
     await sendRealtimeCommand({
       type: "set_leg_servo_angles",
       legId,
+      hipServoDeg: pose.servoAnglesDeg.hip,
       thighServoDeg: pose.servoAnglesDeg.thigh,
       calfServoDeg: pose.servoAnglesDeg.calf,
     });
@@ -1236,11 +1283,18 @@ export default function App() {
 
   async function sendServo(legId, servoAnglesDeg) {
     const nextServoAngles = applyDesiredServoLocally(legId, servoAnglesDeg);
-    await sendCommand({ type: "set_leg_servo_angles", legId, thighServoDeg: nextServoAngles.thigh, calfServoDeg: nextServoAngles.calf });
+    await sendCommand({
+      type: "set_leg_servo_angles",
+      legId,
+      hipServoDeg: nextServoAngles.hip,
+      thighServoDeg: nextServoAngles.thigh,
+      calfServoDeg: nextServoAngles.calf,
+    });
   }
 
   async function sendChannelMap(legId, servoChannelMap) {
     const nextMap = {
+      hip: clampChannel(servoChannelMap.hip),
       thigh: clampChannel(servoChannelMap.thigh),
       calf: clampChannel(servoChannelMap.calf),
     };
@@ -1257,6 +1311,7 @@ export default function App() {
     await sendCommand({
       type: "set_leg_servo_channel_map",
       legId,
+      hipChannel: nextMap.hip,
       thighChannel: nextMap.thigh,
       calfChannel: nextMap.calf,
     });
@@ -1266,6 +1321,7 @@ export default function App() {
     const normalized = normalizeJointLimits(jointLimits);
     jointLimitsRef.current[legId] = normalized;
     const nextDesired = buildLegPoseFromFoot(robotState.legs[legId].desired.foot, calibration, {
+      hipServoDeg: robotState.legs[legId].desired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
       startThetaThigh: robotState.legs[legId].desired.geometry?.thetaThigh,
       startThetaServo: robotState.legs[legId].desired.geometry?.thetaServo,
       jointLimits: normalized,
@@ -1294,6 +1350,7 @@ export default function App() {
 
   async function sendServoSpeedLimit(legId, servoSpeedLimitDegPerSec) {
     const normalized = {
+      hip: Math.max(1, numberValue(servoSpeedLimitDegPerSec.hip, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC.hip)),
       thigh: Math.max(1, numberValue(servoSpeedLimitDegPerSec.thigh, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC.thigh)),
       calf: Math.max(1, numberValue(servoSpeedLimitDegPerSec.calf, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC.calf)),
     };
@@ -1317,6 +1374,7 @@ export default function App() {
     await sendCommand({
       type: "set_leg_servo_speed_limit",
       legId,
+      hipDegPerSec: normalized.hip,
       thighDegPerSec: normalized.thigh,
       calfDegPerSec: normalized.calf,
     });
@@ -1383,6 +1441,7 @@ export default function App() {
     const next = clone(robotState);
     for (const legId of LEG_IDS) {
       next.legs[legId].desired = buildLegPoseFromFoot(previewFrame[legId], calibration, {
+        hipServoDeg: next.legs[legId].desired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
         startThetaThigh: next.legs[legId].desired?.geometry?.thetaThigh,
         startThetaServo: next.legs[legId].desired?.geometry?.thetaServo,
         jointLimits: next.legs[legId].jointLimits,

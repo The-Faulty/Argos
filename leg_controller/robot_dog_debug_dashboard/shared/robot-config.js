@@ -94,6 +94,12 @@ export const DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = {
   calf: 180,
 };
 
+export const DEFAULT_SERVO_TRIM_DEG = {
+  hipYaw: 0,
+  thigh: 0,
+  calf: 0,
+};
+
 export const DEFAULT_STANCE = {
   height: 0,
   strideScale: 1,
@@ -107,6 +113,7 @@ export const ROBOT_CONFIG = {
   jointIds: [...JOINT_IDS],
   legIds: [...LEG_IDS],
   jointRotationPoints3d: cloneJointRotationPoints(),
+  defaultServoTrimDeg: { ...DEFAULT_SERVO_TRIM_DEG },
 };
 
 function cloneJointRotationPoints() {

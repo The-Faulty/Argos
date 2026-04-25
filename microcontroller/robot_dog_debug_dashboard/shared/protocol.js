@@ -26,7 +26,7 @@ export function validateCommand(command) {
       throw new Error(`Unknown leg id: ${command.legId}`);
     }
 
-    for (const key of ["thighChannel", "calfChannel"]) {
+    for (const key of ["hipChannel", "thighChannel", "calfChannel"]) {
       if (!Number.isInteger(command[key]) || command[key] < 0 || command[key] > 15) {
         throw new Error(`${key} must be an integer between 0 and 15.`);
       }
@@ -50,9 +50,21 @@ export function validateCommand(command) {
       throw new Error(`Unknown leg id: ${command.legId}`);
     }
 
-    for (const key of ["thighDegPerSec", "calfDegPerSec"]) {
+    for (const key of ["hipDegPerSec", "thighDegPerSec", "calfDegPerSec"]) {
       if (!Number.isFinite(command[key]) || command[key] <= 0) {
         throw new Error(`${key} must be a positive number.`);
+      }
+    }
+  }
+
+  if (command.type === "set_leg_servo_angles") {
+    if (typeof command.legId !== "string" || !isKnownLegId(command.legId)) {
+      throw new Error(`Unknown leg id: ${command.legId}`);
+    }
+
+    for (const key of ["hipServoDeg", "thighServoDeg", "calfServoDeg"]) {
+      if (!Number.isFinite(command[key]) || command[key] < 0 || command[key] > 180) {
+        throw new Error(`${key} must be a number between 0 and 180.`);
       }
     }
   }

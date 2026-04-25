@@ -36,6 +36,9 @@ export const LEG_GEOMETRY = {
   linkLong: 150,
   servoPivot: { x: -20, y: -22 },
   hipPivot: { x: 0, y: 0 },
+  hipServoPivot3d: { x: 0, y: -11, z: -41.8 },
+  thighPivot3d: { x: 0, y: 0, z: 0 },
+  servoPivot3d: { x: -20, y: -22, z: 0 },
   calfAttachOffset: 30,
   footOriginOffset: { x: 40, y: -140 }
 };
@@ -52,28 +55,29 @@ export const MODE_OPTIONS = [
 
 export const DEFAULT_LEG_COMMAND = {
   foot: { x: 0, y: 0 },
-  jointAnglesDeg: { thigh: 0, calf: -90 },
-  servoAnglesDeg: { thigh: 90, calf: 90 }
+  jointAnglesDeg: { hip: 0, thigh: 0, calf: -90 },
+  servoAnglesDeg: { hip: 90, thigh: 90, calf: 90 }
 };
 
 export const DEFAULT_SERVO_CHANNEL_MAP = {
-  front_left: { thigh: 0, calf: 1 },
-  front_right: { thigh: 2, calf: 3 },
-  rear_left: { thigh: 4, calf: 5 },
-  rear_right: { thigh: 6, calf: 7 }
+  front_left: { hip: 8, thigh: 0, calf: 1 },
+  front_right: { hip: 9, thigh: 2, calf: 3 },
+  rear_left: { hip: 10, thigh: 4, calf: 5 },
+  rear_right: { hip: 11, thigh: 6, calf: 7 }
 };
 
 export const DEFAULT_JOINT_LIMITS = {
-  thighDeg: { min: -145, max: 15 },
+  thighDeg: { min: -145, max: 60 },
   calfDeg: { min: -165, max: -25 }
 };
 
 export const DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = {
+  hip: 180,
   thigh: 180,
   calf: 180
 };
 
-export const DEFAULT_SERVO_UPDATE_RATE_HZ = 50;
+export const DEFAULT_SERVO_UPDATE_RATE_HZ = 150;
 
 export const NEUTRAL_CALIBRATION = {
   thetaThigh: 0,

@@ -64,7 +64,9 @@ async function handleRealtimeCommand(rawCommand, wss) {
 function createStatus() {
   const legs = {};
   for (const legId of LEG_IDS) {
-    const desired = buildLegPoseFromFoot(DEFAULT_LEG_COMMAND.foot, calibration);
+    const desired = buildLegPoseFromFoot(DEFAULT_LEG_COMMAND.foot, calibration, {
+      hipServoDeg: DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
+    });
     legs[legId] = {
       desired,
       current: desired,
@@ -248,6 +250,7 @@ class BridgeState {
       const currentDesired = this.status.legs[command.legId].desired;
       const jointLimits = this.status.legs[command.legId].jointLimits ?? DEFAULT_JOINT_LIMITS;
       this.status.legs[command.legId].desired = buildLegPoseFromFoot({ x: command.x, y: command.y }, calibration, {
+        hipServoDeg: currentDesired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
         startThetaThigh: currentDesired?.geometry?.thetaThigh,
         startThetaServo: currentDesired?.geometry?.thetaServo,
         jointLimits,
@@ -260,6 +263,7 @@ class BridgeState {
       const currentDesired = this.status.legs[command.legId].desired;
       const jointLimits = this.status.legs[command.legId].jointLimits ?? DEFAULT_JOINT_LIMITS;
       this.status.legs[command.legId].desired = buildLegPoseFromJointAngles({ thigh: command.thighDeg, calf: command.calfDeg }, calibration, {
+        hipServoDeg: currentDesired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
         startThetaServo: currentDesired?.geometry?.thetaServo,
         jointLimits,
       });
@@ -269,13 +273,18 @@ class BridgeState {
       this.status.mode = "direct_servo_angles";
       this.status.servosReleased = false;
       const jointLimits = this.status.legs[command.legId].jointLimits ?? DEFAULT_JOINT_LIMITS;
-      this.status.legs[command.legId].desired = buildLegPoseFromServoAngles({ thigh: command.thighServoDeg, calf: command.calfServoDeg }, calibration, {
+      this.status.legs[command.legId].desired = buildLegPoseFromServoAngles({
+        hip: command.hipServoDeg,
+        thigh: command.thighServoDeg,
+        calf: command.calfServoDeg,
+      }, calibration, {
         jointLimits,
       });
     }
 
     if (command.type === "set_leg_servo_channel_map") {
       this.status.legs[command.legId].servoChannelMap = {
+        hip: command.hipChannel,
         thigh: command.thighChannel,
         calf: command.calfChannel,
       };
@@ -295,6 +304,7 @@ class BridgeState {
       const currentDesired = this.status.legs[command.legId].desired;
       this.status.legs[command.legId].jointLimits = jointLimits;
       this.status.legs[command.legId].desired = buildLegPoseFromFoot(currentDesired?.foot ?? DEFAULT_LEG_COMMAND.foot, calibration, {
+        hipServoDeg: currentDesired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
         startThetaThigh: currentDesired?.geometry?.thetaThigh,
         startThetaServo: currentDesired?.geometry?.thetaServo,
         jointLimits,
@@ -303,6 +313,7 @@ class BridgeState {
 
     if (command.type === "set_leg_servo_speed_limit") {
       this.status.legs[command.legId].servoSpeedLimitDegPerSec = {
+        hip: command.hipDegPerSec,
         thigh: command.thighDegPerSec,
         calf: command.calfDegPerSec,
       };
@@ -336,12 +347,14 @@ class BridgeState {
           servoSpeedLimitDegPerSec: leg.servoSpeedLimitDegPerSec ?? next.legs[legId].servoSpeedLimitDegPerSec,
           desired: leg.desired?.foot
             ? buildLegPoseFromFoot(leg.desired.foot, calibration, {
+                hipServoDeg: leg.desired?.servoAnglesDeg?.hip ?? next.legs[legId].desired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
                 startThetaThigh: next.legs[legId].desired?.geometry?.thetaThigh,
                 startThetaServo: next.legs[legId].desired?.geometry?.thetaServo,
                 jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,
               })
             : leg.desired?.jointAnglesDeg
               ? buildLegPoseFromJointAngles(leg.desired.jointAnglesDeg, calibration, {
+                  hipServoDeg: leg.desired?.servoAnglesDeg?.hip ?? next.legs[legId].desired?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
                   startThetaServo: next.legs[legId].desired?.geometry?.thetaServo,
                   jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,
                 })
@@ -356,6 +369,7 @@ class BridgeState {
               })
             : leg.current?.foot
               ? buildLegPoseFromFoot(leg.current.foot, calibration, {
+                  hipServoDeg: leg.current?.servoAnglesDeg?.hip ?? next.legs[legId].current?.servoAnglesDeg?.hip ?? DEFAULT_LEG_COMMAND.servoAnglesDeg.hip,
                   startThetaThigh: next.legs[legId].current?.geometry?.thetaThigh,
                   startThetaServo: next.legs[legId].current?.geometry?.thetaServo,
                   jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,

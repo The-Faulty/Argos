@@ -28,8 +28,22 @@ export function normalizeDriveCommand(command = {}) {
 }
 
 export function validateFullBodyPose(command) {
-  if (!command?.legs || typeof command.legs !== "object") {
-    throw new Error("Full-body pose must include legs.");
+  const hasLegMap = command?.legs && typeof command.legs === "object";
+  const prefixes = {
+    front_left: "FL",
+    front_right: "FR",
+    rear_left: "RL",
+    rear_right: "RR",
+  };
+
+  if (!hasLegMap) {
+    for (const legId of LEG_IDS) {
+      const prefix = prefixes[legId];
+      for (const key of ["HipYawDeg", "ThighDeg", "CalfDeg"]) {
+        assertNumber(command?.[`${prefix}${key}`], `${prefix}${key}`);
+      }
+    }
+    return command;
   }
 
   for (const legId of LEG_IDS) {
@@ -105,6 +119,16 @@ export function validateCommand(command) {
       if (!Number.isFinite(command[key]) || command[key] <= 0) {
         throw new Error(`${key} must be a positive number.`);
       }
+    }
+  }
+
+  if (command.type === "set_leg_servo_trim") {
+    if (typeof command.legId !== "string" || !isKnownLegId(command.legId)) {
+      throw new Error(`Unknown leg id: ${command.legId}`);
+    }
+
+    for (const key of ["hipYawOffsetDeg", "thighOffsetDeg", "calfOffsetDeg"]) {
+      assertNumber(command[key], key);
     }
   }
 

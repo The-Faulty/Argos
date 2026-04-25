@@ -1,4 +1,5 @@
 import express from "express";
+import fs from "fs/promises";
 import http from "http";
 import path from "path";
 import { fileURLToPath } from "url";
@@ -7,12 +8,14 @@ import { ReadlineParser, SerialPort } from "serialport";
 import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, buildLegPoseFromServoAngles, createNeutralCalibration, normalizeJointLimits } from "../shared/kinematics.js";
 import { createMotionStatePatch, flattenServoPose } from "../shared/locomotion.js";
 import { parseWireMessage, toWireMessage, validateCommand } from "../shared/protocol.js";
+import { extractJsonMessageCandidate } from "../shared/serial-wire.js";
 import {
   DEFAULT_DRIVE_COMMAND,
   DEFAULT_JOINT_LIMITS,
   DEFAULT_LEG_COMMAND,
   DEFAULT_SERVO_CHANNEL_MAP,
   DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
+  DEFAULT_SERVO_TRIM_DEG,
   LEG_IDS,
   ROBOT_CONFIG,
 } from "../shared/robot-config.js";
@@ -26,9 +29,35 @@ const AUTO_CONNECT_PORT = process.env.PI_ESP32_PORT?.trim() || "";
 const calibration = createNeutralCalibration();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const distDir = path.resolve(__dirname, "..", "dist");
+const SERVO_TRIM_FILE = process.env.PI_SERVO_TRIM_FILE?.trim() || path.resolve(__dirname, "servo-trim-config.json");
+const RIGHT_LEG_IDS = new Set(["front_right", "rear_right"]);
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
+}
+
+function clampServo(value) {
+  return Math.max(0, Math.min(180, value));
+}
+
+function mirrorServoAroundNeutral(value) {
+  return 180 - (value ?? 90);
+}
+
+function normalizeIncomingServoAngles(legId, servoAnglesDeg = {}, servoTrimDeg = DEFAULT_SERVO_TRIM_DEG) {
+  const hipYaw = clampServo((servoAnglesDeg.hipYaw ?? 90) - (servoTrimDeg.hipYaw ?? 0));
+  const thighRaw = clampServo((servoAnglesDeg.thigh ?? 90) - (servoTrimDeg.thigh ?? 0));
+  const calfRaw = clampServo((servoAnglesDeg.calf ?? 90) - (servoTrimDeg.calf ?? 0));
+
+  return {
+    hipYaw,
+    thigh: RIGHT_LEG_IDS.has(legId) ? mirrorServoAroundNeutral(thighRaw) : thighRaw,
+    calf: RIGHT_LEG_IDS.has(legId) ? mirrorServoAroundNeutral(calfRaw) : calfRaw,
+  };
+}
+
+function delay(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function safeJson(response, statusCode, payload) {
@@ -70,6 +99,7 @@ function createLegStatus() {
     servoChannelMap: {},
     jointLimits: clone(DEFAULT_JOINT_LIMITS),
     servoSpeedLimitDegPerSec: {},
+    servoTrimDeg: clone(DEFAULT_SERVO_TRIM_DEG),
   };
 }
 
@@ -114,6 +144,47 @@ class PiDogController {
     this.lastTelemetryMs = 0;
     this.lastUiDriveAtMs = 0;
     this.controlHandle = null;
+  }
+
+  buildServoTrimSnapshot() {
+    return {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      legs: Object.fromEntries(
+        LEG_IDS.map((legId) => [legId, {
+          hipYaw: this.status.legs[legId]?.servoTrimDeg?.hipYaw ?? 0,
+          thigh: this.status.legs[legId]?.servoTrimDeg?.thigh ?? 0,
+          calf: this.status.legs[legId]?.servoTrimDeg?.calf ?? 0,
+        }]),
+      ),
+    };
+  }
+
+  applyServoTrimSnapshot(snapshot) {
+    const legs = snapshot?.legs ?? {};
+    for (const legId of LEG_IDS) {
+      const persistedTrim = legs[legId] ?? {};
+      this.status.legs[legId].servoTrimDeg = {
+        hipYaw: Number.isFinite(persistedTrim.hipYaw) ? persistedTrim.hipYaw : DEFAULT_SERVO_TRIM_DEG.hipYaw,
+        thigh: Number.isFinite(persistedTrim.thigh) ? persistedTrim.thigh : DEFAULT_SERVO_TRIM_DEG.thigh,
+        calf: Number.isFinite(persistedTrim.calf) ? persistedTrim.calf : DEFAULT_SERVO_TRIM_DEG.calf,
+      };
+    }
+  }
+
+  async loadPersistedServoTrims() {
+    try {
+      const raw = await fs.readFile(SERVO_TRIM_FILE, "utf8");
+      this.applyServoTrimSnapshot(JSON.parse(raw));
+    } catch (error) {
+      if (error?.code !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+
+  async savePersistedServoTrims() {
+    await fs.writeFile(SERVO_TRIM_FILE, JSON.stringify(this.buildServoTrimSnapshot(), null, 2));
   }
 
   attachWebSocketServer(wss) {
@@ -197,6 +268,7 @@ class PiDogController {
     this.status.connectedPort = serialPath;
     this.clearFault("ESP32 link disconnected");
     this.broadcastStatus();
+    await delay(1200);
     await this.sendWire({ type: "hello" });
     await this.sendWire({ type: "get_state" });
   }
@@ -232,12 +304,13 @@ class PiDogController {
   }
 
   handleIncomingLine(line) {
-    if (!line) {
+    const candidate = extractJsonMessageCandidate(line);
+    if (!candidate) {
       return;
     }
 
     try {
-      const message = parseWireMessage(line);
+      const message = parseWireMessage(candidate);
       if (message.type === "state" || message.type === "hello_ack") {
         this.applyIncomingState(message.payload ?? {});
         this.broadcastEvent({ type: message.type, payload: this.status });
@@ -271,19 +344,29 @@ class PiDogController {
         }
 
         const jointLimits = normalizeJointLimits(incomingLeg.jointLimits ?? this.status.legs[legId].jointLimits);
+        const servoTrimDeg = incomingLeg.servoTrimDeg ?? this.status.legs[legId].servoTrimDeg;
         this.status.legs[legId] = {
           ...this.status.legs[legId],
           ...incomingLeg,
           jointLimits,
           servoChannelMap: incomingLeg.servoChannelMap ?? this.status.legs[legId].servoChannelMap,
           servoSpeedLimitDegPerSec: incomingLeg.servoSpeedLimitDegPerSec ?? this.status.legs[legId].servoSpeedLimitDegPerSec,
+          servoTrimDeg,
           desired: incomingLeg.desired?.servoAnglesDeg
-            ? buildLegPoseFromServoAngles(incomingLeg.desired.servoAnglesDeg, calibration, { jointLimits })
+            ? buildLegPoseFromServoAngles(
+                normalizeIncomingServoAngles(legId, incomingLeg.desired.servoAnglesDeg, servoTrimDeg),
+                calibration,
+                { jointLimits },
+              )
             : incomingLeg.desired?.jointAnglesDeg
               ? buildLegPoseFromJointAngles(incomingLeg.desired.jointAnglesDeg, calibration, { jointLimits })
               : this.status.legs[legId].desired,
           current: incomingLeg.current?.servoAnglesDeg
-            ? buildLegPoseFromServoAngles(incomingLeg.current.servoAnglesDeg, calibration, { jointLimits })
+            ? buildLegPoseFromServoAngles(
+                normalizeIncomingServoAngles(legId, incomingLeg.current.servoAnglesDeg, servoTrimDeg),
+                calibration,
+                { jointLimits },
+              )
             : this.status.legs[legId].current,
         };
       }
@@ -313,12 +396,8 @@ class PiDogController {
   }
 
   async sendCurrentPoseToEsp32() {
-    const legs = Object.fromEntries(
-      LEG_IDS.map((legId) => [legId, { servoAnglesDeg: this.status.legs[legId].desired.servoAnglesDeg }]),
-    );
     await this.sendWire({
       type: "apply_full_body_pose",
-      legs,
       ...flattenServoPose(this.status.legs),
     });
   }
@@ -376,7 +455,7 @@ class PiDogController {
         this.status.mode = "direct_foot_xy";
         this.status.servosReleased = false;
         if (this.status.esp32Connected) {
-          await this.sendWire(command);
+          await this.sendCurrentPoseToEsp32();
         }
         this.setAck("foot target accepted");
         return;
@@ -393,7 +472,7 @@ class PiDogController {
         this.status.mode = "direct_joint_angles";
         this.status.servosReleased = false;
         if (this.status.esp32Connected) {
-          await this.sendWire(command);
+          await this.sendCurrentPoseToEsp32();
         }
         this.setAck("joint target accepted");
         return;
@@ -410,7 +489,7 @@ class PiDogController {
         this.status.mode = "direct_servo_angles";
         this.status.servosReleased = false;
         if (this.status.esp32Connected) {
-          await this.sendWire(command);
+          await this.sendCurrentPoseToEsp32();
         }
         this.setAck("servo target accepted");
         return;
@@ -447,6 +526,18 @@ class PiDogController {
           await this.sendWire(command);
         }
         this.setAck("servo speed limit updated");
+        return;
+      case "set_leg_servo_trim":
+        this.status.legs[command.legId].servoTrimDeg = {
+          hipYaw: command.hipYawOffsetDeg,
+          thigh: command.thighOffsetDeg,
+          calf: command.calfOffsetDeg,
+        };
+        await this.savePersistedServoTrims();
+        if (this.status.esp32Connected && !this.status.servosReleased) {
+          await this.sendCurrentPoseToEsp32();
+        }
+        this.setAck("servo trim updated");
         return;
       default:
         if (this.status.esp32Connected) {
@@ -555,6 +646,7 @@ app.post("/api/disconnect", async (_request, response) => {
 app.post("/api/command", async (request, response) => {
   try {
     await controller.handleCommand(request.body.command);
+    controller.broadcastStatus();
     safeJson(response, 200, { ok: true, status: controller.status });
   } catch (error) {
     controller.setFault(error.message);
@@ -593,6 +685,7 @@ wss.on("connection", (socket) => {
 server.listen(PORT, async () => {
   console.log(`Robot dog Pi controller listening on http://0.0.0.0:${PORT}`);
   try {
+    await controller.loadPersistedServoTrims();
     await controller.refreshPorts();
     if (AUTO_CONNECT_PORT) {
       await controller.connect({ path: AUTO_CONNECT_PORT, baudRate: BAUD_RATE });

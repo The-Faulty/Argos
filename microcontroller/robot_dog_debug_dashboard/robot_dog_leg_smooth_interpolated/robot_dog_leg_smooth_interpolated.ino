@@ -26,20 +26,23 @@ static const float SERVO_SUPPLY_VOLTS = 7.4f;
 static const float SERVO_SPEED_SAFETY_FACTOR = 0.80f;
 static const float MOTION_TIME_SCALE = 1.15f;
 static const float DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = 180.0f;
+static const float HIP_CENTER_DEG = 90.0f;
 static const float THIGH_CENTER_DEG = 90.0f;
 static const float CALF_CENTER_DEG = 90.0f;
+static const float LEFT_HIP_SIGN = 1.0f;
 static const float LEFT_THIGH_SIGN = 1.0f;
 static const float LEFT_CALF_SIGN = 1.0f;
+static const float RIGHT_HIP_SIGN = -1.0f;
 static const float RIGHT_THIGH_SIGN = -1.0f;
 static const float RIGHT_CALF_SIGN = -1.0f;
 static const float SERVO_MIN_DEG = 0.0f;
 static const float SERVO_MAX_DEG = 180.0f;
 static const float DEFAULT_THIGH_MIN_DEG = -145.0f;
-static const float DEFAULT_THIGH_MAX_DEG = 15.0f;
+static const float DEFAULT_THIGH_MAX_DEG = 60.0f;
 static const float DEFAULT_CALF_MIN_DEG = -165.0f;
 static const float DEFAULT_CALF_MAX_DEG = -25.0f;
 static const uint8_t PCA9685_ADDRESS = 0x40;
-static const float DEFAULT_PCA9685_FREQUENCY_HZ = 50.0f;
+static const float DEFAULT_PCA9685_FREQUENCY_HZ = 150.0f;
 static const float MIN_PCA9685_FREQUENCY_HZ = 40.0f;
 static const float MAX_PCA9685_FREQUENCY_HZ = 200.0f;
 static const uint8_t I2C_SDA_PIN = 6;
@@ -130,14 +133,17 @@ typedef struct {
 } JointLimitsDeg;
 
 typedef struct {
+    float hip;
     float thigh;
     float calf;
 } ServoAnglesDeg;
 
 typedef struct {
     const char *id;
+    uint8_t hipChannel;
     uint8_t thighChannel;
     uint8_t calfChannel;
+    float hipSign;
     float thighSign;
     float calfSign;
 } LegHardwareConfig;
@@ -160,6 +166,7 @@ typedef struct {
 } SmoothServo;
 
 typedef struct {
+    SmoothServo hip;
     SmoothServo thigh;
     SmoothServo calf;
     Point2f desiredFoot;
@@ -168,6 +175,7 @@ typedef struct {
     Point2f currentFoot;
     JointAnglesDeg currentJointAngles;
     ServoAnglesDeg currentServoAngles;
+    uint8_t hipChannel;
     uint8_t thighChannel;
     uint8_t calfChannel;
     JointLimitsDeg jointLimits;
@@ -221,10 +229,10 @@ static const Point2f SERVO_PIVOT = {-20.0f, -22.0f};
 static const Point2f FOOT_ORIGIN_OFFSET = {40.0f, -140.0f};
 
 static const LegHardwareConfig LEG_CONFIGS[NUM_LEGS] = {
-    {"front_left", 0, 1, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
-    {"front_right", 2, 3, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN},
-    {"rear_left", 4, 5, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
-    {"rear_right", 6, 7, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN}
+    {"front_left", 8, 0, 1, LEFT_HIP_SIGN, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
+    {"front_right", 9, 2, 3, RIGHT_HIP_SIGN, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN},
+    {"rear_left", 10, 4, 5, LEFT_HIP_SIGN, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
+    {"rear_right", 11, 6, 7, RIGHT_HIP_SIGN, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN}
 };
 
 static Adafruit_PWMServoDriver g_pwm = Adafruit_PWMServoDriver(PCA9685_ADDRESS);
@@ -1080,6 +1088,7 @@ static void smoothServoUpdate(SmoothServo *s) {
 
 static ServoAnglesDeg getCurrentServoAngles(const RobotLegState *leg) {
     ServoAnglesDeg result;
+    result.hip = removeServoCalibration(leg->hip.estimatedDeg, leg->hip.centerDeg, leg->hip.sign);
     result.thigh = removeServoCalibration(leg->thigh.estimatedDeg, leg->thigh.centerDeg, leg->thigh.sign);
     result.calf = removeServoCalibration(leg->calf.estimatedDeg, leg->calf.centerDeg, leg->calf.sign);
     return result;
@@ -1153,17 +1162,21 @@ static void setLegError(RobotLegState *leg, const char *message) {
 }
 
 static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config) {
+    smoothServoBegin(&leg->hip, config->hipChannel, HIP_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, HIP_CENTER_DEG, config->hipSign, SERVO_SUPPLY_VOLTS);
     smoothServoBegin(&leg->thigh, config->thighChannel, THIGH_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, THIGH_CENTER_DEG, config->thighSign, SERVO_SUPPLY_VOLTS);
     smoothServoBegin(&leg->calf, config->calfChannel, CALF_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, CALF_CENTER_DEG, config->calfSign, SERVO_SUPPLY_VOLTS);
+    leg->hipChannel = config->hipChannel;
     leg->thighChannel = config->thighChannel;
     leg->calfChannel = config->calfChannel;
     leg->jointLimits = defaultJointLimits();
+    leg->servoSpeedLimitDegPerSec.hip = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
     leg->servoSpeedLimitDegPerSec.thigh = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
     leg->servoSpeedLimitDegPerSec.calf = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
     leg->lastThetaThigh = g_thighNeutralAngle;
     leg->lastThetaServo = g_servoNeutralAngle;
     leg->desiredFoot.x = 0.0f;
     leg->desiredFoot.y = 0.0f;
+    leg->desiredServoAngles.hip = 90.0f;
     leg->desiredServoAngles.thigh = 90.0f;
     leg->desiredServoAngles.calf = 90.0f;
     leg->desiredJointAngles.thighDeg = radToDeg(g_thighNeutralAngle);
@@ -1177,6 +1190,7 @@ static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config) {
 }
 
 static void robotLegUpdate(RobotLegState *leg) {
+    smoothServoUpdate(&leg->hip);
     smoothServoUpdate(&leg->thigh);
     smoothServoUpdate(&leg->calf);
     ServoAnglesDeg currentServoAngles = getCurrentServoAngles(leg);
@@ -1185,20 +1199,25 @@ static void robotLegUpdate(RobotLegState *leg) {
 
 static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfDeg);
 
-static void robotLegSetServoChannels(int legIndex, uint8_t thighChannel, uint8_t calfChannel) {
+static void robotLegSetServoChannels(int legIndex, uint8_t hipChannel, uint8_t thighChannel, uint8_t calfChannel) {
     RobotLegState *leg = &g_legs[legIndex];
+    leg->hip.channel = hipChannel;
     leg->thigh.channel = thighChannel;
     leg->calf.channel = calfChannel;
+    leg->hip.attached = (hipChannel != INVALID_CHANNEL);
     leg->thigh.attached = (thighChannel != INVALID_CHANNEL);
     leg->calf.attached = (calfChannel != INVALID_CHANNEL);
+    leg->hipChannel = hipChannel;
     leg->thighChannel = thighChannel;
     leg->calfChannel = calfChannel;
+    smoothServoWriteEstimate(&leg->hip);
     smoothServoWriteEstimate(&leg->thigh);
     smoothServoWriteEstimate(&leg->calf);
 }
 
 static void releaseAllServos(void) {
     for (int i = 0; i < NUM_LEGS; ++i) {
+        smoothServoRelease(&g_legs[i].hip);
         smoothServoRelease(&g_legs[i].thigh);
         smoothServoRelease(&g_legs[i].calf);
     }
@@ -1213,29 +1232,35 @@ static void robotLegSetJointLimits(int legIndex, JointLimitsDeg limits) {
     robotLegCommandJointAngles(legIndex, leg->desiredJointAngles.thighDeg, leg->desiredJointAngles.calfDeg);
 }
 
-static void robotLegSetServoSpeedLimit(int legIndex, float thighDegPerSec, float calfDegPerSec) {
+static void robotLegSetServoSpeedLimit(int legIndex, float hipDegPerSec, float thighDegPerSec, float calfDegPerSec) {
     RobotLegState *leg = &g_legs[legIndex];
+    leg->servoSpeedLimitDegPerSec.hip = hipDegPerSec;
     leg->servoSpeedLimitDegPerSec.thigh = thighDegPerSec;
     leg->servoSpeedLimitDegPerSec.calf = calfDegPerSec;
+    smoothServoSetSpeedLimitDegPerSec(&leg->hip, hipDegPerSec);
     smoothServoSetSpeedLimitDegPerSec(&leg->thigh, thighDegPerSec);
     smoothServoSetSpeedLimitDegPerSec(&leg->calf, calfDegPerSec);
 }
 
-static void robotLegCommandServo(int legIndex, float thighServoDeg, float calfServoDeg) {
+static void robotLegCommandServo(int legIndex, float hipServoDeg, float thighServoDeg, float calfServoDeg) {
     RobotLegState *leg = &g_legs[legIndex];
     g_servosReleased = false;
+    smoothServoCommandModelDeg(&leg->hip, hipServoDeg);
     smoothServoCommandModelDeg(&leg->thigh, thighServoDeg);
     smoothServoCommandModelDeg(&leg->calf, calfServoDeg);
+    leg->desiredServoAngles.hip = clampf(hipServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     leg->desiredServoAngles.thigh = clampf(thighServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     leg->desiredServoAngles.calf = clampf(calfServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, true);
 }
 
-static void robotLegCommandServoImmediate(int legIndex, float thighServoDeg, float calfServoDeg) {
+static void robotLegCommandServoImmediate(int legIndex, float hipServoDeg, float thighServoDeg, float calfServoDeg) {
     RobotLegState *leg = &g_legs[legIndex];
     g_servosReleased = false;
+    smoothServoCommandModelDegImmediate(&leg->hip, hipServoDeg);
     smoothServoCommandModelDegImmediate(&leg->thigh, thighServoDeg);
     smoothServoCommandModelDegImmediate(&leg->calf, calfServoDeg);
+    leg->desiredServoAngles.hip = clampf(hipServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     leg->desiredServoAngles.thigh = clampf(thighServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     leg->desiredServoAngles.calf = clampf(calfServoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, true);
@@ -1251,7 +1276,7 @@ static bool robotLegCommandFoot(int legIndex, float footX, float footY) {
         return false;
     }
 
-    robotLegCommandServo(legIndex, ik.thighServoDeg, ik.calfServoDeg);
+    robotLegCommandServo(legIndex, leg->desiredServoAngles.hip, ik.thighServoDeg, ik.calfServoDeg);
     leg->desiredFoot = ik.resolvedFoot;
     leg->lastThetaThigh = ik.thetaThigh;
     leg->lastThetaServo = ik.thetaServo;
@@ -1281,7 +1306,7 @@ static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfD
 
     float thighServoDeg = thetaToModelServoDeg(thetaThigh, g_thighNeutralAngle);
     float calfServoDeg = thetaToModelServoDeg(thetaServo, g_servoNeutralAngle);
-    robotLegCommandServo(legIndex, thighServoDeg, calfServoDeg);
+    robotLegCommandServo(legIndex, leg->desiredServoAngles.hip, thighServoDeg, calfServoDeg);
     leg->desiredJointAngles.thighDeg = limitedAngles.thighDeg;
     leg->desiredJointAngles.calfDeg = limitedAngles.calfDeg;
     leg->lastThetaThigh = thetaThigh;
@@ -1481,11 +1506,15 @@ static void sendStateMessage(const char *typeName) {
         Serial.print(modeToString(g_mode));
         Serial.print("\",\"lastError\":\"");
         jsonPrintEscaped(leg->lastError);
-        Serial.print("\",\"servoChannelMap\":{\"thigh\":");
+        Serial.print("\",\"servoChannelMap\":{\"hip\":");
+        Serial.print((int)leg->hipChannel);
+        Serial.print(",\"thigh\":");
         Serial.print((int)leg->thighChannel);
         Serial.print(",\"calf\":");
         Serial.print((int)leg->calfChannel);
-        Serial.print("},\"servoSpeedLimitDegPerSec\":{\"thigh\":");
+        Serial.print("},\"servoSpeedLimitDegPerSec\":{\"hip\":");
+        Serial.print(leg->hip.speedLimitDegPerSec, 3);
+        Serial.print(",\"thigh\":");
         Serial.print(leg->thigh.speedLimitDegPerSec, 3);
         Serial.print(",\"calf\":");
         Serial.print(leg->calf.speedLimitDegPerSec, 3);
@@ -1498,12 +1527,16 @@ static void sendStateMessage(const char *typeName) {
         Serial.print(",\"max\":");
         Serial.print(leg->jointLimits.calfDeg.max, 3);
         Serial.print("}},\"desired\":{");
-        Serial.print("\"servoAnglesDeg\":{\"thigh\":");
+        Serial.print("\"servoAnglesDeg\":{\"hip\":");
+        Serial.print(leg->desiredServoAngles.hip, 3);
+        Serial.print(",\"thigh\":");
         Serial.print(leg->desiredServoAngles.thigh, 3);
         Serial.print(",\"calf\":");
         Serial.print(leg->desiredServoAngles.calf, 3);
         Serial.print("}},\"current\":{");
-        Serial.print("\"servoAnglesDeg\":{\"thigh\":");
+        Serial.print("\"servoAnglesDeg\":{\"hip\":");
+        Serial.print(leg->currentServoAngles.hip, 3);
+        Serial.print(",\"thigh\":");
         Serial.print(leg->currentServoAngles.thigh, 3);
         Serial.print(",\"calf\":");
         Serial.print(leg->currentServoAngles.calf, 3);
@@ -1777,6 +1810,7 @@ static void processCommandLine(const char *line) {
 
     if (strcmp(type, "set_leg_servo_angles") == 0) {
         char legId[24] = "";
+        float hipServoDeg = 90.0f;
         float thighServoDeg = 0.0f;
         float calfServoDeg = 0.0f;
         if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "thighServoDeg", &thighServoDeg) || !jsonExtractFloat(line, "calfServoDeg", &calfServoDeg)) {
@@ -1790,14 +1824,17 @@ static void processCommandLine(const char *line) {
             return;
         }
 
+        hipServoDeg = g_legs[legIndex].desiredServoAngles.hip;
+        jsonExtractFloat(line, "hipServoDeg", &hipServoDeg);
         setMode(MODE_DIRECT_SERVO_ANGLES);
-        robotLegCommandServo(legIndex, thighServoDeg, calfServoDeg);
+        robotLegCommandServo(legIndex, hipServoDeg, thighServoDeg, calfServoDeg);
         sendAck(seq, "servo target accepted");
         return;
     }
 
     if (strcmp(type, "set_leg_servo_channel_map") == 0) {
         char legId[24] = "";
+        int hipChannel = 0;
         int thighChannel = 0;
         int calfChannel = 0;
         if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractInt(line, "thighChannel", &thighChannel) || !jsonExtractInt(line, "calfChannel", &calfChannel)) {
@@ -1811,12 +1848,15 @@ static void processCommandLine(const char *line) {
             return;
         }
 
-        if (thighChannel < 0 || thighChannel > 15 || calfChannel < 0 || calfChannel > 15) {
+        hipChannel = g_legs[legIndex].hipChannel;
+        jsonExtractInt(line, "hipChannel", &hipChannel);
+
+        if (hipChannel < 0 || hipChannel > 15 || thighChannel < 0 || thighChannel > 15 || calfChannel < 0 || calfChannel > 15) {
             sendError(seq, "servo channels must be between 0 and 15");
             return;
         }
 
-        robotLegSetServoChannels(legIndex, (uint8_t)thighChannel, (uint8_t)calfChannel);
+        robotLegSetServoChannels(legIndex, (uint8_t)hipChannel, (uint8_t)thighChannel, (uint8_t)calfChannel);
         sendAck(seq, "servo channel map updated");
         return;
     }
@@ -1856,6 +1896,7 @@ static void processCommandLine(const char *line) {
 
     if (strcmp(type, "set_leg_servo_speed_limit") == 0) {
         char legId[24] = "";
+        float hipDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
         float thighDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
         float calfDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
         if (
@@ -1873,12 +1914,15 @@ static void processCommandLine(const char *line) {
             return;
         }
 
-        if (thighDegPerSec <= 0.0f || calfDegPerSec <= 0.0f) {
+        hipDegPerSec = g_legs[legIndex].servoSpeedLimitDegPerSec.hip;
+        jsonExtractFloat(line, "hipDegPerSec", &hipDegPerSec);
+
+        if (hipDegPerSec <= 0.0f || thighDegPerSec <= 0.0f || calfDegPerSec <= 0.0f) {
             sendError(seq, "servo speed limits must be positive");
             return;
         }
 
-        robotLegSetServoSpeedLimit(legIndex, thighDegPerSec, calfDegPerSec);
+        robotLegSetServoSpeedLimit(legIndex, hipDegPerSec, thighDegPerSec, calfDegPerSec);
         sendAck(seq, "servo speed limit updated");
         return;
     }
@@ -1977,7 +2021,6 @@ void setup() {
     }
     delay(100);
 
-    Serial.println("Starting up");
 #if defined(ESP32)
     Wire.setPins(I2C_SDA_PIN, I2C_SCL_PIN);
 #endif
@@ -1994,11 +2037,6 @@ void setup() {
 
     g_pwm.begin();
     applyPca9685Frequency(DEFAULT_PCA9685_FREQUENCY_HZ);
-    Serial.print("PCA9685 OK at 0x");
-    Serial.print(PCA9685_ADDRESS, HEX);
-    Serial.print(", PWM freq = ");
-    Serial.print(g_pwmFrequencyHz, 0);
-    Serial.println(" Hz");
     robotDogLegInitNeutral();
     animationReset(&g_animation);
 

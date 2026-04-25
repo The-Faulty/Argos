@@ -60,6 +60,63 @@ export function degToRad(degrees) {
   return (degrees * Math.PI) / 180;
 }
 
+function clampServoAngleDeg(value, fallback = 90) {
+  const numeric = Number.isFinite(value) ? value : fallback;
+  return clampValue(numeric, SERVO_MIN_DEG, SERVO_MAX_DEG);
+}
+
+function normalizeServoAngles(servoAnglesDeg = {}) {
+  return {
+    hip: clampServoAngleDeg(servoAnglesDeg.hip, 90),
+    thigh: clampServoAngleDeg(servoAnglesDeg.thigh, 90),
+    calf: clampServoAngleDeg(servoAnglesDeg.calf, 90),
+  };
+}
+
+function hipServoDegToJointDeg(hipServoDeg) {
+  return hipServoDeg - 90;
+}
+
+function toPoint3d(point, z = 0) {
+  return {
+    x: point.x,
+    y: point.y,
+    z,
+  };
+}
+
+function rotatePointAroundXAxis(point, pivot, angle) {
+  const dy = point.y - pivot.y;
+  const dz = point.z - pivot.z;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return {
+    x: point.x,
+    y: pivot.y + dy * cos - dz * sin,
+    z: pivot.z + dy * sin + dz * cos,
+  };
+}
+
+function applyHipServoToGeometry(geometry, hipServoDeg = 90) {
+  const hipAngleRad = degToRad(clampServoAngleDeg(hipServoDeg, 90) - 90);
+  const pivot = LEG_GEOMETRY.hipServoPivot3d;
+  const rotate = (point3d) => rotatePointAroundXAxis(point3d, pivot, hipAngleRad);
+
+  return {
+    ...geometry,
+    hipAngleRad,
+    hipServoPivot3d: { ...pivot },
+    hip3d: rotate({ ...LEG_GEOMETRY.thighPivot3d }),
+    servoPivot3d: rotate({ ...LEG_GEOMETRY.servoPivot3d }),
+    knee3d: rotate(toPoint3d(geometry.knee)),
+    servoHornEnd3d: rotate(toPoint3d(geometry.servoHornEnd)),
+    bellArmA3d: rotate(toPoint3d(geometry.bellArmA)),
+    bellArmB3d: rotate(toPoint3d(geometry.bellArmB)),
+    calfAttach3d: rotate(toPoint3d(geometry.calfAttach)),
+    foot3d: rotate(toPoint3d(geometry.foot)),
+  };
+}
+
 function servoRangePenalty(modelDeg) {
   if (modelDeg < 0) {
     return -modelDeg;
@@ -515,9 +572,10 @@ export function thetaToModelServoDeg(theta, neutralTheta) {
 }
 
 export function buildLegPoseFromServoAngles(servoAnglesDeg, calibration = createNeutralCalibration(), options = {}) {
-  const thetaThigh = modelServoDegToTheta(servoAnglesDeg.thigh, calibration.thetaThigh);
-  const thetaServo = modelServoDegToTheta(servoAnglesDeg.calf, calibration.thetaServo);
-  const geometry = solveGeometry(thetaThigh, thetaServo);
+  const normalizedServoAngles = normalizeServoAngles(servoAnglesDeg);
+  const thetaThigh = modelServoDegToTheta(normalizedServoAngles.thigh, calibration.thetaThigh);
+  const thetaServo = modelServoDegToTheta(normalizedServoAngles.calf, calibration.thetaServo);
+  const geometry = applyHipServoToGeometry(solveGeometry(thetaThigh, thetaServo), normalizedServoAngles.hip);
   const limits = normalizeJointLimits(options.jointLimits);
   const clampedJointAngles = clampJointAnglesToLimits(
     {
@@ -531,25 +589,28 @@ export function buildLegPoseFromServoAngles(servoAnglesDeg, calibration = create
     geometry,
     foot: {
       x: geometry.foot.x - LEG_GEOMETRY.footOriginOffset.x,
-      y: geometry.foot.y - LEG_GEOMETRY.footOriginOffset.y
+      y: geometry.foot.y - LEG_GEOMETRY.footOriginOffset.y,
+      z: geometry.foot3d?.z ?? 0,
     },
     jointAnglesDeg: {
+      hip: hipServoDegToJointDeg(normalizedServoAngles.hip),
       thigh: clampedJointAngles.thigh,
       calf: clampedJointAngles.calf
     },
-    servoAnglesDeg: { ...servoAnglesDeg },
+    servoAnglesDeg: normalizedServoAngles,
     reachable: geometry.valid,
     footError: 0
   };
 }
 
 export function buildLegPoseFromFoot(foot, calibration = createNeutralCalibration(), options = {}) {
+  const hipServoDeg = clampServoAngleDeg(options.hipServoDeg, 90);
   const limits = normalizeJointLimits(options.jointLimits);
   const solution = solveAnglesForFoot({
     x: foot.x + LEG_GEOMETRY.footOriginOffset.x,
     y: foot.y + LEG_GEOMETRY.footOriginOffset.y
   }, options.startThetaThigh ?? -Math.PI / 4, options.startThetaServo ?? Math.PI / 6, limits, calibration);
-  const geometry = solution.geometry;
+  const geometry = applyHipServoToGeometry(solution.geometry, hipServoDeg);
   const clampedJointAngles = clampJointAnglesToLimits(
     {
       thigh: radToDeg(geometry.thetaThigh),
@@ -562,13 +623,16 @@ export function buildLegPoseFromFoot(foot, calibration = createNeutralCalibratio
     geometry,
     foot: {
       x: geometry.foot.x - LEG_GEOMETRY.footOriginOffset.x,
-      y: geometry.foot.y - LEG_GEOMETRY.footOriginOffset.y
+      y: geometry.foot.y - LEG_GEOMETRY.footOriginOffset.y,
+      z: geometry.foot3d?.z ?? 0,
     },
     jointAnglesDeg: {
+      hip: hipServoDegToJointDeg(hipServoDeg),
       thigh: clampedJointAngles.thigh,
       calf: clampedJointAngles.calf
     },
     servoAnglesDeg: {
+      hip: hipServoDeg,
       thigh: thetaToModelServoDeg(solution.thetaThigh, calibration.thetaThigh),
       calf: thetaToModelServoDeg(solution.thetaServo, calibration.thetaServo)
     },
@@ -579,23 +643,27 @@ export function buildLegPoseFromFoot(foot, calibration = createNeutralCalibratio
 }
 
 export function buildLegPoseFromJointAngles(jointAnglesDeg, calibration = createNeutralCalibration(), options = {}) {
+  const hipServoDeg = clampServoAngleDeg(options.hipServoDeg, 90);
   const limits = normalizeJointLimits(options.jointLimits);
   const clamped = clampJointAnglesToLimits(jointAnglesDeg, limits);
   const thetaThigh = degToRad(clamped.thigh);
   const servoSolution = solveServoForJointAngles(thetaThigh, degToRad(clamped.calf), options.startThetaServo ?? Math.PI / 6, limits, calibration);
-  const geometry = servoSolution.geometry;
+  const geometry = applyHipServoToGeometry(servoSolution.geometry, hipServoDeg);
 
   return {
     geometry,
     foot: {
       x: geometry.foot.x - LEG_GEOMETRY.footOriginOffset.x,
-      y: geometry.foot.y - LEG_GEOMETRY.footOriginOffset.y
+      y: geometry.foot.y - LEG_GEOMETRY.footOriginOffset.y,
+      z: geometry.foot3d?.z ?? 0,
     },
     jointAnglesDeg: {
+      hip: hipServoDegToJointDeg(hipServoDeg),
       thigh: clamped.thigh,
       calf: clamped.calf
     },
     servoAnglesDeg: {
+      hip: hipServoDeg,
       thigh: thetaToModelServoDeg(thetaThigh, calibration.thetaThigh),
       calf: thetaToModelServoDeg(servoSolution.thetaServo, calibration.thetaServo)
     },
@@ -627,10 +695,11 @@ export function robotOverviewGeometry(robotState, poseSource = "desired") {
 
     const points = ["hip", "knee", "foot"].map((key) => {
       const point = legState.geometry[key];
+      const point3d = legState.geometry[`${key}3d`] ?? { x: point.x, y: point.y, z: 0 };
       return {
         key,
-        x: anchor.x + sign * point.x * 0.55,
-        y: anchor.y + depthSign * point.y * 0.3
+        x: anchor.x + sign * point3d.z * 0.55 + sign * point3d.x * 0.14,
+        y: anchor.y + depthSign * point3d.x * 0.38 + point3d.y * 0.05
       };
     });
 

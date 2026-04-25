@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-25T20:35:17.240Z",
+  "legs": {
+    "front_left": {
+      "hipYaw": 20,
+      "thigh": 0,
+      "calf": 0
+    },
+    "front_right": {
+      "hipYaw": 20,
+      "thigh": 0,
+      "calf": 0
+    },
+    "rear_left": {
+      "hipYaw": 0,
+      "thigh": 0,
+      "calf": 0
+    },
+    "rear_right": {
+      "hipYaw": 0,
+      "thigh": 0,
+      "calf": 0
+    }
+  }
+}
