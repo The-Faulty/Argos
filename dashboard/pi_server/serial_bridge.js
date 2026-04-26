@@ -208,9 +208,13 @@ export class SerialBridge extends EventEmitter {
       case "ack":
         this.emit("ack", msg);
         break;
-      case "error":
-        this.emit("error", new Error(msg.error || "firmware error"));
+      case "error": {
+        // Firmware shape: {"type":"error","seq":N,"message":"..."}.
+        const text = msg.message || msg.error || "firmware error";
+        const tag = Number.isFinite(msg.seq) ? ` (seq=${msg.seq})` : "";
+        this.emit("error", new Error(`${text}${tag}`));
         break;
+      }
       default:
         this.emit("message", msg);
     }
