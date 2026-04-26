@@ -2020,6 +2020,14 @@ static void processCommandLine(const char *line) {
 }
 
 void setup() {
+    // Bump RX FIFO before begin() — every 100 ms the firmware blocks for
+    // ~30 ms transmitting state telemetry at 921600, during which the host
+    // can land 4× set_leg_servo_angles (~480 bytes). The default 256-byte
+    // ring overflows, the next command is truncated, JSON parse falls
+    // through to "unknown command type" and the servo never moves.
+#if defined(ESP32)
+    Serial.setRxBufferSize(4096);
+#endif
     Serial.begin(SERIAL_BAUD);
     unsigned long serialStartMs = millis();
     while (!Serial && (millis() - serialStartMs) < 5000) {
