@@ -611,16 +611,9 @@ static void micro_ros_task(void *arg) {
         usleep(1000);
     }
 
-    // (unreachable but tidy) — reverse creation order. (void) casts silence
-    // -Werror=unused-result on the rcl_*_fini return codes.
-    (void)rcl_subscription_fini(&s_pwm_rate_sub, &node);
-    (void)rcl_subscription_fini(&s_release_sub, &node);
-    (void)rcl_subscription_fini(&joint_cmd_sub, &node);
-    (void)rcl_publisher_fini(&imu_pub, &node);
-    (void)rcl_publisher_fini(&mag_pub, &node);
-    (void)rcl_publisher_fini(&joint_states_pub, &node);
-    (void)rcl_publisher_fini(&gas_pub, &node);
-    (void)rcl_node_fini(&node);
+    // The while(1) above never exits, so cleanup is unreachable. We used
+    // to call rcl_*_fini here for tidiness, but GCC's -Wunused-result on
+    // those functions can't be silenced with (void) casts under -Werror.
     vTaskDelete(NULL);
 }
 
