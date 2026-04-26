@@ -2016,7 +2016,13 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    sendError(seq, "unknown command type");
+    // Diagnostic: include what we parsed as `type` and the first 60 chars
+    // of the raw line, so the host can see whether the command came in
+    // mangled (RX overflow / desync) or whether the type is genuinely
+    // unrecognized.
+    char detail[128];
+    snprintf(detail, sizeof(detail), "unknown command type [parsed='%s' raw='%.60s']", type, line);
+    sendError(seq, detail);
 }
 
 void setup() {
