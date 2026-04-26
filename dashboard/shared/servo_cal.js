@@ -24,16 +24,16 @@ import {
 // effective direction + offset without having to thread the table through
 // every call.
 export const SERVO_CAL_PER_JOINT = [
-  { joint: "FR_coxa_joint",  channel:  0, direction:  1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
-  { joint: "FR_femur_joint", channel:  1, direction:  1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
-  { joint: "FR_tibia_joint", channel:  2, direction:  1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
+  { joint: "FR_coxa_joint",  channel:  0, direction: -1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
+  { joint: "FR_femur_joint", channel:  1, direction: -1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
+  { joint: "FR_tibia_joint", channel:  2, direction: -1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
   { joint: "FL_coxa_joint",  channel:  3, direction:  1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
   { joint: "FL_femur_joint", channel:  4, direction:  1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
   { joint: "FL_tibia_joint", channel:  5, direction:  1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
   { joint: "RR_coxa_joint",  channel:  6, direction: -1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
-  { joint: "RR_femur_joint", channel:  7, direction:  1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
-  { joint: "RR_tibia_joint", channel:  8, direction:  1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
-  { joint: "RL_coxa_joint",  channel:  9, direction: -1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
+  { joint: "RR_femur_joint", channel:  7, direction: -1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
+  { joint: "RR_tibia_joint", channel:  8, direction: -1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
+  { joint: "RL_coxa_joint",  channel:  9, direction:  1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
   { joint: "RL_femur_joint", channel: 10, direction:  1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
   { joint: "RL_tibia_joint", channel: 11, direction:  1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
 ];
