@@ -50,6 +50,7 @@ export class SerialBridge extends EventEmitter {
     this.connected = false;
     this.lastState = null;
     this._reopenTimer = null;
+    this._sentTypes = new Map(); // seq -> command type, for error attribution
   }
 
   connect() {
@@ -211,7 +212,11 @@ export class SerialBridge extends EventEmitter {
       case "error": {
         // Firmware shape: {"type":"error","seq":N,"message":"..."}.
         const text = msg.message || msg.error || "firmware error";
-        const tag = Number.isFinite(msg.seq) ? ` (seq=${msg.seq})` : "";
+        const sentType = Number.isFinite(msg.seq) ? this._sentTypes.get(msg.seq) : undefined;
+        const tag =
+          Number.isFinite(msg.seq)
+            ? ` (seq=${msg.seq}${sentType ? `, type=${sentType}` : ""})`
+            : "";
         this.emit("error", new Error(`${text}${tag}`));
         break;
       }
@@ -252,6 +257,11 @@ export class SerialBridge extends EventEmitter {
   _send(obj) {
     if (!this.port || !this.port.isOpen) return;
     const seq = ++this.seq;
+    this._sentTypes.set(seq, obj.type);
+    if (this._sentTypes.size > 256) {
+      const firstKey = this._sentTypes.keys().next().value;
+      this._sentTypes.delete(firstKey);
+    }
     const line = JSON.stringify({ ...obj, seq }) + "\n";
     this.port.write(line);
   }
