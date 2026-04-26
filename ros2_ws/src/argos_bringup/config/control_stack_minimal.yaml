@@ -1,8 +1,0 @@
-# Minimal control-stack overrides for the current Pi bring-up:
-# ESP32 drive path only, with IMU and depth sensing not installed yet.
-
-gait_planner_node:
-  ros__parameters:
-    use_imu_stabilization: false
-    enable_push_recovery: false
-    enable_foothold_adjustments: false
