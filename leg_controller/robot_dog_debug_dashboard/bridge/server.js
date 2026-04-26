@@ -2,10 +2,27 @@ import express from "express";
 import http from "http";
 import { WebSocketServer } from "ws";
 import { ReadlineParser, SerialPort } from "serialport";
-import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, buildLegPoseFromServoAngles, createNeutralCalibration, normalizeJointLimits } from "../shared/kinematics.js";
+import {
+  buildLegPoseFromFoot,
+  buildLegPoseFromJointAngles,
+  buildLegPoseFromServoAngles,
+  createNeutralCalibration,
+  normalizeJointLimits,
+} from "../shared/kinematics.js";
 import { createUploadFrames, validateClip } from "../shared/animation.js";
-import { DEFAULT_JOINT_LIMITS, DEFAULT_LEG_COMMAND, DEFAULT_SERVO_CHANNEL_MAP, DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, LEG_IDS } from "../shared/robot-config.js";
-import { parseWireMessage, toWireMessage, validateCommand } from "../shared/protocol.js";
+import { createFullBodyPoseCommand, createMotionStatePatch } from "../shared/locomotion.js";
+import {
+  DEFAULT_DRIVE_COMMAND,
+  DEFAULT_JOINT_LIMITS,
+  DEFAULT_LEG_COMMAND,
+  DEFAULT_SERVO_CHANNEL_MAP,
+  DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
+  DEFAULT_SERVO_TRIM_DEG,
+  DEFAULT_STANCE,
+  LEG_IDS,
+  ROBOT_CONFIG,
+} from "../shared/robot-config.js";
+import { normalizeDriveCommand, normalizeStance, parseWireMessage, toWireMessage, validateCommand } from "../shared/protocol.js";
 import { extractJsonMessageCandidate } from "../shared/serial-wire.js";
 
 const PORT = Number(process.env.PORT || 8787);
@@ -55,38 +72,80 @@ function safeJson(response, statusCode, payload) {
   }
 }
 
+function buildPoseFromPayload(pose, fallbackPose, jointLimits) {
+  if (!pose) {
+    return fallbackPose;
+  }
+
+  if (pose.foot) {
+    return buildLegPoseFromFoot(pose.foot, calibration, {
+      startThetaThigh: fallbackPose?.geometry?.thetaThigh,
+      startThetaServo: fallbackPose?.geometry?.thetaServo,
+      jointLimits,
+      hipYawDeg: pose.jointAnglesDeg?.hipYaw ?? fallbackPose?.jointAnglesDeg?.hipYaw ?? 0,
+    });
+  }
+
+  if (pose.jointAnglesDeg) {
+    return buildLegPoseFromJointAngles(pose.jointAnglesDeg, calibration, {
+      startThetaServo: fallbackPose?.geometry?.thetaServo,
+      jointLimits,
+    });
+  }
+
+  if (pose.servoAnglesDeg) {
+    return buildLegPoseFromServoAngles(pose.servoAnglesDeg, calibration, {
+      jointLimits,
+    });
+  }
+
+  return fallbackPose;
+}
+
 async function handleRealtimeCommand(rawCommand, wss) {
   const command = validateCommand(rawCommand);
   bridge.applyDerivedLocalState(command);
-  await bridge.send(command);
+  await bridge.forwardCommand(command);
   bridge.broadcast(wss, "status", bridge.status);
 }
 
 function createStatus() {
   const legs = {};
   for (const legId of LEG_IDS) {
-    const desired = buildLegPoseFromFoot(DEFAULT_LEG_COMMAND.foot, calibration);
+    const desired = buildLegPoseFromFoot(DEFAULT_LEG_COMMAND.foot, calibration, {
+      jointLimits: DEFAULT_JOINT_LIMITS,
+      hipYawDeg: DEFAULT_LEG_COMMAND.jointAnglesDeg.hipYaw,
+    });
+
     legs[legId] = {
       desired,
-      current: desired,
+      current: clone(desired),
       status: "idle",
       lastError: null,
       servoChannelMap: { ...DEFAULT_SERVO_CHANNEL_MAP[legId] },
       jointLimits: clone(DEFAULT_JOINT_LIMITS),
       servoSpeedLimitDegPerSec: { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC },
+      servoTrimDeg: { ...DEFAULT_SERVO_TRIM_DEG },
     };
   }
 
   return {
     connected: false,
+    esp32Connected: false,
     connectedPort: null,
     mode: "idle",
+    motionMode: "idle",
+    driveCommand: { ...DEFAULT_DRIVE_COMMAND },
+    stance: { ...DEFAULT_STANCE },
     servosReleased: false,
     activeAnimation: null,
     lastAck: null,
     lastError: null,
+    faults: [],
     firmwareMs: 0,
+    uptimeMs: 0,
     ports: [],
+    robotConfig: ROBOT_CONFIG,
     legs,
   };
 }
@@ -167,11 +226,13 @@ class BridgeState {
 
     this.serial.on("close", () => {
       this.status.connected = false;
+      this.status.esp32Connected = false;
       this.status.connectedPort = null;
       this.broadcast(wss, "status", this.status);
     });
 
     this.status.connected = true;
+    this.status.esp32Connected = true;
     this.status.connectedPort = path;
     await this.refreshPorts();
     this.broadcast(wss, "status", this.status);
@@ -182,6 +243,7 @@ class BridgeState {
   async disconnect() {
     if (!this.serial) {
       this.status.connected = false;
+      this.status.esp32Connected = false;
       this.status.connectedPort = null;
       return;
     }
@@ -192,6 +254,7 @@ class BridgeState {
 
     await new Promise((resolve) => serial.close(() => resolve()));
     this.status.connected = false;
+    this.status.esp32Connected = false;
     this.status.connectedPort = null;
   }
 
@@ -207,6 +270,86 @@ class BridgeState {
     });
   }
 
+  async sendIfConnected(command) {
+    if (!this.serial || !this.status.connected) {
+      return;
+    }
+
+    await this.send(command);
+  }
+
+  applyMotionPatch({ motionMode, driveCommand, stance, timeMs = Date.now() }) {
+    const nextStance = normalizeStance(stance ?? this.status.stance);
+    const nextDrive = normalizeDriveCommand(driveCommand ?? this.status.driveCommand);
+    const jointLimitsByLeg = Object.fromEntries(
+      LEG_IDS.map((legId) => [legId, this.status.legs[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS]),
+    );
+    const patch = createMotionStatePatch({
+      driveCommand: nextDrive,
+      motionMode,
+      stance: nextStance,
+      timeMs,
+      jointLimitsByLeg,
+    });
+
+    this.status.stance = nextStance;
+    this.status.driveCommand = patch.driveCommand;
+    this.status.motionMode = patch.motionMode;
+    this.status.mode = motionMode === "drive" ? "drive" : motionMode === "stand" ? "stand" : this.status.mode;
+    this.status.servosReleased = false;
+
+    for (const legId of LEG_IDS) {
+      this.status.legs[legId] = {
+        ...this.status.legs[legId],
+        ...patch.legs[legId],
+      };
+    }
+  }
+
+  buildFullBodyPoseCommand() {
+    return createFullBodyPoseCommand(this.status.legs);
+  }
+
+  async forwardCommand(command) {
+    validateCommand(command);
+    if (command.type === "set_stance") {
+      await this.sendIfConnected(this.buildFullBodyPoseCommand());
+      return;
+    }
+
+    if (command.type === "set_motion_mode") {
+      if (command.mode === "stand" || command.mode === "drive") {
+        await this.sendIfConnected(this.buildFullBodyPoseCommand());
+        return;
+      }
+
+      if (command.mode === "idle") {
+        await this.sendIfConnected({ type: "set_mode", mode: "idle" });
+      }
+      return;
+    }
+
+    if (command.type === "set_drive_command") {
+      await this.sendIfConnected(this.buildFullBodyPoseCommand());
+      return;
+    }
+
+    if (command.type === "stop_motion") {
+      await this.sendIfConnected({ type: "set_mode", mode: "idle" });
+      return;
+    }
+
+    if (command.type === "set_leg_servo_trim") {
+      if (!this.serial || !this.status.connected) {
+        throw new Error("Serial bridge is not connected.");
+      }
+      await this.send(this.buildFullBodyPoseCommand());
+      return;
+    }
+
+    await this.send(command);
+  }
+
   async uploadAnimation(clip) {
     const validated = validateClip(clip);
     this.uploadedClips.set(validated.name, validated);
@@ -217,8 +360,10 @@ class BridgeState {
   }
 
   applyDerivedLocalState(command) {
-    if (command.type === "release_servos") {
+    if (command.type === "release_servos" || command.type === "panic_release") {
       this.status.mode = "idle";
+      this.status.motionMode = "idle";
+      this.status.driveCommand = { ...DEFAULT_DRIVE_COMMAND };
       this.status.servosReleased = true;
       this.status.activeAnimation = null;
       return;
@@ -230,9 +375,62 @@ class BridgeState {
       return;
     }
 
+    if (command.type === "set_motion_mode") {
+      if (command.stance) {
+        this.status.stance = command.stance;
+      }
+
+      if (command.mode === "stand" || command.mode === "drive") {
+        this.applyMotionPatch({
+          motionMode: command.mode,
+          driveCommand: command.mode === "drive" ? this.status.driveCommand : DEFAULT_DRIVE_COMMAND,
+          stance: this.status.stance,
+        });
+        return;
+      }
+
+      this.status.motionMode = command.mode;
+      if (command.mode === "idle") {
+        this.status.driveCommand = { ...DEFAULT_DRIVE_COMMAND };
+        this.status.mode = "idle";
+      }
+      this.status.servosReleased = false;
+      return;
+    }
+
+    if (command.type === "set_drive_command") {
+      this.applyMotionPatch({
+        motionMode: "drive",
+        driveCommand: command.drive ?? command,
+        stance: command.stance ?? this.status.stance,
+      });
+      return;
+    }
+
+    if (command.type === "set_stance") {
+      const nextMotionMode = this.status.motionMode === "drive" ? "drive" : "stand";
+      this.applyMotionPatch({
+        motionMode: nextMotionMode,
+        driveCommand: nextMotionMode === "drive" ? this.status.driveCommand : DEFAULT_DRIVE_COMMAND,
+        stance: command.stance,
+      });
+      return;
+    }
+
+    if (command.type === "stop_motion") {
+      this.status.motionMode = "idle";
+      this.status.driveCommand = { ...DEFAULT_DRIVE_COMMAND };
+      if (this.status.mode === "drive") {
+        this.status.mode = "idle";
+      }
+      return;
+    }
+
     if (command.type === "set_mode") {
       this.status.mode = command.mode;
-      if (command.mode !== "idle") {
+      if (command.mode === "idle") {
+        this.status.motionMode = "idle";
+      } else {
         this.status.servosReleased = false;
       }
       return;
@@ -242,47 +440,67 @@ class BridgeState {
       return;
     }
 
+    const currentDesired = this.status.legs[command.legId].desired;
+    const jointLimits = this.status.legs[command.legId].jointLimits ?? DEFAULT_JOINT_LIMITS;
+
     if (command.type === "set_leg_foot_xy") {
       this.status.mode = "direct_foot_xy";
       this.status.servosReleased = false;
-      const currentDesired = this.status.legs[command.legId].desired;
-      const jointLimits = this.status.legs[command.legId].jointLimits ?? DEFAULT_JOINT_LIMITS;
       this.status.legs[command.legId].desired = buildLegPoseFromFoot({ x: command.x, y: command.y }, calibration, {
         startThetaThigh: currentDesired?.geometry?.thetaThigh,
         startThetaServo: currentDesired?.geometry?.thetaServo,
         jointLimits,
+        hipYawDeg: currentDesired?.jointAnglesDeg?.hipYaw ?? 0,
       });
     }
 
     if (command.type === "set_leg_joint_angles") {
       this.status.mode = "direct_joint_angles";
       this.status.servosReleased = false;
-      const currentDesired = this.status.legs[command.legId].desired;
-      const jointLimits = this.status.legs[command.legId].jointLimits ?? DEFAULT_JOINT_LIMITS;
-      this.status.legs[command.legId].desired = buildLegPoseFromJointAngles({ thigh: command.thighDeg, calf: command.calfDeg }, calibration, {
-        startThetaServo: currentDesired?.geometry?.thetaServo,
-        jointLimits,
-      });
+      this.status.legs[command.legId].desired = buildLegPoseFromJointAngles(
+        {
+          hipYaw: command.hipYawDeg ?? currentDesired?.jointAnglesDeg?.hipYaw ?? 0,
+          thigh: command.thighDeg,
+          calf: command.calfDeg,
+        },
+        calibration,
+        {
+          startThetaServo: currentDesired?.geometry?.thetaServo,
+          jointLimits,
+        },
+      );
     }
 
     if (command.type === "set_leg_servo_angles") {
       this.status.mode = "direct_servo_angles";
       this.status.servosReleased = false;
-      const jointLimits = this.status.legs[command.legId].jointLimits ?? DEFAULT_JOINT_LIMITS;
-      this.status.legs[command.legId].desired = buildLegPoseFromServoAngles({ thigh: command.thighServoDeg, calf: command.calfServoDeg }, calibration, {
-        jointLimits,
-      });
+      this.status.legs[command.legId].desired = buildLegPoseFromServoAngles(
+        {
+          hipYaw: command.hipYawServoDeg ?? currentDesired?.servoAnglesDeg?.hipYaw ?? 90,
+          thigh: command.thighServoDeg,
+          calf: command.calfServoDeg,
+        },
+        calibration,
+        {
+          jointLimits,
+        },
+      );
     }
 
     if (command.type === "set_leg_servo_channel_map") {
       this.status.legs[command.legId].servoChannelMap = {
+        hipYaw: command.hipYawChannel,
         thigh: command.thighChannel,
         calf: command.calfChannel,
       };
     }
 
     if (command.type === "set_leg_joint_limits") {
-      const jointLimits = normalizeJointLimits({
+      const normalizedLimits = normalizeJointLimits({
+        hipYawDeg: {
+          min: command.hipYawMinDeg,
+          max: command.hipYawMaxDeg,
+        },
         thighDeg: {
           min: command.thighMinDeg,
           max: command.thighMaxDeg,
@@ -292,74 +510,79 @@ class BridgeState {
           max: command.calfMaxDeg,
         },
       });
-      const currentDesired = this.status.legs[command.legId].desired;
-      this.status.legs[command.legId].jointLimits = jointLimits;
+
+      this.status.legs[command.legId].jointLimits = normalizedLimits;
       this.status.legs[command.legId].desired = buildLegPoseFromFoot(currentDesired?.foot ?? DEFAULT_LEG_COMMAND.foot, calibration, {
         startThetaThigh: currentDesired?.geometry?.thetaThigh,
         startThetaServo: currentDesired?.geometry?.thetaServo,
-        jointLimits,
+        jointLimits: normalizedLimits,
+        hipYawDeg: currentDesired?.jointAnglesDeg?.hipYaw ?? 0,
       });
     }
 
     if (command.type === "set_leg_servo_speed_limit") {
       this.status.legs[command.legId].servoSpeedLimitDegPerSec = {
+        hipYaw: command.hipYawDegPerSec,
         thigh: command.thighDegPerSec,
         calf: command.calfDegPerSec,
       };
     }
 
+    if (command.type === "set_leg_servo_trim") {
+      this.status.servosReleased = false;
+      this.status.legs[command.legId].servoTrimDeg = {
+        hipYaw: command.hipYawOffsetDeg,
+        thigh: command.thighOffsetDeg,
+        calf: command.calfOffsetDeg,
+      };
+    }
   }
 
   normalizeStatePayload(payload) {
     const next = clone(this.status);
-    next.connected = this.status.connected;
-    next.connectedPort = this.status.connectedPort;
-    next.ports = this.status.ports;
+    next.connected = payload.connected ?? this.status.connected;
+    next.esp32Connected = payload.esp32Connected ?? payload.connected ?? next.connected;
+    next.connectedPort = payload.connectedPort ?? this.status.connectedPort;
+    next.ports = payload.ports ?? this.status.ports;
     next.mode = payload.mode ?? next.mode;
+    next.motionMode = payload.motionMode ?? next.motionMode;
+    next.driveCommand = payload.driveCommand ? normalizeDriveCommand(payload.driveCommand) : next.driveCommand;
+    next.stance = payload.stance ? normalizeStance(payload.stance) : next.stance;
     next.servosReleased = payload.servosReleased ?? next.servosReleased;
     next.activeAnimation = payload.activeAnimation ?? next.activeAnimation;
     next.lastAck = payload.lastAck ?? next.lastAck;
     next.lastError = payload.lastError ?? next.lastError;
+    next.faults = Array.isArray(payload.faults) ? payload.faults : next.faults;
     next.firmwareMs = payload.firmwareMs ?? next.firmwareMs;
+    next.uptimeMs = payload.uptimeMs ?? next.uptimeMs;
+    next.robotConfig = payload.robotConfig ?? next.robotConfig;
 
     if (payload.legs) {
       for (const legId of LEG_IDS) {
         const leg = payload.legs[legId];
-        if (!leg) continue;
+        if (!leg) {
+          continue;
+        }
 
+        const normalizedLimits = normalizeJointLimits(leg.jointLimits ?? next.legs[legId].jointLimits);
         next.legs[legId] = {
           ...next.legs[legId],
           ...leg,
-          servoChannelMap: leg.servoChannelMap ?? next.legs[legId].servoChannelMap,
-          jointLimits: normalizeJointLimits(leg.jointLimits ?? next.legs[legId].jointLimits),
-          servoSpeedLimitDegPerSec: leg.servoSpeedLimitDegPerSec ?? next.legs[legId].servoSpeedLimitDegPerSec,
-          desired: leg.desired?.foot
-            ? buildLegPoseFromFoot(leg.desired.foot, calibration, {
-                startThetaThigh: next.legs[legId].desired?.geometry?.thetaThigh,
-                startThetaServo: next.legs[legId].desired?.geometry?.thetaServo,
-                jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,
-              })
-            : leg.desired?.jointAnglesDeg
-              ? buildLegPoseFromJointAngles(leg.desired.jointAnglesDeg, calibration, {
-                  startThetaServo: next.legs[legId].desired?.geometry?.thetaServo,
-                  jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,
-                })
-              : leg.desired?.servoAnglesDeg
-                ? buildLegPoseFromServoAngles(leg.desired.servoAnglesDeg, calibration, {
-                    jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,
-                  })
-                : next.legs[legId].desired,
-          current: leg.current?.servoAnglesDeg
-            ? buildLegPoseFromServoAngles(leg.current.servoAnglesDeg, calibration, {
-                jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,
-              })
-            : leg.current?.foot
-              ? buildLegPoseFromFoot(leg.current.foot, calibration, {
-                  startThetaThigh: next.legs[legId].current?.geometry?.thetaThigh,
-                  startThetaServo: next.legs[legId].current?.geometry?.thetaServo,
-                  jointLimits: leg.jointLimits ?? next.legs[legId].jointLimits,
-                })
-              : next.legs[legId].current,
+          servoChannelMap: {
+            ...next.legs[legId].servoChannelMap,
+            ...(leg.servoChannelMap ?? {}),
+          },
+          jointLimits: normalizedLimits,
+          servoSpeedLimitDegPerSec: {
+            ...next.legs[legId].servoSpeedLimitDegPerSec,
+            ...(leg.servoSpeedLimitDegPerSec ?? {}),
+          },
+          servoTrimDeg: {
+            ...next.legs[legId].servoTrimDeg,
+            ...(leg.servoTrimDeg ?? {}),
+          },
+          desired: buildPoseFromPayload(leg.desired, next.legs[legId].desired, normalizedLimits),
+          current: buildPoseFromPayload(leg.current, next.legs[legId].current, normalizedLimits),
         };
       }
     }
@@ -439,6 +662,7 @@ app.post("/api/connect", async (request, response) => {
 app.post("/api/disconnect", async (_request, response) => {
   try {
     await bridge.disconnect();
+    bridge.broadcast(wss, "status", bridge.status);
     safeJson(response, 200, { ok: true, status: bridge.status });
   } catch (error) {
     safeJson(response, 500, { error: error.message });
@@ -449,7 +673,7 @@ app.post("/api/command", async (request, response) => {
   try {
     const command = validateCommand(request.body.command);
     bridge.applyDerivedLocalState(command);
-    await bridge.send(command);
+    await bridge.forwardCommand(command);
     bridge.broadcast(wss, "status", bridge.status);
     safeJson(response, 200, { ok: true });
   } catch (error) {
@@ -461,6 +685,7 @@ app.post("/api/animations", async (request, response) => {
   try {
     const clip = validateClip(request.body.clip);
     await bridge.uploadAnimation(clip);
+    bridge.broadcast(wss, "status", bridge.status);
     safeJson(response, 200, { ok: true, name: clip.name });
   } catch (error) {
     safeJson(response, 500, { error: error.message });
@@ -477,6 +702,7 @@ app.post("/api/animations/:id/play", async (request, response) => {
     bridge.status.activeAnimation = name;
     bridge.status.mode = "animation_playback";
     bridge.status.servosReleased = false;
+    bridge.broadcast(wss, "status", bridge.status);
     safeJson(response, 200, { ok: true });
   } catch (error) {
     safeJson(response, 500, { error: error.message });
@@ -488,6 +714,7 @@ app.post("/api/animations/:id/stop", async (request, response) => {
     const name = decodeURIComponent(request.params.id);
     await bridge.send({ type: "stop_animation", name });
     bridge.status.mode = "idle";
+    bridge.broadcast(wss, "status", bridge.status);
     safeJson(response, 200, { ok: true });
   } catch (error) {
     safeJson(response, 500, { error: error.message });

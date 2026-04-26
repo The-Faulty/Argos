@@ -1,4 +1,4 @@
-import { LEG_IDS, MODE_OPTIONS, MOTION_MODE_OPTIONS } from "./robot-config.js";
+import { DEFAULT_STANCE, LEG_IDS, MODE_OPTIONS, MOTION_MODE_OPTIONS, STANCE_HEIGHT_RANGE_MM } from "./robot-config.js";
 
 function clampAxis(value) {
   const numeric = Number(value);
@@ -6,6 +6,14 @@ function clampAxis(value) {
     throw new Error("Drive axes must be numeric.");
   }
   return Math.max(-1, Math.min(1, numeric));
+}
+
+function clampNumber(value, min, max, label) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    throw new Error(`${label} must be numeric.`);
+  }
+  return Math.max(min, Math.min(max, numeric));
 }
 
 function assertNumber(value, label) {
@@ -24,6 +32,15 @@ export function normalizeDriveCommand(command = {}) {
     vy: clampAxis(command.vy ?? 0),
     yawRate: clampAxis(command.yawRate ?? 0),
     source: typeof command.source === "string" && command.source ? command.source : "unknown",
+  };
+}
+
+export function normalizeStance(stance = {}) {
+  const source = stance && typeof stance === "object" ? stance : {};
+  return {
+    height: clampNumber(source.height ?? DEFAULT_STANCE.height, STANCE_HEIGHT_RANGE_MM.min, STANCE_HEIGHT_RANGE_MM.max, "stance.height"),
+    strideScale: clampNumber(source.strideScale ?? DEFAULT_STANCE.strideScale, 0.25, 2, "stance.strideScale"),
+    hipYawBiasDeg: clampNumber(source.hipYawBiasDeg ?? DEFAULT_STANCE.hipYawBiasDeg, -20, 20, "stance.hipYawBiasDeg"),
   };
 }
 
@@ -80,8 +97,16 @@ export function validateCommand(command) {
     throw new Error(`Unknown motion mode: ${command.mode}`);
   }
 
+  if ("stance" in command) {
+    command.stance = normalizeStance(command.stance);
+  }
+
   if (command.type === "set_drive_command") {
     command.drive = normalizeDriveCommand(command.drive ?? command);
+  }
+
+  if (command.type === "set_stance") {
+    command.stance = normalizeStance(command.stance);
   }
 
   if (command.type === "apply_full_body_pose") {

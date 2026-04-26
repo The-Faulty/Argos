@@ -54,6 +54,54 @@ test("buildLegPoseFromFoot returns a valid limited geometry for reachable target
   assert.equal(geometryWithinJointLimits(pose.geometry, limits), true);
 });
 
+test("thigh servo 90 degrees maps to a ground-parallel thigh", () => {
+  assert.equal(calibration.thetaThigh, 0);
+
+  const pose = buildLegPoseFromJointAngles({ hipYaw: 0, thigh: 0, calf: -90 }, calibration);
+  assert.ok(Math.abs(pose.servoAnglesDeg.thigh - 90) < 0.001);
+});
+
+test("reachable foot targets prefer servo angles inside 0 to 180 degrees", () => {
+  const pose = buildLegPoseFromFoot(
+    { x: 0, y: 0 },
+    calibration,
+    {
+      startThetaThigh: calibration.thetaThigh,
+      startThetaServo: calibration.thetaServo,
+      jointLimits: {
+        thighDeg: { min: -145, max: 15 },
+        calfDeg: { min: -165, max: -25 },
+      },
+    },
+  );
+
+  assert.equal(pose.reachable, true);
+  assert.ok(pose.servoAnglesDeg.thigh >= 0 && pose.servoAnglesDeg.thigh <= 180);
+  assert.ok(pose.servoAnglesDeg.calf >= 0 && pose.servoAnglesDeg.calf <= 180);
+});
+
+test("leftward reachable foot targets keep their full workspace", () => {
+  const pose = buildLegPoseFromFoot(
+    { x: -60, y: 0 },
+    calibration,
+    {
+      startThetaThigh: calibration.thetaThigh,
+      startThetaServo: calibration.thetaServo,
+      jointLimits: {
+        thighDeg: { min: -145, max: 15 },
+        calfDeg: { min: -165, max: -25 },
+      },
+    },
+  );
+
+  assert.equal(pose.reachable, true);
+  assert.equal(pose.withinTolerance, true);
+  assert.ok(Math.abs(pose.foot.x + 60) < 1.5);
+  assert.ok(Math.abs(pose.foot.y) < 1.5);
+  assert.ok(pose.servoAnglesDeg.thigh >= 0 && pose.servoAnglesDeg.thigh <= 180);
+  assert.ok(pose.servoAnglesDeg.calf >= 0 && pose.servoAnglesDeg.calf <= 180);
+});
+
 test("a 90 degree thigh servo command maps to a horizontal thigh link", () => {
   const pose = buildLegPoseFromServoAngles(
     { hipYaw: 90, thigh: 90, calf: 90 },

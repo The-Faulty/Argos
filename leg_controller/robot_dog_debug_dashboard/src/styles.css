@@ -1,10 +1,10 @@
 :root {
   color-scheme: light;
-  font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+  font-family: "Trebuchet MS", "Avenir Next", sans-serif;
   background:
-    radial-gradient(circle at top left, rgba(255, 224, 145, 0.92), transparent 28%),
-    radial-gradient(circle at bottom right, rgba(56, 148, 255, 0.18), transparent 26%),
-    linear-gradient(180deg, #fbf7ec 0%, #f5efde 52%, #eee5d3 100%);
+    radial-gradient(circle at top left, rgba(255, 224, 145, 0.92), transparent 30%),
+    radial-gradient(circle at bottom right, rgba(62, 169, 255, 0.18), transparent 28%),
+    linear-gradient(180deg, #fbf6eb 0%, #f4efe2 52%, #efe7d7 100%);
   color: #171717;
 }
 
@@ -14,6 +14,7 @@
 
 body {
   margin: 0;
+  min-height: 100vh;
 }
 
 button,
@@ -29,7 +30,7 @@ button {
   background: #1f1f1f;
   color: white;
   cursor: pointer;
-  transition: transform 150ms ease, background 150ms ease;
+  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
 button:hover {
@@ -63,6 +64,7 @@ p {
   max-width: 1520px;
   margin: 0 auto;
   padding: 1.5rem;
+  padding-bottom: 6rem;
   display: grid;
   gap: 1rem;
 }
@@ -97,10 +99,26 @@ p {
     rgba(255, 252, 246, 0.84);
 }
 
+.panel-toolbar {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.48), rgba(255, 221, 164, 0.24)),
+    rgba(255, 252, 246, 0.84);
+}
+
 .panel-drive {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(255, 213, 114, 0.14)),
     rgba(255, 252, 246, 0.84);
+}
+
+.panel-hero {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.32), rgba(255, 200, 104, 0.12)),
+    rgba(255, 252, 246, 0.84);
+}
+
+.panel-highlight {
+  outline: 3px solid rgba(0, 120, 255, 0.22);
 }
 
 .panel-title-row {
@@ -117,6 +135,11 @@ p {
   font-size: 0.72rem;
   color: #966a13;
   margin-bottom: 0.35rem;
+}
+
+.muted-copy {
+  color: #666;
+  line-height: 1.45;
 }
 
 .chip,
@@ -138,6 +161,7 @@ p {
   color: #b03b22;
 }
 
+.hero-meta,
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -145,12 +169,12 @@ p {
   align-items: center;
 }
 
-.toolbar-spread {
-  justify-content: space-between;
+.hero-meta {
+  margin-bottom: 1rem;
 }
 
-.toolbar-top {
-  align-items: center;
+.toolbar-spread {
+  justify-content: space-between;
 }
 
 .toggle-group {
@@ -186,6 +210,11 @@ p {
   border: 1px solid rgba(23, 23, 23, 0.14);
 }
 
+.selector-active {
+  background: #171717;
+  color: white;
+}
+
 .inline-field {
   min-width: 220px;
 }
@@ -197,30 +226,67 @@ p {
   display: block;
 }
 
+.leg-svg-interactive {
+  touch-action: none;
+}
+
 .overview-label {
   font-size: 13px;
   fill: #363636;
 }
 
-.drive-layout,
+.overview-leg-clickable {
+  cursor: pointer;
+}
+
+.teleop-grid,
+.single-focus-grid,
 .details-grid,
+.control-grid,
+.support-grid,
 .status-grid,
-.stats-grid {
+.stats-grid,
+.telemetry-grid,
+.preview-readout,
+.leg-selector-grid {
   display: grid;
   gap: 1rem;
 }
 
-.drive-layout {
+.teleop-grid {
   grid-template-columns: minmax(420px, 1.1fr) minmax(340px, 0.9fr);
   align-items: start;
 }
 
+.single-focus-grid {
+  grid-template-columns: minmax(420px, 1.15fr) minmax(360px, 1fr);
+  align-items: start;
+}
+
 .details-grid {
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.control-grid {
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+}
+
+.support-grid {
+  grid-template-columns: minmax(300px, 0.85fr) minmax(360px, 1.15fr);
+  align-items: start;
 }
 
 .status-grid,
-.stats-grid {
+.stats-grid,
+.telemetry-grid {
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+}
+
+.leg-selector-grid {
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.preview-readout {
   grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }
 
@@ -241,11 +307,24 @@ p {
   background: rgba(216, 31, 22, 0.1);
 }
 
+.status-card-mode {
+  background: rgba(0, 120, 255, 0.1);
+}
+
 .status-card label,
-.stats-grid label {
+.stats-grid label,
+.telemetry-grid label {
   display: block;
   font-size: 0.82rem;
   color: #6a6a6a;
+}
+
+.control-card {
+  background: rgba(255, 255, 255, 0.55);
+  border-radius: 22px;
+  padding: 1rem;
+  display: grid;
+  gap: 0.85rem;
 }
 
 .drive-pad-grid {
@@ -269,21 +348,92 @@ p {
     #22100f;
 }
 
-.fault-box {
+.stance-control {
+  display: grid;
+  gap: 0.75rem;
   margin-top: 1rem;
-  padding: 0.9rem 1rem;
+  padding: 0.95rem 1rem;
   border-radius: 18px;
   background: rgba(23, 23, 23, 0.06);
 }
 
-.muted-copy {
-  color: #666;
-  line-height: 1.45;
+.stance-control-header,
+.stance-scale {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.stance-control-header h3 {
+  font-size: 1.05rem;
+}
+
+.stance-control-header strong {
+  font-size: 1rem;
+  white-space: nowrap;
+}
+
+.stance-scale {
+  font-size: 0.78rem;
+  color: #6a6a6a;
+}
+
+.stance-control input[type="range"] {
+  padding-inline: 0;
+}
+
+.map-readout,
+.fault-box,
+.telemetry-log > div,
+.preview-readout > div {
+  padding: 0.85rem 1rem;
+  border-radius: 18px;
+  background: rgba(23, 23, 23, 0.06);
+}
+
+.range-stack {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.telemetry-log {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.telemetry-log h3 {
+  font-size: 0.92rem;
+  margin-bottom: 0.35rem;
+}
+
+.preview-readout > div {
+  display: grid;
+  gap: 0.25rem;
+}
+
+.draggable-foot {
+  cursor: grab;
+}
+
+.hidden-input {
+  display: none;
+}
+
+@media (max-width: 1100px) {
+  .teleop-grid,
+  .single-focus-grid,
+  .support-grid {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 900px) {
   .app-shell {
     padding: 1rem;
+    padding-bottom: 6rem;
   }
 
   .panic-button {
@@ -291,10 +441,6 @@ p {
     bottom: 1rem;
     width: calc(100vw - 2rem);
     justify-content: center;
-  }
-
-  .drive-layout {
-    grid-template-columns: 1fr;
   }
 
   .panel-title-row,
@@ -305,5 +451,26 @@ p {
 
   .drive-pad-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .toggle-group {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .toggle-group button {
+    flex: 1 1 140px;
+  }
+
+  .drive-pad-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .control-grid,
+  .details-grid,
+  .telemetry-log {
+    grid-template-columns: 1fr;
   }
 }

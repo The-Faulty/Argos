@@ -41,7 +41,7 @@ export function createMotionStatePatch({
 } = {}) {
   const normalizedDrive = normalizeDriveCommand(driveCommand);
   const strideMagnitude = Math.max(Math.abs(normalizedDrive.vx), Math.abs(normalizedDrive.vy), Math.abs(normalizedDrive.yawRate));
-  const heightBias = stance.height ?? 0;
+  const footHeightOffset = -(stance.height ?? 0);
   const cycleTimeSec = 1.8 - strideMagnitude * 0.35;
   const timeSec = Math.max(0, timeMs) / 1000;
   const legs = {};
@@ -62,12 +62,12 @@ export function createMotionStatePatch({
     );
 
     let footX = 0;
-    let footY = heightBias;
+    let footY = footHeightOffset;
     if (motionMode === "drive") {
       const phaseWave = Math.sin(phase * Math.PI);
       footX = swing ? (-strideX / 2) + strideX * phase : (strideX / 2) - strideX * phase;
       footX += swing ? strideY * 0.35 * phaseWave : -strideY * 0.2 * phaseWave;
-      footY = swing ? heightBias + phaseWave * liftY : heightBias - 5 * phaseWave;
+      footY = swing ? footHeightOffset + phaseWave * liftY : footHeightOffset - 5 * phaseWave;
     }
 
     const pose = buildLegPoseFromFoot(
@@ -116,4 +116,11 @@ export function flattenServoPose(legs) {
     flattened[`${prefix}CalfDeg`] = roundServo(clampServo(calfDeg + (servoTrimDeg.calf ?? 0)));
   }
   return flattened;
+}
+
+export function createFullBodyPoseCommand(legs) {
+  return {
+    type: "apply_full_body_pose",
+    ...flattenServoPose(legs),
+  };
 }

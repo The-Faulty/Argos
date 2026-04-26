@@ -75,17 +75,23 @@ export const DEFAULT_LEG_COMMAND = {
   servoAnglesDeg: { hipYaw: 90, thigh: 90, calf: 90 },
 };
 
+// Match the main-era PCA9685 wiring so hip-yaw stays on the dedicated upper channels.
 export const DEFAULT_SERVO_CHANNEL_MAP = {
-  front_left: { hipYaw: 0, thigh: 1, calf: 2 },
-  front_right: { hipYaw: 3, thigh: 4, calf: 5 },
-  rear_left: { hipYaw: 6, thigh: 7, calf: 8 },
-  rear_right: { hipYaw: 9, thigh: 10, calf: 11 },
+  front_left: { hipYaw: 8, thigh: 0, calf: 1 },
+  front_right: { hipYaw: 9, thigh: 2, calf: 3 },
+  rear_left: { hipYaw: 10, thigh: 4, calf: 5 },
+  rear_right: { hipYaw: 11, thigh: 6, calf: 7 },
 };
 
 export const DEFAULT_JOINT_LIMITS = {
   hipYawDeg: { min: -35, max: 35 },
   thighDeg: { min: -145, max: 15 },
   calfDeg: { min: -165, max: -25 },
+};
+
+export const NEUTRAL_CALIBRATION = {
+  thetaThigh: 0,
+  thetaServo: -2.768896484375,
 };
 
 export const DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = {
@@ -98,6 +104,12 @@ export const DEFAULT_SERVO_TRIM_DEG = {
   hipYaw: 0,
   thigh: 0,
   calf: 0,
+};
+
+export const STANCE_HEIGHT_RANGE_MM = {
+  min: -25,
+  max: 35,
+  step: 1,
 };
 
 export const DEFAULT_STANCE = {

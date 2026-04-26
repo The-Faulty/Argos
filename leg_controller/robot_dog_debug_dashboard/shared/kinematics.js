@@ -1,4 +1,4 @@
-import { DEFAULT_JOINT_LIMITS, LEG_DRAWING, LEG_GEOMETRY, LEG_IDS, ROBOT_LAYOUT } from "./robot-config.js";
+import { DEFAULT_JOINT_LIMITS, LEG_DRAWING, LEG_GEOMETRY, LEG_IDS, NEUTRAL_CALIBRATION, ROBOT_LAYOUT } from "./robot-config.js";
 
 function clampValue(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -65,6 +65,258 @@ export function radToDeg(radians) {
 
 export function degToRad(degrees) {
   return (degrees * Math.PI) / 180;
+}
+
+function clampServoAngleDeg(value, fallback = 90) {
+  const numeric = Number.isFinite(value) ? value : fallback;
+  return clampValue(numeric, SERVO_MIN_DEG, SERVO_MAX_DEG);
+}
+
+function normalizeServoAngles(servoAnglesDeg = {}) {
+  return {
+    hipYaw: clampServoAngleDeg(servoAnglesDeg.hipYaw, 90),
+    thigh: clampServoAngleDeg(servoAnglesDeg.thigh, 90),
+    calf: clampServoAngleDeg(servoAnglesDeg.calf, 90),
+  };
+}
+
+function servoRangePenalty(modelDeg) {
+  if (modelDeg < 0) {
+    return -modelDeg;
+  }
+  if (modelDeg > 180) {
+    return modelDeg - 180;
+  }
+  return 0;
+}
+
+function servoSolutionPenalty(thetaThigh, thetaServo, calibration) {
+  if (!calibration) {
+    return 0;
+  }
+
+  return (
+    servoRangePenalty(thetaToModelServoDeg(thetaThigh, calibration.thetaThigh)) +
+    servoRangePenalty(thetaToModelServoDeg(thetaServo, calibration.thetaServo))
+  );
+}
+
+function footCandidateBetter(candidate, best) {
+  if (!best) {
+    return true;
+  }
+  if (candidate.error < best.error - 0.5) {
+    return true;
+  }
+  if (candidate.error > best.error + 0.5) {
+    return false;
+  }
+  if (candidate.servoPenalty < best.servoPenalty - 1e-6) {
+    return true;
+  }
+  if (candidate.servoPenalty > best.servoPenalty + 1e-6) {
+    return false;
+  }
+  return candidate.error < best.error;
+}
+
+function jointCandidateBetter(candidate, best) {
+  if (!best) {
+    return true;
+  }
+  if (candidate.error < best.error - degToRad(0.75)) {
+    return true;
+  }
+  if (candidate.error > best.error + degToRad(0.75)) {
+    return false;
+  }
+  if (candidate.servoPenalty < best.servoPenalty - 1e-6) {
+    return true;
+  }
+  if (candidate.servoPenalty > best.servoPenalty + 1e-6) {
+    return false;
+  }
+  return candidate.error < best.error;
+}
+
+const SERVO_SEARCH_STEP_DEG = 5;
+const SERVO_REFINE_STEPS_DEG = [2, 1, 0.5, 0.25];
+const SERVO_MIN_DEG = 0;
+const SERVO_MAX_DEG = 180;
+
+function candidateContinuityPenalty(candidate, startModelDeg) {
+  if (!startModelDeg) {
+    return 0;
+  }
+
+  return (
+    Math.abs(candidate.modelThighDeg - startModelDeg.thigh) +
+    Math.abs(candidate.modelCalfDeg - startModelDeg.calf)
+  );
+}
+
+function footServoCandidateBetter(candidate, best) {
+  if (!best) {
+    return true;
+  }
+
+  if (
+    footCandidateBetter(
+      { servoPenalty: candidate.servoPenalty, error: candidate.error },
+      { servoPenalty: best.servoPenalty, error: best.error },
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    footCandidateBetter(
+      { servoPenalty: best.servoPenalty, error: best.error },
+      { servoPenalty: candidate.servoPenalty, error: candidate.error },
+    )
+  ) {
+    return false;
+  }
+
+  return candidate.continuityPenalty < best.continuityPenalty;
+}
+
+function jointServoCandidateBetter(candidate, best) {
+  if (!best) {
+    return true;
+  }
+
+  if (
+    jointCandidateBetter(
+      { servoPenalty: candidate.servoPenalty, error: candidate.error },
+      { servoPenalty: best.servoPenalty, error: best.error },
+    )
+  ) {
+    return true;
+  }
+
+  if (
+    jointCandidateBetter(
+      { servoPenalty: best.servoPenalty, error: best.error },
+      { servoPenalty: candidate.servoPenalty, error: candidate.error },
+    )
+  ) {
+    return false;
+  }
+
+  return candidate.continuityPenalty < best.continuityPenalty;
+}
+
+function evaluateFootServoCandidate(modelThighDeg, modelCalfDeg, target, limits, calibration, startModelDeg) {
+  if (
+    modelThighDeg < SERVO_MIN_DEG ||
+    modelThighDeg > SERVO_MAX_DEG ||
+    modelCalfDeg < SERVO_MIN_DEG ||
+    modelCalfDeg > SERVO_MAX_DEG
+  ) {
+    return null;
+  }
+
+  const thetaThigh = modelServoDegToTheta(modelThighDeg, calibration.thetaThigh);
+  const thetaServo = modelServoDegToTheta(modelCalfDeg, calibration.thetaServo);
+  const geometry = solveGeometry(thetaThigh, thetaServo);
+
+  if (!geometryWithinJointLimits(geometry, limits)) {
+    return null;
+  }
+
+  return {
+    modelThighDeg,
+    modelCalfDeg,
+    thetaThigh,
+    thetaServo,
+    thetaCalf: geometry.thetaCalf,
+    geometry,
+    error: Math.hypot(geometry.foot.x - target.x, geometry.foot.y - target.y),
+    servoPenalty: servoSolutionPenalty(thetaThigh, thetaServo, calibration),
+    continuityPenalty: candidateContinuityPenalty({ modelThighDeg, modelCalfDeg }, startModelDeg),
+  };
+}
+
+function evaluateJointServoCandidate(thetaThigh, modelCalfDeg, targetThetaCalf, limits, calibration, startModelDeg) {
+  if (modelCalfDeg < SERVO_MIN_DEG || modelCalfDeg > SERVO_MAX_DEG) {
+    return null;
+  }
+
+  const thetaServo = modelServoDegToTheta(modelCalfDeg, calibration.thetaServo);
+  const geometry = solveGeometry(thetaThigh, thetaServo);
+
+  if (!geometryWithinJointLimits(geometry, limits)) {
+    return null;
+  }
+
+  return {
+    modelCalfDeg,
+    thetaServo,
+    thetaCalf: geometry.thetaCalf,
+    geometry,
+    error: Math.abs(clampAngle(geometry.thetaCalf - targetThetaCalf)),
+    servoPenalty: servoSolutionPenalty(thetaThigh, thetaServo, calibration),
+    continuityPenalty: startModelDeg == null ? 0 : Math.abs(modelCalfDeg - startModelDeg),
+  };
+}
+
+function refineFootServoCandidate(best, target, limits, calibration, startModelDeg) {
+  if (!best) {
+    return null;
+  }
+
+  for (const step of SERVO_REFINE_STEPS_DEG) {
+    let improved = true;
+
+    while (improved) {
+      improved = false;
+      const neighbors = [
+        [best.modelThighDeg + step, best.modelCalfDeg],
+        [best.modelThighDeg - step, best.modelCalfDeg],
+        [best.modelThighDeg, best.modelCalfDeg + step],
+        [best.modelThighDeg, best.modelCalfDeg - step],
+        [best.modelThighDeg + step, best.modelCalfDeg + step],
+        [best.modelThighDeg + step, best.modelCalfDeg - step],
+        [best.modelThighDeg - step, best.modelCalfDeg + step],
+        [best.modelThighDeg - step, best.modelCalfDeg - step],
+      ];
+
+      for (const [candidateThighDeg, candidateCalfDeg] of neighbors) {
+        const candidate = evaluateFootServoCandidate(candidateThighDeg, candidateCalfDeg, target, limits, calibration, startModelDeg);
+        if (candidate && footServoCandidateBetter(candidate, best)) {
+          best = candidate;
+          improved = true;
+        }
+      }
+    }
+  }
+
+  return best;
+}
+
+function refineJointServoCandidate(best, thetaThigh, targetThetaCalf, limits, calibration, startModelDeg) {
+  if (!best) {
+    return null;
+  }
+
+  for (const step of SERVO_REFINE_STEPS_DEG) {
+    let improved = true;
+
+    while (improved) {
+      improved = false;
+
+      for (const candidateCalfDeg of [best.modelCalfDeg + step, best.modelCalfDeg - step]) {
+        const candidate = evaluateJointServoCandidate(thetaThigh, candidateCalfDeg, targetThetaCalf, limits, calibration, startModelDeg);
+        if (candidate && jointServoCandidateBetter(candidate, best)) {
+          best = candidate;
+          improved = true;
+        }
+      }
+    }
+  }
+
+  return best;
 }
 
 export function circleIntersections(c0, r0, c1, r1) {
@@ -186,146 +438,91 @@ export function solveGeometry(thetaThigh, thetaServo) {
   return geometry;
 }
 
-export function solveAnglesForFoot(target, startThigh = -Math.PI / 4, startServo = Math.PI / 6, limits = DEFAULT_JOINT_LIMITS) {
-  function refineFromSeed(seedThigh, seedServo) {
-    let bestThigh = clampAngle(seedThigh);
-    let bestServo = clampAngle(seedServo);
-    let bestGeometry = solveGeometry(bestThigh, bestServo);
-    let bestError = geometryWithinJointLimits(bestGeometry, limits) ? Math.hypot(bestGeometry.foot.x - target.x, bestGeometry.foot.y - target.y) : Number.POSITIVE_INFINITY;
-    let stepThigh = 0.2;
-    let stepServo = 0.2;
-
-    for (let i = 0; i < 28; i += 1) {
-      let improved = false;
-      const candidates = [
-        [bestThigh + stepThigh, bestServo],
-        [bestThigh - stepThigh, bestServo],
-        [bestThigh, bestServo + stepServo],
-        [bestThigh, bestServo - stepServo],
-        [bestThigh + stepThigh, bestServo + stepServo],
-        [bestThigh + stepThigh, bestServo - stepServo],
-        [bestThigh - stepThigh, bestServo + stepServo],
-        [bestThigh - stepThigh, bestServo - stepServo]
-      ];
-
-      for (const [candidateThigh, candidateServo] of candidates) {
-        const thigh = clampAngle(candidateThigh);
-        const servo = clampAngle(candidateServo);
-        const geometry = solveGeometry(thigh, servo);
-        if (!geometryWithinJointLimits(geometry, limits)) {
-          continue;
-        }
-        const error = Math.hypot(geometry.foot.x - target.x, geometry.foot.y - target.y);
-
-        if (error < bestError) {
-          bestError = error;
-          bestThigh = thigh;
-          bestServo = servo;
-          bestGeometry = geometry;
-          improved = true;
-        }
-      }
-
-      if (!improved) {
-        stepThigh *= 0.5;
-        stepServo *= 0.5;
-      }
-    }
-
-    return {
-      thetaThigh: bestThigh,
-      thetaServo: bestServo,
-      thetaCalf: bestGeometry.thetaCalf,
-      footError: bestError,
-      geometry: bestGeometry
-    };
-  }
-
-  const seedSet = new Map();
-  const thighSeeds = [-1.35, -1.1, -0.85, -0.6, -0.35, -0.1];
-  const servoSeeds = [-2.85, -2.55, -2.25, -1.95, -1.65, -1.35, -1.05, 0.75];
-
-  function addSeed(thigh, servo) {
-    seedSet.set(`${thigh.toFixed(3)}:${servo.toFixed(3)}`, [thigh, servo]);
-  }
-
-  addSeed(startThigh, startServo);
-  for (const thigh of thighSeeds) {
-    for (const servo of servoSeeds) {
-      addSeed(thigh, servo);
-    }
-  }
+export function solveAnglesForFoot(target, startThigh = -Math.PI / 4, startServo = Math.PI / 6, limits = DEFAULT_JOINT_LIMITS, calibration = null) {
+  const activeCalibration = calibration ?? createNeutralCalibration();
+  const startModelDeg = {
+    thigh: clampValue(thetaToModelServoDeg(startThigh, activeCalibration.thetaThigh), SERVO_MIN_DEG, SERVO_MAX_DEG),
+    calf: clampValue(thetaToModelServoDeg(startServo, activeCalibration.thetaServo), SERVO_MIN_DEG, SERVO_MAX_DEG),
+  };
 
   let bestSolution = null;
-  for (const [seedThigh, seedServo] of seedSet.values()) {
-    const candidate = refineFromSeed(seedThigh, seedServo);
-    if (!candidate.geometry.valid || !Number.isFinite(candidate.footError)) {
-      continue;
-    }
-
-    if (bestSolution == null || candidate.footError < bestSolution.footError) {
-      bestSolution = candidate;
+  for (let modelThighDeg = SERVO_MIN_DEG; modelThighDeg <= SERVO_MAX_DEG; modelThighDeg += SERVO_SEARCH_STEP_DEG) {
+    for (let modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG) {
+      const candidate = evaluateFootServoCandidate(modelThighDeg, modelCalfDeg, target, limits, activeCalibration, startModelDeg);
+      if (candidate && footServoCandidateBetter(candidate, bestSolution)) {
+        bestSolution = candidate;
+      }
     }
   }
 
+  bestSolution = refineFootServoCandidate(bestSolution, target, limits, activeCalibration, startModelDeg);
+
   if (!bestSolution) {
-    bestSolution = refineFromSeed(startThigh, startServo);
+    const fallbackGeometry = solveGeometry(startThigh, startServo);
+    return {
+      thetaThigh: startThigh,
+      thetaServo: startServo,
+      thetaCalf: fallbackGeometry.thetaCalf,
+      footError: Number.POSITIVE_INFINITY,
+      geometry: fallbackGeometry,
+      hasSolution: false,
+      success: false,
+    };
   }
 
   return {
     thetaThigh: bestSolution.thetaThigh,
     thetaServo: bestSolution.thetaServo,
     thetaCalf: bestSolution.thetaCalf,
-    footError: bestSolution.footError,
+    footError: bestSolution.error,
     geometry: bestSolution.geometry,
-    hasSolution: bestSolution.geometry.valid && Number.isFinite(bestSolution.footError),
-    success: bestSolution.geometry.valid && Number.isFinite(bestSolution.footError) && bestSolution.footError < 10
+    hasSolution: bestSolution.geometry.valid && Number.isFinite(bestSolution.error),
+    success: bestSolution.geometry.valid && Number.isFinite(bestSolution.error) && bestSolution.error < 10,
   };
 }
 
-export function solveServoForJointAngles(thetaThigh, targetThetaCalf, startServo = Math.PI / 6, limits = DEFAULT_JOINT_LIMITS) {
-  let bestServo = startServo;
-  let bestGeometry = solveGeometry(thetaThigh, bestServo);
-  let bestError = geometryWithinJointLimits(bestGeometry, limits) ? Math.abs(clampAngle(bestGeometry.thetaCalf - targetThetaCalf)) : Number.POSITIVE_INFINITY;
-  let step = 0.2;
+export function solveServoForJointAngles(thetaThigh, targetThetaCalf, startServo = Math.PI / 6, limits = DEFAULT_JOINT_LIMITS, calibration = null) {
+  const activeCalibration = calibration ?? createNeutralCalibration();
+  const startModelDeg = clampValue(thetaToModelServoDeg(startServo, activeCalibration.thetaServo), SERVO_MIN_DEG, SERVO_MAX_DEG);
+  let bestSolution = null;
 
-  for (let i = 0; i < 28; i += 1) {
-    let improved = false;
-    for (const candidate of [bestServo + step, bestServo - step]) {
-      const servo = clampAngle(candidate);
-      const geometry = solveGeometry(thetaThigh, servo);
-      if (!geometryWithinJointLimits(geometry, limits)) {
-        continue;
-      }
-      const error = Math.abs(clampAngle(geometry.thetaCalf - targetThetaCalf));
-      if (error < bestError) {
-        bestServo = servo;
-        bestGeometry = geometry;
-        bestError = error;
-        improved = true;
-      }
-    }
-
-    if (!improved) {
-      step *= 0.5;
+  for (let modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG) {
+    const candidate = evaluateJointServoCandidate(thetaThigh, modelCalfDeg, targetThetaCalf, limits, activeCalibration, startModelDeg);
+    if (candidate && jointServoCandidateBetter(candidate, bestSolution)) {
+      bestSolution = candidate;
     }
   }
 
+  bestSolution = refineJointServoCandidate(bestSolution, thetaThigh, targetThetaCalf, limits, activeCalibration, startModelDeg);
+
+  if (!bestSolution) {
+    const fallbackGeometry = solveGeometry(thetaThigh, startServo);
+    return {
+      thetaServo: startServo,
+      thetaCalf: fallbackGeometry.thetaCalf,
+      jointError: Number.POSITIVE_INFINITY,
+      servoPenalty: Number.POSITIVE_INFINITY,
+      geometry: fallbackGeometry,
+      hasSolution: false,
+      success: false,
+    };
+  }
+
   return {
-    thetaServo: bestServo,
-    thetaCalf: bestGeometry.thetaCalf,
-    jointError: bestError,
-    geometry: bestGeometry,
-    hasSolution: bestGeometry.valid && Number.isFinite(bestError),
-    success: bestGeometry.valid && Number.isFinite(bestError) && bestError < degToRad(3)
+    thetaServo: bestSolution.thetaServo,
+    thetaCalf: bestSolution.thetaCalf,
+    jointError: bestSolution.error,
+    servoPenalty: bestSolution.servoPenalty,
+    geometry: bestSolution.geometry,
+    hasSolution: bestSolution.geometry.valid && Number.isFinite(bestSolution.error),
+    success: bestSolution.geometry.valid && Number.isFinite(bestSolution.error) && bestSolution.error < degToRad(3),
   };
 }
 
 export function createNeutralCalibration() {
-  const solution = solveAnglesForFoot(LEG_GEOMETRY.footOriginOffset, -Math.PI / 4, Math.PI / 6, DEFAULT_JOINT_LIMITS);
   return {
-    thetaThigh: 0,
-    thetaServo: solution.thetaServo
+    thetaThigh: NEUTRAL_CALIBRATION.thetaThigh,
+    thetaServo: NEUTRAL_CALIBRATION.thetaServo,
   };
 }
 
@@ -338,8 +535,9 @@ export function thetaToModelServoDeg(theta, neutralTheta) {
 }
 
 export function buildLegPoseFromServoAngles(servoAnglesDeg, calibration = createNeutralCalibration(), options = {}) {
-  const thetaThigh = modelServoDegToTheta(servoAnglesDeg.thigh, calibration.thetaThigh);
-  const thetaServo = modelServoDegToTheta(servoAnglesDeg.calf, calibration.thetaServo);
+  const normalizedServoAngles = normalizeServoAngles(servoAnglesDeg);
+  const thetaThigh = modelServoDegToTheta(normalizedServoAngles.thigh, calibration.thetaThigh);
+  const thetaServo = modelServoDegToTheta(normalizedServoAngles.calf, calibration.thetaServo);
   const geometry = solveGeometry(thetaThigh, thetaServo);
   const limits = normalizeJointLimits(options.jointLimits);
   const clampedJointAngles = clampJointAnglesToLimits(
@@ -357,14 +555,14 @@ export function buildLegPoseFromServoAngles(servoAnglesDeg, calibration = create
       y: geometry.foot.y - LEG_GEOMETRY.footOriginOffset.y
     },
     jointAnglesDeg: {
-      hipYaw: clampValue((servoAnglesDeg.hipYaw ?? 90) - 90, limits.hipYawDeg.min, limits.hipYawDeg.max),
+      hipYaw: clampValue(normalizedServoAngles.hipYaw - 90, limits.hipYawDeg.min, limits.hipYawDeg.max),
       thigh: clampedJointAngles.thigh,
       calf: clampedJointAngles.calf
     },
     servoAnglesDeg: {
-      hipYaw: clampValue(servoAnglesDeg.hipYaw ?? 90, 90 + limits.hipYawDeg.min, 90 + limits.hipYawDeg.max),
-      thigh: servoAnglesDeg.thigh,
-      calf: servoAnglesDeg.calf
+      hipYaw: clampValue(normalizedServoAngles.hipYaw, 90 + limits.hipYawDeg.min, 90 + limits.hipYawDeg.max),
+      thigh: normalizedServoAngles.thigh,
+      calf: normalizedServoAngles.calf
     },
     reachable: geometry.valid,
     footError: 0
@@ -377,7 +575,7 @@ export function buildLegPoseFromFoot(foot, calibration = createNeutralCalibratio
   const solution = solveAnglesForFoot({
     x: foot.x + LEG_GEOMETRY.footOriginOffset.x,
     y: foot.y + LEG_GEOMETRY.footOriginOffset.y
-  }, options.startThetaThigh ?? -Math.PI / 4, options.startThetaServo ?? Math.PI / 6, limits);
+  }, options.startThetaThigh ?? -Math.PI / 4, options.startThetaServo ?? Math.PI / 6, limits, calibration);
   const geometry = solution.geometry;
   const clampedJointAngles = clampJointAnglesToLimits(
     {
@@ -413,7 +611,7 @@ export function buildLegPoseFromJointAngles(jointAnglesDeg, calibration = create
   const limits = normalizeJointLimits(options.jointLimits);
   const clamped = clampJointAnglesToLimits(jointAnglesDeg, limits);
   const thetaThigh = degToRad(clamped.thigh);
-  const servoSolution = solveServoForJointAngles(thetaThigh, degToRad(clamped.calf), options.startThetaServo ?? Math.PI / 6, limits);
+  const servoSolution = solveServoForJointAngles(thetaThigh, degToRad(clamped.calf), options.startThetaServo ?? Math.PI / 6, limits, calibration);
   const geometry = servoSolution.geometry;
 
   return {
