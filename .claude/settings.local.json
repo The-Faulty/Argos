@@ -12,7 +12,8 @@
       "Bash(python -m py_compile src/quadruped_bringup/launch/dashboard.launch.py)",
       "Bash(python -m py_compile src/quadruped_bringup/launch/full_system.launch.py)",
       "Bash(python -m py_compile src/quadruped_bringup/launch/control_stack.launch.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(node --check dashboard/pi_server/serial_bridge.js)"
     ]
   }
 }

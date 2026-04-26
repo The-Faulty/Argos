@@ -51,6 +51,16 @@ export class SerialBridge extends EventEmitter {
     this.lastState = null;
     this._reopenTimer = null;
     this._sentTypes = new Map(); // seq -> command type, for error attribution
+
+    // Outbound write pacing. The 50 Hz auto-mode tick fires 4 per-leg servo
+    // commands at once; sending them synchronously overruns the ESP32 RX FIFO
+    // mid-message. We coalesce per-leg (only the latest pending angles for
+    // each leg get sent) and await port.drain() between every write so the
+    // host never outpaces the UART.
+    this._pendingServoByLeg = new Map(); // fwLegId -> {hipServoDeg, thighServoDeg, calfServoDeg}
+    this._lastSentServoByLeg = new Map(); // fwLegId -> last-sent angles, for dedupe
+    this._pendingOther = []; // FIFO queue of non-servo command objects
+    this._pumping = false;
   }
 
   connect() {
@@ -63,6 +73,11 @@ export class SerialBridge extends EventEmitter {
     parser.on("data", (line) => this._onLine(line));
     port.on("open", () => {
       this.connected = true;
+      // Discard any stale queued state from before reconnect — the firmware
+      // has reset too, so the dedupe cache and pending queues must clear.
+      this._pendingServoByLeg.clear();
+      this._lastSentServoByLeg.clear();
+      this._pendingOther.length = 0;
       this.emit("open");
       this._send({ type: "hello" });
       this._send({ type: "set_mode", mode: "direct_servo_angles" });
@@ -109,6 +124,9 @@ export class SerialBridge extends EventEmitter {
   }
 
   releaseServos() {
+    // Drop any in-flight servo targets so we don't immediately re-engage.
+    this._pendingServoByLeg.clear();
+    this._lastSentServoByLeg.clear();
     this._send({ type: "release_servos" });
   }
 
@@ -117,16 +135,17 @@ export class SerialBridge extends EventEmitter {
   }
 
   // angles is { coxa, femur, tibia } in 0..180 servo-horn degrees.
+  // Enqueues into the per-leg pending map (latest values win) and kicks the
+  // pump. Actual writes are paced by port.drain() in _pump().
   setLegServoAngles(dashLegId, { coxa, femur, tibia }) {
     const legId = DASH_TO_FW_LEG[dashLegId];
     if (!legId) throw new Error(`Unknown leg id: ${dashLegId}`);
-    this._send({
-      type: "set_leg_servo_angles",
-      legId,
+    this._pendingServoByLeg.set(legId, {
       hipServoDeg: coxa,
       thighServoDeg: femur,
       calfServoDeg: tibia,
     });
+    this._pump();
   }
 
   // 12-element flat array in JOINT_NAMES order (FR coxa, FR femur, ..., RL tibia).
@@ -255,16 +274,76 @@ export class SerialBridge extends EventEmitter {
   }
 
   _send(obj) {
-    if (!this.port || !this.port.isOpen) return;
-    const seq = ++this.seq;
-    this._sentTypes.set(seq, obj.type);
-    if (this._sentTypes.size > 256) {
-      const firstKey = this._sentTypes.keys().next().value;
-      this._sentTypes.delete(firstKey);
-    }
-    const line = JSON.stringify({ ...obj, seq }) + "\n";
-    this.port.write(line);
+    this._pendingOther.push(obj);
+    this._pump();
   }
+
+  // Drains queued frames serially, awaiting OS write completion between each
+  // so the host doesn't outrun the UART. Non-servo commands are sent FIFO and
+  // take priority over servo frames (so e.g. release_servos doesn't get stuck
+  // behind a queue of pending angles).
+  async _pump() {
+    if (this._pumping) return;
+    if (!this.port || !this.port.isOpen) return;
+    this._pumping = true;
+    try {
+      while (this._pendingOther.length || this._pendingServoByLeg.size) {
+        if (!this.port || !this.port.isOpen) return;
+        if (this._pendingOther.length) {
+          await this._writeOne(this._pendingOther.shift());
+          continue;
+        }
+        const next = this._pendingServoByLeg.entries().next().value;
+        if (!next) break;
+        const [legId, angles] = next;
+        this._pendingServoByLeg.delete(legId);
+        const last = this._lastSentServoByLeg.get(legId);
+        if (last && servoAnglesEqual(last, angles)) continue;
+        this._lastSentServoByLeg.set(legId, angles);
+        await this._writeOne({ type: "set_leg_servo_angles", legId, ...angles });
+      }
+    } finally {
+      this._pumping = false;
+    }
+  }
+
+  _writeOne(obj) {
+    return new Promise((resolve) => {
+      if (!this.port || !this.port.isOpen) {
+        resolve();
+        return;
+      }
+      const seq = ++this.seq;
+      this._sentTypes.set(seq, obj.type);
+      if (this._sentTypes.size > 256) {
+        const firstKey = this._sentTypes.keys().next().value;
+        this._sentTypes.delete(firstKey);
+      }
+      const line = JSON.stringify({ ...obj, seq }) + "\n";
+      this.port.write(line, (err) => {
+        if (err) {
+          this.emit("error", err);
+          resolve();
+          return;
+        }
+        if (!this.port || !this.port.isOpen) {
+          resolve();
+          return;
+        }
+        this.port.drain((drainErr) => {
+          if (drainErr) this.emit("error", drainErr);
+          resolve();
+        });
+      });
+    });
+  }
+}
+
+function servoAnglesEqual(a, b) {
+  const eps = 0.05;
+  return Math.abs(a.hipServoDeg - b.hipServoDeg) < eps
+      && Math.abs(a.thighServoDeg - b.thighServoDeg) < eps
+      && Math.abs(a.calfServoDeg - b.calfServoDeg) < eps;
 }
 
 function translateState(fw) {
