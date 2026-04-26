@@ -44,6 +44,8 @@
 
 #include "lsm9ds0.h"
 #include "pca9685.h"
+#include "driver/uart.h"
+#include "esp32_serial_transport.h"
 
 // ─── Pin / bus assignments ────────────────────────────────────────────────
 //
@@ -622,9 +624,31 @@ static void micro_ros_task(void *arg) {
     vTaskDelete(NULL);
 }
 
+// UART port handed to the micro-ROS custom transport. UART_NUM_0 is the
+// HUZZAH32's USB-serial bridge (CP2104), which is exactly the port the Pi
+// sees as /dev/ttyESP32. The address of this static must outlive the call,
+// so it lives at file scope rather than on the stack.
+static size_t s_uart_port = UART_NUM_0;
+
 void app_main(void) {
 #if defined(CONFIG_MICRO_ROS_ESP_NETIF_WLAN) || defined(CONFIG_MICRO_ROS_ESP_NETIF_ENET)
     ESP_ERROR_CHECK(uros_network_interface_initialize());
+#endif
+
+#if defined(RMW_UXRCE_TRANSPORT_CUSTOM)
+    // Wire the rmw_microxrcedds custom-transport hooks to the UART driver
+    // implementation in esp32_serial_transport.c. Must happen before
+    // rclc_support_init in micro_ros_task — that's where the rmw layer
+    // calls esp32_serial_open via the framing layer.
+    rmw_uros_set_custom_transport(
+        true,
+        (void *) &s_uart_port,
+        esp32_serial_open,
+        esp32_serial_close,
+        esp32_serial_write,
+        esp32_serial_read);
+#else
+#error micro-ROS transports misconfigured: rebuild libmicroros with RMW_UXRCE_TRANSPORT=custom
 #endif
 
     xTaskCreate(micro_ros_task,
