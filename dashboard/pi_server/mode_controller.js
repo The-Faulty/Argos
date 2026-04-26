@@ -59,14 +59,28 @@ export class ModeController extends EventEmitter {
 
     if (mode === "idle") {
       this.serial.releaseServos();
-    } else if (mode === "stand" || mode === "extend" || mode === "crouch") {
-      // Try saved stance first; if missing, fall back to the planner.
-      const stances = await this.getStances();
-      const saved = stances[mode];
-      if (saved && Array.isArray(saved.angles_rad) && saved.angles_rad.length === 12) {
-        const servoDeg = jointAnglesRadToServoDeg(saved.angles_rad);
-        this._publishServoDeg(servoDeg, saved.angles_rad);
-      }
+      return;
+    }
+
+    const pose = await this._resolveModePose(mode);
+    if (pose) {
+      this._publishServoDeg(pose.servoAnglesDeg, pose.jointAnglesRad);
+    }
+  }
+
+  async runStartupPoseSequence({
+    standMs = 900,
+    crouchMs = 700,
+  } = {}) {
+    const wasTicking = Boolean(this._tickHandle);
+    if (wasTicking) this.stop();
+    try {
+      await this.setMode("stand");
+      if (standMs > 0) await sleep(standMs);
+      await this.setMode("crouch");
+      if (crouchMs > 0) await sleep(crouchMs);
+    } finally {
+      if (wasTicking) this.start();
     }
   }
 
@@ -195,6 +209,26 @@ export class ModeController extends EventEmitter {
       position_servo_deg: [...servoDeg12],
     });
   }
+
+  async _resolveModePose(mode) {
+    if (mode === "stand" || mode === "extend" || mode === "crouch") {
+      // Prefer persisted named stances, but always fall back to the planner so
+      // switching into a pose publishes immediately even on a fresh install.
+      const stances = await this.getStances();
+      const saved = stances[mode];
+      if (saved && Array.isArray(saved.angles_rad) && saved.angles_rad.length === 12) {
+        return {
+          jointAnglesRad: saved.angles_rad,
+          servoAnglesDeg: jointAnglesRadToServoDeg(saved.angles_rad),
+        };
+      }
+    }
+    if (!AUTO_MODES.has(mode)) return null;
+    const out = this.planner.step();
+    if (!out) return null;
+    if (out.error) this.emit("error", out.error);
+    return out;
+  }
 }
 
 function flattenJoints(angles4x3) {
@@ -205,6 +239,10 @@ function flattenJoints(angles4x3) {
     }
   }
   return out;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function jointAnglesRadToServoDeg(jointAnglesRad) {

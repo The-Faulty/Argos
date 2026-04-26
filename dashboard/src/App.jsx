@@ -41,7 +41,12 @@ import WalkingPanel from "./components/WalkingPanel.jsx";
 import { ActiveLegProvider, useActiveLeg } from "./hooks/useActiveLeg.jsx";
 import { useCommand } from "./hooks/useCommand.js";
 import { useRosbridge } from "./hooks/useRosbridge.js";
-import { DEFAULT_ROTATE_SETTINGS, DEFAULT_STANCE, LEG_IDS } from "../shared/robot-config.js";
+import {
+  DEFAULT_ROTATE_SETTINGS,
+  DEFAULT_STANCE,
+  LEG_IDS,
+  LEG_ORIGINS,
+} from "../shared/robot-config.js";
 
 export default function App() {
   return (
@@ -127,9 +132,18 @@ function AppBody() {
       const safe = LEG_IDS.map((legId) => {
         const stance = DEFAULT_STANCE[legId];
         if (legId !== leg) return stance;
-        // Active leg: dragged X/Z in mm → meters; keep Y at the leg's own
-        // stance half-width since sagittal drag has no lateral input.
-        return [x / 1000, stance[1], z / 1000];
+        const legIndex = LEG_IDS.indexOf(legId);
+        const hipOriginX = legIndex >= 0 ? LEG_ORIGINS[0][legIndex] : 0;
+        const hipOriginZ = legIndex >= 0 ? LEG_ORIGINS[2][legIndex] : 0;
+        // Active leg: LegDetail drag reports hip-local sagittal X/Z in mm.
+        // Convert back to body frame before sending the 4-leg target matrix,
+        // while keeping Y at the leg's own stance half-width since the drag
+        // UI does not provide lateral input.
+        return [
+          hipOriginX + x / 1000,
+          stance[1],
+          hipOriginZ + z / 1000,
+        ];
       });
       cmd.sendFootTargets(safe).catch(() => {});
     },

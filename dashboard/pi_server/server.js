@@ -52,6 +52,8 @@ const __dirname = path.dirname(__filename);
 
 const HTTP_PORT = Number(process.env.ARGOS_DASHBOARD_PORT ?? 8787);
 const STATIC_DIR = path.resolve(__dirname, "..", "dist");
+const STARTUP_STAND_MS = Math.max(0, Number(process.env.ARGOS_STARTUP_STAND_MS ?? 900));
+const STARTUP_CROUCH_MS = Math.max(0, Number(process.env.ARGOS_STARTUP_CROUCH_MS ?? 700));
 
 // ─── State ────────────────────────────────────────────────────────────────
 
@@ -590,16 +592,25 @@ async function bootstrap() {
   state.servoSpeed = await loadServoSpeed();
   state.servoUpdateRate = await loadServoUpdateRate();
 
-  serial.connect();
-  sensors.connect();
-  mode.start();
-
-  // Push persisted settings to the firmware once it's open.
-  serial.once("open", () => {
+  // Reapply persisted motion settings and walk the legs through a deterministic
+  // wake-up sequence every time the ESP32 link comes up.
+  serial.on("open", async () => {
     if (state.servoUpdateRate?.hz) mode.setServoUpdateRate(state.servoUpdateRate.hz);
     if (Object.keys(state.servoSpeed).length) mode.setServoSpeedLimit(state.servoSpeed);
     if (Object.keys(state.jointLimits).length) mode.setJointLimits(state.jointLimits);
+    try {
+      await mode.runStartupPoseSequence({
+        standMs: STARTUP_STAND_MS,
+        crouchMs: STARTUP_CROUCH_MS,
+      });
+    } catch (err) {
+      console.warn("[argos-dashboard] startup pose sequence failed:", err?.message || err);
+    }
   });
+
+  serial.connect();
+  sensors.connect();
+  mode.start();
 
   httpServer.listen(HTTP_PORT, () => {
     console.log(`[argos-dashboard] HTTP :${HTTP_PORT}`);
