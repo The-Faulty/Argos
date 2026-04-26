@@ -45,7 +45,7 @@ const DEFAULT_BAUD = Number(process.env.ARGOS_SERIAL_BAUD || 921600);
 // ~1–2 ms; a few ms of additional pacing closes the gap. Tune up if you
 // still see truncated frames in firmware error logs; tune down for snappier
 // teleop. 0 disables.
-const DEFAULT_PACING_MS = Number(process.env.ARGOS_SERIAL_PACING_MS ?? 3);
+const DEFAULT_PACING_MS = Number(process.env.ARGOS_SERIAL_PACING_MS ?? 5);
 
 export class SerialBridge extends EventEmitter {
   constructor({ path = DEFAULT_PORT, baudRate = DEFAULT_BAUD, pacingMs = DEFAULT_PACING_MS } = {}) {

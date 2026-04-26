@@ -41,7 +41,7 @@ import WalkingPanel from "./components/WalkingPanel.jsx";
 import { ActiveLegProvider, useActiveLeg } from "./hooks/useActiveLeg.jsx";
 import { useCommand } from "./hooks/useCommand.js";
 import { useRosbridge } from "./hooks/useRosbridge.js";
-import { DEFAULT_ROTATE_SETTINGS } from "../shared/robot-config.js";
+import { DEFAULT_ROTATE_SETTINGS, DEFAULT_STANCE, LEG_IDS } from "../shared/robot-config.js";
 
 export default function App() {
   return (
@@ -119,17 +119,17 @@ function AppBody() {
         cmd.setMode("direct_foot_xyz").catch(() => {});
       }
       // Synthesize a 4-row foot matrix. Andy-servo's drag is sagittal-only
-      // (we only know X and Z from the SVG), so Y holds the default stance
-      // half-width. Non-dragged legs pass through a safe stance default —
-      // the bridge clamps any that stray outside the envelope, so it's
-      // safe to send them verbatim.
-      const DEFAULT_STANCE = [0.1, 0.1, -0.189];
-      const safe = ["FR", "FL", "RR", "RL"].map((legId) => {
-        if (legId !== leg) return DEFAULT_STANCE;
-        // Convert mm (LegDetail frame) → meters (bridge frame). Preserve
-        // Y at stance half-width; the sagittal drag doesn't give us Y.
-        const yHalf = legId === "FR" || legId === "RR" ? -0.1 : 0.1;
-        return [x / 1000, yHalf, z / 1000];
+      // (we only know X and Z from the SVG), so each non-dragged leg holds
+      // its proper per-leg stance position from robot-config (front legs
+      // forward, rear legs back, left legs +Y, right legs -Y). Sending
+      // [0.1, 0.1, ...] for every leg used to fail IK silently for FR/RR/RL
+      // because those legs are physically not at +X/+Y.
+      const safe = LEG_IDS.map((legId) => {
+        const stance = DEFAULT_STANCE[legId];
+        if (legId !== leg) return stance;
+        // Active leg: dragged X/Z in mm → meters; keep Y at the leg's own
+        // stance half-width since sagittal drag has no lateral input.
+        return [x / 1000, stance[1], z / 1000];
       });
       cmd.sendFootTargets(safe).catch(() => {});
     },

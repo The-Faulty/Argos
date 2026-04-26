@@ -24,6 +24,7 @@ import {
   MODE_OPTIONS,
 } from "../shared/robot-config.js";
 import { validateCommand } from "../shared/protocol.js";
+import { setOverrides as setServoCalOverrides } from "../shared/servo_cal.js";
 import { euler_from_quaternion } from "./quaternion.js";
 
 import {
@@ -193,6 +194,7 @@ app.get("/api/settings/servo_overrides", (_req, res) => res.json(state.servoOver
 app.post("/api/settings/servo_overrides", async (req, res) => {
   try {
     state.servoOverrides = await saveServoOverrides(req.body);
+    setServoCalOverrides(state.servoOverrides);
     broadcast({ type: "settings:servo_overrides", payload: state.servoOverrides });
     res.json(state.servoOverrides);
   } catch (err) {
@@ -446,6 +448,7 @@ async function handleCommand(cmd) {
     }
     case "set_servo_overrides":
       state.servoOverrides = await saveServoOverrides(cmd.overrides);
+      setServoCalOverrides(state.servoOverrides);
       broadcast({ type: "settings:servo_overrides", payload: state.servoOverrides });
       break;
     case "set_joint_limits":
@@ -570,6 +573,7 @@ function appendRecorderSample() {
 
 async function bootstrap() {
   state.servoOverrides = await loadServoOverrides();
+  setServoCalOverrides(state.servoOverrides);
   state.jointLimits = await loadJointLimits();
   state.stances = await loadStances();
   state.rotateSettings = await loadRotateSettings();

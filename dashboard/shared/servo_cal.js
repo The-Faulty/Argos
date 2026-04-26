@@ -17,6 +17,12 @@ import {
   SERVO_CENTER_DEG,
 } from "./robot-config.js";
 
+// Base calibration — never mutated. User overrides from
+// ~/.argos/servo_overrides.json are layered in via setOverrides() below; the
+// merged table is what findCalByJoint/findCalByChannel actually return, so
+// every consumer (gait planner, mode controller, IK pipeline) sees the same
+// effective direction + offset without having to thread the table through
+// every call.
 export const SERVO_CAL_PER_JOINT = [
   { joint: "FR_coxa_joint",  channel:  0, direction:  1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
   { joint: "FR_femur_joint", channel:  1, direction:  1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
@@ -32,14 +38,34 @@ export const SERVO_CAL_PER_JOINT = [
   { joint: "RL_tibia_joint", channel: 11, direction:  1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
 ];
 
+// Merged base + overrides. Initially identical to SERVO_CAL_PER_JOINT until
+// setOverrides() is called at server boot.
+let _activeCal = SERVO_CAL_PER_JOINT;
+let _activeOverrides = {};
+
 /** Look up a calibration entry by joint name. */
 export function findCalByJoint(jointName) {
-  return SERVO_CAL_PER_JOINT.find((e) => e.joint === jointName) ?? null;
+  return _activeCal.find((e) => e.joint === jointName) ?? null;
 }
 
 /** Look up a calibration entry by PCA9685 channel (0..11). */
 export function findCalByChannel(channel) {
-  return SERVO_CAL_PER_JOINT.find((e) => e.channel === channel) ?? null;
+  return _activeCal.find((e) => e.channel === channel) ?? null;
+}
+
+/**
+ * Install user overrides into the active calibration table. Call once at
+ * startup after loading from disk, and again whenever the user edits values
+ * in the dashboard. All applyServoCal/clampServoDeg calls after this see the
+ * merged effective values.
+ */
+export function setOverrides(overrides) {
+  _activeOverrides = overrides && typeof overrides === "object" ? overrides : {};
+  _activeCal = applyOverrides(SERVO_CAL_PER_JOINT, _activeOverrides);
+}
+
+export function getActiveOverrides() {
+  return _activeOverrides;
 }
 
 const RAD2DEG = 180.0 / Math.PI;

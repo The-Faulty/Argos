@@ -13,7 +13,12 @@
       "Bash(python -m py_compile src/quadruped_bringup/launch/full_system.launch.py)",
       "Bash(python -m py_compile src/quadruped_bringup/launch/control_stack.launch.py)",
       "Bash(python -c ' *)",
-      "Bash(node --check dashboard/pi_server/serial_bridge.js)"
+      "Bash(node --check dashboard/pi_server/serial_bridge.js)",
+      "Bash(xargs grep *)",
+      "Bash(node --check dashboard/shared/servo_cal.js)",
+      "Bash(node --check dashboard/pi_server/server.js)",
+      "Bash(npm test *)",
+      "Bash(node --check dashboard/src/App.jsx)"
     ]
   }
 }
