@@ -80,9 +80,12 @@ export class GaitPlanner {
   }
 
   setTwist({ x = 0, y = 0, yaw = 0 } = {}) {
+    // Linear cap is set so that x_max * swing_time_max equals the sagittal IK
+    // reach at neutral z (~0.18 m). Bumping past 0.6 m/s only helps if you
+    // also extend swing_time_ms, otherwise per-step distance is swing-bound.
     this.twist = {
-      x: clampNum(x, -0.4, 0.4),
-      y: clampNum(y, -0.4, 0.4),
+      x: clampNum(x, -0.6, 0.6),
+      y: clampNum(y, -0.6, 0.6),
       yaw: clampNum(yaw, -this.config.rotate_rate_max, this.config.rotate_rate_max),
     };
   }

@@ -47,7 +47,13 @@ const DEFAULT_BAUD = Number(process.env.ARGOS_SERIAL_BAUD || 921600);
 // still see truncated frames in firmware error logs; tune down for snappier
 // teleop. 0 disables.
 const DEFAULT_PACING_MS = Number(process.env.ARGOS_SERIAL_PACING_MS ?? 5);
-const DEFAULT_ACK_TIMEOUT_MS = Number(process.env.ARGOS_SERIAL_ACK_TIMEOUT_MS ?? 40);
+// 0 disables the ack-wait. The firmware does NOT ack set_leg_servo_angles
+// (firmware/argos_servo/argos_servo.ino — robotLegCommandServo returns
+// silently). A non-zero timeout therefore stalls every write by the full
+// timeout, turning the 50 Hz tick into a slow-motion crawl: 4 legs × ~40 ms
+// per leg = ~160 ms before the next mode change can drain through. Leave it
+// off; only enable it if you wire an explicit ack into a specific command.
+const DEFAULT_ACK_TIMEOUT_MS = Number(process.env.ARGOS_SERIAL_ACK_TIMEOUT_MS ?? 0);
 
 export class SerialBridge extends EventEmitter {
   constructor({

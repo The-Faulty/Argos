@@ -28,12 +28,13 @@ test("Channels are 0..11 unique", () => {
   assert.deepEqual(channels, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
 });
 
-test("Rear coxa joints have direction=-1 (firmware polarity)", () => {
-  assert.equal(findCalByJoint("RR_coxa_joint").direction, -1);
-  assert.equal(findCalByJoint("RL_coxa_joint").direction, -1);
-  // Sanity: front coxa stays +1
-  assert.equal(findCalByJoint("FR_coxa_joint").direction, +1);
-  assert.equal(findCalByJoint("FL_coxa_joint").direction, +1);
+test("All joints use direction=+1 (firmware owns the right-side mirror)", () => {
+  // The Arduino sketch's LEG_CONFIGS already flips RIGHT_*_SIGN = -1 in
+  // applyServoCalibration. If the JS table also flips, the two cancel and the
+  // right legs come out un-mirrored. Keep this table as the identity layer.
+  for (const entry of SERVO_CAL_PER_JOINT) {
+    assert.equal(entry.direction, +1, `direction for ${entry.joint} must be +1`);
+  }
 });
 
 test("findCalByChannel round-trips through findCalByJoint", () => {

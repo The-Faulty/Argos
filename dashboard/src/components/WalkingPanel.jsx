@@ -22,7 +22,16 @@ export default function WalkingPanel({
   stepLength,
   mode,
 }) {
-  const twistCapable = mode === "trot" || mode === "crawl" || mode === "stand";
+  // Joystick is enabled in any auto/idle pose — App.jsx auto-switches to trot
+  // on first non-zero input. Direct modes (foot/joint/servo) keep it disabled
+  // because flipping out of them would clobber the operator's manual pose.
+  const twistCapable =
+    mode === "trot" ||
+    mode === "crawl" ||
+    mode === "stand" ||
+    mode === "crouch" ||
+    mode === "extend" ||
+    mode === "idle";
 
   const [stick, setStick] = useState({ dx: 0, dy: 0, active: false });
   const [step, setStep] = useState(stepLength ?? GAIT_TUNABLE_PARAMS.delta_x_mm.default);

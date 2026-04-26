@@ -1,14 +1,20 @@
-// Per-joint servo calibration table. Row-for-row mirror of
-// firmware/esp32c6/main/main.c::s_servo_cal AND
-// ros2_ws/argos_control/Config.py::SERVO_CAL_PER_JOINT. A unit test
-// (dashboard/tests/servo_cal.test.js) extracts the firmware + Python
-// tables at test time and asserts these three stay in lock-step.
+// Per-joint servo calibration table for the dashboard / Pi server.
+//
+// Direction is +1 across the board because the firmware
+// (firmware/argos_servo/argos_servo.ino LEG_CONFIGS / applyServoCalibration)
+// already applies the right-vs-left mirror in hardware: RIGHT_*_SIGN = -1
+// flips horn motion for FR/RR so positive joint angles drive both sides
+// forward in body frame. If we ALSO flip on the JS side the two cancel and
+// the right legs end up uninverted (the FR coxa "wrong direction / oscillation"
+// symptom). Keep this table as the override-friendly identity layer; the
+// firmware owns physical mirroring.
 //
 // Fields:
 //   joint       — JOINT_NAMES string, e.g. "FR_coxa_joint"
-//   channel     — PCA9685 output channel (0..11)
-//   direction   — +1 or -1; inverts joint-rad → servo-deg mapping
-//   offset_deg  — added after the sign flip, bench-calibrated
+//   channel     — PCA9685 output channel (0..11) — informational only;
+//                 the firmware's LEG_CONFIGS owns the actual channel map
+//   direction   — kept at +1; user override `invert: true` flips per joint
+//   offset_deg  — added after applyServoCal, bench-calibrated
 //   min_deg     — hardware-safe lower horn bound
 //   max_deg     — hardware-safe upper horn bound
 
@@ -24,18 +30,18 @@ import {
 // effective direction + offset without having to thread the table through
 // every call.
 export const SERVO_CAL_PER_JOINT = [
-  { joint: "FR_coxa_joint",  channel:  0, direction: -1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
-  { joint: "FR_femur_joint", channel:  1, direction: -1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
-  { joint: "FR_tibia_joint", channel:  2, direction: -1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
-  { joint: "FL_coxa_joint",  channel:  3, direction:  1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
-  { joint: "FL_femur_joint", channel:  4, direction:  1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
-  { joint: "FL_tibia_joint", channel:  5, direction:  1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
-  { joint: "RR_coxa_joint",  channel:  6, direction: -1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
-  { joint: "RR_femur_joint", channel:  7, direction: -1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
-  { joint: "RR_tibia_joint", channel:  8, direction: -1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
-  { joint: "RL_coxa_joint",  channel:  9, direction:  1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
-  { joint: "RL_femur_joint", channel: 10, direction:  1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
-  { joint: "RL_tibia_joint", channel: 11, direction:  1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
+  { joint: "FR_coxa_joint",  channel:  0, direction: 1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
+  { joint: "FR_femur_joint", channel:  1, direction: 1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
+  { joint: "FR_tibia_joint", channel:  2, direction: 1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
+  { joint: "FL_coxa_joint",  channel:  3, direction: 1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
+  { joint: "FL_femur_joint", channel:  4, direction: 1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
+  { joint: "FL_tibia_joint", channel:  5, direction: 1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
+  { joint: "RR_coxa_joint",  channel:  6, direction: 1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
+  { joint: "RR_femur_joint", channel:  7, direction: 1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
+  { joint: "RR_tibia_joint", channel:  8, direction: 1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
+  { joint: "RL_coxa_joint",  channel:  9, direction: 1, offset_deg: 0.0, min_deg:  45.0, max_deg: 135.0 },
+  { joint: "RL_femur_joint", channel: 10, direction: 1, offset_deg: 0.0, min_deg:  50.0, max_deg: 115.0 },
+  { joint: "RL_tibia_joint", channel: 11, direction: 1, offset_deg: 0.0, min_deg:   5.0, max_deg: 180.0 },
 ];
 
 // Merged base + overrides. Initially identical to SERVO_CAL_PER_JOINT until

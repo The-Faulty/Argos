@@ -224,7 +224,17 @@ function AppBody() {
           <WalkingPanel
             mode={mode}
             rotateIncrement={rotateSettings.rotate_increment_deg}
-            onTwist={(x, y, yaw) => cmd.sendTwist(x, y, yaw).catch(() => {})}
+            onTwist={(x, y, yaw) => {
+              // Same auto-switch pattern as the foot drag and joint sliders:
+              // if the operator grabs the joystick from idle/crouch/stand, the
+              // planner is silently dropping the twist (only crawl/trot consume
+              // it). Flip to trot on first non-zero input so walking "just
+              // works" without requiring the user to tap a chip first.
+              if (mode !== "trot" && mode !== "crawl" && (x !== 0 || y !== 0 || yaw !== 0)) {
+                cmd.setMode("trot").catch(() => {});
+              }
+              cmd.sendTwist(x, y, yaw).catch(() => {});
+            }}
             onZeroTwist={() => cmd.sendTwist(0, 0, 0).catch(() => {})}
             onRotate={(dir, deg) => cmd.rotate(dir, deg).catch(() => {})}
             onGaitParam={(name, value) => cmd.setGaitParam(name, value).catch(() => {})}

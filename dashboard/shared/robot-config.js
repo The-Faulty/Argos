@@ -240,7 +240,11 @@ export const GAIT_TUNABLE_PARAMS = {
     name: "delta_x_mm",
     label: "Front/back stance spread",
     min: 60,
-    max: 150,
+    // Upper bound is the flat-ground IK reach: L_UPPER+L_LOWER = 254 mm,
+    // foot height 189 mm gives sqrt(254^2-189^2) ≈ 170 mm sagittal reach.
+    // Stance feet sit at 100 mm + this offset; cap at 180 mm so the planner
+    // can still find an IK solution at neutral z.
+    max: 180,
     default: 100,
     units: "mm",
   },
@@ -256,7 +260,10 @@ export const GAIT_TUNABLE_PARAMS = {
     name: "swing_time_ms",
     label: "Swing time per foot",
     min: 40,
-    max: 200,
+    // 300 ms swing × 0.6 m/s twist = 0.18 m step per cycle, just under the
+    // sagittal IK limit at neutral z. Was 200; longer swings let the operator
+    // dial in a real walking stride from the joystick.
+    max: 300,
     default: 70,
     units: "ms",
   },
