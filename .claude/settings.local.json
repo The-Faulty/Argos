@@ -18,7 +18,8 @@
       "Bash(node --check dashboard/shared/servo_cal.js)",
       "Bash(node --check dashboard/pi_server/server.js)",
       "Bash(npm test *)",
-      "Bash(node --check dashboard/src/App.jsx)"
+      "Bash(node --check dashboard/src/App.jsx)",
+      "Bash(node --input-type=module -e ' *)"
     ]
   }
 }

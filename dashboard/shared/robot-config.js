@@ -127,6 +127,26 @@ export const DEFAULT_JOINT_LIMITS_RAD = {
   tibia: [-85.0 * DEG2RAD,  90.0 * DEG2RAD],
 };
 
+// ─── Per-leg foot reach window (meters, body frame x) ─────────────────────
+// Empirical IK-success window for foot.x at default stance y (±0.1106 m) and
+// default body height z (-0.189 m). The femur joint limits ([-40°, +25°])
+// are the binding constraint, not the linkage geometry, so each window is
+// only ~75 mm wide. Bounds are pulled in 2 mm from the measured edge of
+// feasibility (probed at 0.5 mm resolution against fourLegsInverseKinematics)
+// so the IK doesn't sit on the cusp where a sub-millimeter IMU-tilt or
+// rounding nudge flips reachable→unreachable.
+//
+// The gait planner and setFootTargets both clamp foot targets against this
+// before solving IK so out-of-reach inputs (max twist, joystick edges,
+// foot-drag past the reachable zone) snap to the boundary instead of
+// stalling on a per-tick IK failure.
+export const DEFAULT_FOOT_REACH_X = {
+  FR: [ 0.077,  0.147],
+  FL: [ 0.077,  0.147],
+  RR: [-0.147, -0.077],
+  RL: [-0.147, -0.077],
+};
+
 // ─── Servo channel map (mirrors firmware s_servo_cal) ────────────────────
 // 12 entries, channels 0..11, FR/FL/RR/RL × coxa/femur/tibia.
 export const DEFAULT_SERVO_CHANNEL_MAP = {
@@ -240,12 +260,14 @@ export const GAIT_TUNABLE_PARAMS = {
     name: "delta_x_mm",
     label: "Front/back stance spread",
     min: 60,
-    // IK-feasible upper bound at default_z_ref = -189 mm: sagittal reach
-    // sqrt(254^2 - 189^2) ≈ 170 mm, minus ~15 mm consumed by the abductor
-    // for the lateral hip→foot offset → ~155 mm front-of-hip reach. Cap at
-    // 250 mm of commanded delta_x; the IK clamps as a safety net beyond
-    // ~220 mm rather than the planner refusing to solve.
-    max: 250,
+    // IK-reachable upper bound at default_z_ref = -189 mm. The femur joint
+    // limit ([-40°, +25°]) makes the per-leg foot.x window only ~75 mm wide
+    // (see DEFAULT_FOOT_REACH_X). Front feet are at delta_x; rear feet at
+    // -delta_x + rear_shift (-0.04 m), so the rear bound is the binding
+    // constraint: -delta_x - 0.04 ≥ -0.145 → delta_x ≤ 0.105. Cap matches
+    // that so both front and rear stance feet stay inside their reach
+    // windows at slider max.
+    max: 105,
     default: 100,
     units: "mm",
   },

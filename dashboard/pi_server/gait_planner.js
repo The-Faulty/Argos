@@ -22,6 +22,7 @@ import {
   DEFAULT_STANCE,
   DEFAULT_Z_REF,
   DEFAULT_JOINT_LIMITS_RAD,
+  DEFAULT_FOOT_REACH_X,
   STABILIZER_PARAM_BOUNDS,
   GAIT_TUNABLE_PARAMS,
 } from "../shared/robot-config.js";
@@ -30,6 +31,29 @@ import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 
 const TICK_HZ = 50.0;
 const TICK_DT = 1.0 / TICK_HZ;
+
+const DEG2RAD = Math.PI / 180.0;
+
+// Stand / extend pose joints. We bypass IK for these because the abductor's
+// natural lateral offset means foot.y = hip.y can't be reached with coxa = 0,
+// and the femur joint limits ([-40°, +25°]) make the IK reach window only
+// ~75 mm wide at the historical body height. Emitting joints directly puts
+// coxa at exactly 0 (servo 90°) and lets us pick body height by choosing
+// femur/tibia, with no risk of the planner silently holding stale output
+// because IK refused a borderline target.
+const STAND_JOINTS_RAD  = [0, -28.84 * DEG2RAD,  15.80 * DEG2RAD];
+const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
+
+// Stride amplitude clamp (meters, peak displacement either side of base).
+// At default body height z = -0.189 m the per-leg reach window is ~75 mm in
+// x and only ~20 mm in y (probed empirically; the femur joint limit is the
+// binding constraint). Allowing more than these caps means every cycle the
+// foot.x clamp catches a near-edge target — tolerable for x-direction
+// motion, but a y stride that big would push every tick into clamp/refusal,
+// so y is held tight. The per-axis foot clamp in `clampFootInReach` is the
+// final safety net beyond either bound.
+const MAX_STRIDE_X = 0.025;
+const MAX_STRIDE_Y = 0.005;
 
 // Default contact phase patterns (4 columns = phases, rows = legs FR/FL/RR/RL).
 // 1 = stance (foot down), 0 = swing (foot in air).
@@ -119,26 +143,22 @@ export class GaitPlanner {
   }
 
   _stancePose(mode) {
-    // stand: feet land directly below each hip (y_foot = y_hip = LEG_ORIGINS[1][i])
-    // so the abductor IK returns coxa = 0 and all four coxa servos hold center.
-    // extend keeps the wider delta_y so the body sits lower / wider on its feet.
-    const feet = mode === "stand"
-      ? this._standFeet()
-      : makeStanceFeet(this.config, -0.02);
-    this._applyImuTilt(feet);
-    return this._solveAndCache(feet);
-  }
-
-  _standFeet() {
-    const z = this.config.default_z_ref;
-    const deltaX = this.config.delta_x;
-    const frontShift = DEFAULT_STANCE.FR[0] - GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
-    const rearShift  = DEFAULT_STANCE.RR[0] + GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
-    return LEG_IDS.map((id, i) => {
-      const isFront = id === "FR" || id === "FL";
-      const x = isFront ? deltaX + frontShift : -deltaX + rearShift;
-      return [x, LEG_ORIGINS[1][i], z];
-    });
+    // Direct joint emission for both stand and extend — see STAND/EXTEND
+    // _JOINTS_RAD for why this bypasses IK. The "feet" returned here are
+    // the planner's last cached positions (used by the dashboard preview
+    // and the fall-back to stance on mode switch); they don't drive the
+    // servo command.
+    const triple = mode === "stand" ? STAND_JOINTS_RAD : EXTEND_JOINTS_RAD;
+    const jointAnglesRad = new Array(JOINT_NAMES.length);
+    for (let i = 0; i < 4; i++) {
+      jointAnglesRad[i * 3 + 0] = triple[0];
+      jointAnglesRad[i * 3 + 1] = triple[1];
+      jointAnglesRad[i * 3 + 2] = triple[2];
+    }
+    const servoAnglesDeg = jointAnglesRadToServoDeg(jointAnglesRad);
+    this.lastJointAnglesRad = jointAnglesRad;
+    this.lastServoAnglesDeg = servoAnglesDeg;
+    return { servoAnglesDeg, jointAnglesRad, feet: makeStanceFeet(this.config) };
   }
 
   _gaitPose(mode) {
@@ -147,15 +167,17 @@ export class GaitPlanner {
     const cycleMs = phaseDur.stance_ms * 3 + phaseDur.swing_ms;
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
 
-    // Stride is the body-frame foot displacement over ONE full cycle, so the
-    // per-step distance scales with both joystick magnitude and swing-time
-    // (which scales the whole cycle). Using the full cycle period — instead
-    // of just swing time — is what gives the operator a visible stride that
-    // tracks the slider in Settings.
-    const stride = this._strideForCycle(cycleMs / 1000);
-    const baseFeet = makeStanceFeet(this.config);
     const phaseDurMs = cycleMs / 4;
     const stanceMs = cycleMs - phaseDurMs; // 3 of 4 phases under both contact patterns
+    // Stride amplitude during stance is body_velocity × stance_time (foot
+    // must travel that far backward in body frame to keep ground contact
+    // while the body advances). Using cycle time instead overshoots by the
+    // duty-cycle ratio — at max twist + max swing it produced 0.45 m
+    // strides, far outside the ~75 mm IK reach window. _strideForPeriod
+    // also clamps each axis so unreachable joystick inputs degrade
+    // gracefully instead of stalling the planner on every tick.
+    const stride = this._strideForPeriod(stanceMs / 1000);
+    const baseFeet = makeStanceFeet(this.config);
 
     const feet = baseFeet.map((foot, legIdx) => {
       // Each leg has exactly one swing phase per cycle in CONTACT_PHASES.
@@ -191,21 +213,33 @@ export class GaitPlanner {
       ];
     });
     this._applyImuTilt(feet);
-    return this._solveAndCache(feet);
+    // The base rear stance foot sits at body x = -0.140 — only 5 mm inside
+    // the rear leg's reach lower bound (-0.145). Even modest backward stride
+    // (forward joystick) would otherwise push the rear feet just outside
+    // their reach window every tick. Snap each foot's x into its per-leg
+    // window so swing/stance trajectories degrade to held-at-boundary motion
+    // instead of an IK refusal that holds the whole-body last-good pose.
+    const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i]));
+    return this._solveAndCache(clamped);
   }
 
-  // Per-leg body-frame displacement over one full gait cycle. Yaw contribution
-  // is the cross product of yaw-rate with the leg's hip position, so legs on
-  // opposite sides of the body sweep in opposite directions on a turn.
-  _strideForCycle(cycleSeconds) {
+  // Per-leg peak-to-peak foot displacement over one stance window (in body
+  // frame). Yaw contribution is the cross product of yaw-rate with the leg's
+  // hip position, so legs on opposite sides of the body sweep in opposite
+  // directions on a turn. Each axis is clamped to MAX_STRIDE_* so the
+  // resulting foot.x stays inside the leg's IK reach window even at max
+  // joystick + max swing time.
+  _strideForPeriod(periodSeconds) {
     const { x, y, yaw } = this.twist;
     const offsets = [];
     for (let i = 0; i < 4; i++) {
       const yawDx = -yaw * LEG_ORIGINS[1][i];
       const yawDy =  yaw * LEG_ORIGINS[0][i];
+      const sx = (x + yawDx) * periodSeconds;
+      const sy = (y + yawDy) * periodSeconds;
       offsets.push([
-        (x + yawDx) * cycleSeconds,
-        (y + yawDy) * cycleSeconds,
+        clampNum(sx, -2 * MAX_STRIDE_X, 2 * MAX_STRIDE_X),
+        clampNum(sy, -2 * MAX_STRIDE_Y, 2 * MAX_STRIDE_Y),
         0,
       ]);
     }
@@ -268,12 +302,26 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    z_clearance: 0.04,
+    // Swing-foot vertical lift. Probed against fourLegsInverseKinematics:
+    // with the femur joint limited to [-40°, +25°], the reachable z window
+    // at base stance is only ±2.5 mm around -0.189 m. A 4 cm lift (the
+    // legacy default) sent ~half of every gait tick outside the workspace,
+    // which is why "joystick does nothing" was the dominant complaint.
+    // Keep the lift well inside that window so swing trajectories stay
+    // IK-feasible across the whole cycle; the foot still clears the ground
+    // enough on a smooth surface to avoid scuffing.
+    z_clearance: 0.002,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
     imu_filter_alpha: STABILIZER_PARAM_BOUNDS.imu_filter_alpha.default,
-    use_imu_stabilization: true,
+    // Off by default for the same reason z_clearance is small: even a 3°
+    // body tilt yields ~3 mm vertical foot displacement at the lateral
+    // hip-to-foot offset, which is enough to exit the z reach window every
+    // tick. Re-enable from the Settings drawer once the joint envelope is
+    // widened (e.g. recalibrated SERVO_LIMITS_DEG) or the gains are tuned
+    // small enough that corrections stay under ~1 mm of foot displacement.
+    use_imu_stabilization: false,
   };
 }
 
@@ -335,6 +383,17 @@ function jointAnglesRadToServoDeg(jointAnglesRad) {
 
 function clampNum(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+// Clamp a foot target's x into its leg's IK reach window. Y and Z pass
+// through unchanged — only the body-x dimension is the consistent failure
+// mode at default stance height. Used by both the gait trajectory and the
+// dashboard's direct foot-drag handler so out-of-reach inputs become
+// "snap to boundary" instead of "silent IK refusal".
+export function clampFootInReach(foot, legId) {
+  const range = DEFAULT_FOOT_REACH_X[legId];
+  if (!range) return foot;
+  return [clampNum(foot[0], range[0], range[1]), foot[1], foot[2]];
 }
 
 export const _internals = {

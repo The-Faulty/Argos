@@ -16,7 +16,7 @@ import {
 } from "../shared/robot-config.js";
 import { fourLegsInverseKinematics } from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
-import { GaitPlanner, _internals as gaitInternals } from "./gait_planner.js";
+import { GaitPlanner, clampFootInReach, _internals as gaitInternals } from "./gait_planner.js";
 
 const TICK_MS = 1000 / gaitInternals.TICK_HZ;
 
@@ -113,7 +113,13 @@ export class ModeController extends EventEmitter {
   // dashboard `foot_targets` command. targets = 4×3 matrix in body frame, m.
   async setFootTargets(targets) {
     if (this.mode !== "direct_foot_xyz") await this.setMode("direct_foot_xyz");
-    const ik = fourLegsInverseKinematics(targets, { limits: DEFAULT_JOINT_LIMITS_RAD });
+    // LegDetail's foot drag emits raw cursor-derived targets, which can
+    // easily land outside the per-leg IK reach window. Without clamping,
+    // IK refuses and the drag has no visible effect (the user's complaint).
+    // Clamp x into the per-leg window so the leg tracks the cursor along
+    // the boundary instead of refusing the whole frame.
+    const clamped = targets.map((t, i) => clampFootInReach(t, LEG_IDS[i]));
+    const ik = fourLegsInverseKinematics(clamped, { limits: DEFAULT_JOINT_LIMITS_RAD });
     if (!ik.ok) {
       this.emit("error", `IK failed for ${ik.leg}: ${ik.reason}`);
       return;
