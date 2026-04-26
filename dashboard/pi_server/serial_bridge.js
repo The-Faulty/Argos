@@ -38,12 +38,21 @@ const FW_TO_DASH_JOINT = Object.fromEntries(
 
 const DEFAULT_PORT = process.env.ARGOS_SERIAL_PORT || "/dev/ttyUSB0";
 const DEFAULT_BAUD = Number(process.env.ARGOS_SERIAL_BAUD || 921600);
+// Extra spacing after each port.drain() before the next write. The ESP32's
+// hardware UART RX FIFO is only 32 bytes (~0.35 ms at 921600 baud), so any
+// brief interrupt-masked region in firmware (I2C transactions, etc.) can
+// drop bytes at message boundaries. drain() alone leaves frames spaced
+// ~1–2 ms; a few ms of additional pacing closes the gap. Tune up if you
+// still see truncated frames in firmware error logs; tune down for snappier
+// teleop. 0 disables.
+const DEFAULT_PACING_MS = Number(process.env.ARGOS_SERIAL_PACING_MS ?? 3);
 
 export class SerialBridge extends EventEmitter {
-  constructor({ path = DEFAULT_PORT, baudRate = DEFAULT_BAUD } = {}) {
+  constructor({ path = DEFAULT_PORT, baudRate = DEFAULT_BAUD, pacingMs = DEFAULT_PACING_MS } = {}) {
     super();
     this.path = path;
     this.baudRate = baudRate;
+    this.pacingMs = Math.max(0, Number.isFinite(pacingMs) ? pacingMs : 0);
     this.port = null;
     this.parser = null;
     this.seq = 0;
@@ -291,6 +300,7 @@ export class SerialBridge extends EventEmitter {
         if (!this.port || !this.port.isOpen) return;
         if (this._pendingOther.length) {
           await this._writeOne(this._pendingOther.shift());
+          if (this.pacingMs > 0) await sleep(this.pacingMs);
           continue;
         }
         const next = this._pendingServoByLeg.entries().next().value;
@@ -301,6 +311,7 @@ export class SerialBridge extends EventEmitter {
         if (last && servoAnglesEqual(last, angles)) continue;
         this._lastSentServoByLeg.set(legId, angles);
         await this._writeOne({ type: "set_leg_servo_angles", legId, ...angles });
+        if (this.pacingMs > 0) await sleep(this.pacingMs);
       }
     } finally {
       this._pumping = false;
@@ -337,6 +348,10 @@ export class SerialBridge extends EventEmitter {
       });
     });
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function servoAnglesEqual(a, b) {
