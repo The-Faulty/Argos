@@ -240,11 +240,12 @@ export const GAIT_TUNABLE_PARAMS = {
     name: "delta_x_mm",
     label: "Front/back stance spread",
     min: 60,
-    // Upper bound is the flat-ground IK reach: L_UPPER+L_LOWER = 254 mm,
-    // foot height 189 mm gives sqrt(254^2-189^2) ≈ 170 mm sagittal reach.
-    // Stance feet sit at 100 mm + this offset; cap at 180 mm so the planner
-    // can still find an IK solution at neutral z.
-    max: 180,
+    // IK-feasible upper bound at default_z_ref = -189 mm: sagittal reach
+    // sqrt(254^2 - 189^2) ≈ 170 mm, minus ~15 mm consumed by the abductor
+    // for the lateral hip→foot offset → ~155 mm front-of-hip reach. Cap at
+    // 250 mm of commanded delta_x; the IK clamps as a safety net beyond
+    // ~220 mm rather than the planner refusing to solve.
+    max: 250,
     default: 100,
     units: "mm",
   },

@@ -79,7 +79,7 @@ export default function WalkingPanel({
 
       <div className="walking-panel__row">
         <label className="slider">
-          <span>Step length ({GAIT_TUNABLE_PARAMS.delta_x_mm.units})</span>
+          <span>Stance spread, front/back ({GAIT_TUNABLE_PARAMS.delta_x_mm.units})</span>
           <input
             type="range"
             min={GAIT_TUNABLE_PARAMS.delta_x_mm.min}

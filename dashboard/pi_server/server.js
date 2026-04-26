@@ -201,6 +201,10 @@ app.get("/api/health", (_req, res) => {
 // MJPEG proxy: <img src="/api/camera/stream" />
 app.get("/api/camera/stream", (req, res) => sensors.proxyCameraStream(req, res));
 
+// Sidecar /health passthrough so the operator can diagnose silent sensors
+// (e.g. thermal panel showing "no data") without SSHing into the Pi.
+app.get("/api/sensors/health", (req, res) => sensors.proxyHealth(req, res));
+
 // ─── Settings: servo overrides ───────────────────────────────────────────
 app.get("/api/settings/servo_overrides", (_req, res) => res.json(state.servoOverrides));
 app.post("/api/settings/servo_overrides", async (req, res) => {

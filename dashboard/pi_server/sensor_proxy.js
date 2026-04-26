@@ -93,6 +93,34 @@ export class SensorProxy extends EventEmitter {
     }
   }
 
+  // Pipes the sidecar's /health endpoint through so the operator can see
+  // per-worker status (thermal_running, realsense_running, errors) without
+  // SSHing into the Pi. Used to diagnose why the thermal panel is silent.
+  proxyHealth(req, res) {
+    const upstream = http.request(
+      {
+        host: this.host,
+        port: this.port,
+        path: "/health",
+        method: "GET",
+      },
+      (upstreamRes) => {
+        res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+        upstreamRes.pipe(res);
+      },
+    );
+    upstream.on("error", (err) => {
+      if (!res.headersSent) {
+        res.writeHead(502, { "content-type": "application/json" });
+        res.end(JSON.stringify({ ok: false, error: String(err.message || err) }));
+      } else {
+        res.end();
+      }
+    });
+    req.on("close", () => upstream.destroy());
+    upstream.end();
+  }
+
   // Express handler for the camera proxy. Pipes the sidecar's multipart MJPEG
   // straight through to the browser. Fails open with 502 if the sidecar is
   // unreachable so the dashboard can show a placeholder instead of hanging.

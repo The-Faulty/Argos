@@ -18,7 +18,6 @@
 import {
   LEG_IDS,
   JOINT_NAMES,
-  JOINT_ROWS,
   LEG_ORIGINS,
   DEFAULT_STANCE,
   DEFAULT_Z_REF,
@@ -120,9 +119,26 @@ export class GaitPlanner {
   }
 
   _stancePose(mode) {
-    const feet = makeStanceFeet(this.config, mode === "extend" ? -0.02 : 0);
+    // stand: feet land directly below each hip (y_foot = y_hip = LEG_ORIGINS[1][i])
+    // so the abductor IK returns coxa = 0 and all four coxa servos hold center.
+    // extend keeps the wider delta_y so the body sits lower / wider on its feet.
+    const feet = mode === "stand"
+      ? this._standFeet()
+      : makeStanceFeet(this.config, -0.02);
     this._applyImuTilt(feet);
     return this._solveAndCache(feet);
+  }
+
+  _standFeet() {
+    const z = this.config.default_z_ref;
+    const deltaX = this.config.delta_x;
+    const frontShift = DEFAULT_STANCE.FR[0] - GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
+    const rearShift  = DEFAULT_STANCE.RR[0] + GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
+    return LEG_IDS.map((id, i) => {
+      const isFront = id === "FR" || id === "FL";
+      const x = isFront ? deltaX + frontShift : -deltaX + rearShift;
+      return [x, LEG_ORIGINS[1][i], z];
+    });
   }
 
   _gaitPose(mode) {
@@ -131,51 +147,65 @@ export class GaitPlanner {
     const cycleMs = phaseDur.stance_ms * 3 + phaseDur.swing_ms;
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
 
-    // Determine which phase column we're in (each leg has 4 phases per cycle).
-    // For simplicity we treat the cycle as 4 equal-duration slots; advanced
-    // phase scheduling lives on the TODO list.
-    const phaseDurMs = cycleMs / 4;
-    const phaseIdx = Math.min(3, Math.floor(this.gaitTickMs / phaseDurMs));
-    const phaseProgress = (this.gaitTickMs - phaseIdx * phaseDurMs) / phaseDurMs;
-
+    // Stride is the body-frame foot displacement over ONE full cycle, so the
+    // per-step distance scales with both joystick magnitude and swing-time
+    // (which scales the whole cycle). Using the full cycle period — instead
+    // of just swing time — is what gives the operator a visible stride that
+    // tracks the slider in Settings.
+    const stride = this._strideForCycle(cycleMs / 1000);
     const baseFeet = makeStanceFeet(this.config);
-    const stride = this._strideOffsets();
+    const phaseDurMs = cycleMs / 4;
+    const stanceMs = cycleMs - phaseDurMs; // 3 of 4 phases under both contact patterns
+
     const feet = baseFeet.map((foot, legIdx) => {
-      const isStance = phases[legIdx][phaseIdx] === 1;
-      if (isStance) {
-        // Stance: shift back along motion direction.
+      // Each leg has exactly one swing phase per cycle in CONTACT_PHASES.
+      const swingPhase = phases[legIdx].indexOf(0);
+      const swingStartMs = swingPhase * phaseDurMs;
+      const swingEndMs   = swingStartMs + phaseDurMs;
+      const t = this.gaitTickMs;
+      const inSwing = t >= swingStartMs && t < swingEndMs;
+
+      if (inSwing) {
+        // Swing: -stride/2 → +stride/2 with sin-arc lift (peak at u=0.5).
+        const u = (t - swingStartMs) / phaseDurMs;
+        const lift = this.config.z_clearance * Math.sin(Math.PI * u);
         return [
-          foot[0] - stride[legIdx][0] * phaseProgress,
-          foot[1] - stride[legIdx][1] * phaseProgress,
-          foot[2],
+          foot[0] + stride[legIdx][0] * (u - 0.5),
+          foot[1] + stride[legIdx][1] * (u - 0.5),
+          foot[2] + lift,
         ];
       }
-      // Swing: parabolic arc from -stride/2 to +stride/2 with z_clearance lift.
-      const t = phaseProgress;
-      const lift = this.config.z_clearance * 4 * t * (1 - t);
+
+      // Stance: continuous slide from +stride/2 (just touched down) to
+      // -stride/2 (about to lift) over the FULL stance duration. Compute
+      // elapsed-since-swing-end with a wrap so the slide doesn't reset at
+      // the cycle boundary.
+      const elapsed = (t >= swingEndMs)
+        ? t - swingEndMs
+        : t + (cycleMs - swingEndMs);
+      const u = elapsed / stanceMs;
       return [
-        foot[0] + stride[legIdx][0] * (t - 0.5),
-        foot[1] + stride[legIdx][1] * (t - 0.5),
-        foot[2] + lift,
+        foot[0] + stride[legIdx][0] * (0.5 - u),
+        foot[1] + stride[legIdx][1] * (0.5 - u),
+        foot[2],
       ];
     });
     this._applyImuTilt(feet);
     return this._solveAndCache(feet);
   }
 
-  // Per-leg foot displacement contributing to one full gait cycle.
-  _strideOffsets() {
+  // Per-leg body-frame displacement over one full gait cycle. Yaw contribution
+  // is the cross product of yaw-rate with the leg's hip position, so legs on
+  // opposite sides of the body sweep in opposite directions on a turn.
+  _strideForCycle(cycleSeconds) {
     const { x, y, yaw } = this.twist;
-    const swingSeconds = gaitPhaseTimes(this.config, this.mode).swing_ms / 1000;
     const offsets = [];
     for (let i = 0; i < 4; i++) {
-      const origin = [LEG_ORIGINS[0][i], LEG_ORIGINS[1][i], 0];
-      // Yaw contribution: foot moves perpendicular to its hip vector
-      const yawDx = -yaw * origin[1];
-      const yawDy = yaw * origin[0];
+      const yawDx = -yaw * LEG_ORIGINS[1][i];
+      const yawDy =  yaw * LEG_ORIGINS[0][i];
       offsets.push([
-        (x + yawDx) * swingSeconds,
-        (y + yawDy) * swingSeconds,
+        (x + yawDx) * cycleSeconds,
+        (y + yawDy) * cycleSeconds,
         0,
       ]);
     }
