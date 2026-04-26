@@ -8,7 +8,7 @@
 //   5. Stabilizer params (roll gain, pitch gain, max correction, filter alpha, on/off) → /api/params/stabilizer
 //   6. Body-height slider → /api/params/gait/default_z_ref_mm
 //
-// All edits debounce before POSTing so a slider drag doesn't spam rosbridge.
+// All edits debounce before POSTing so a slider drag doesn't spam the Pi server.
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {

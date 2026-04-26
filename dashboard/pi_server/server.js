@@ -2,24 +2,14 @@
 //
 // One process per Pi. Responsibilities:
 //   - Serve the built React bundle (`dashboard/dist/`) over HTTP :8787.
-//   - Maintain exactly ONE rosbridge client per Pi (ws://localhost:9090).
-//     Browsers talk to THIS server, not rosbridge directly — this halves
-//     telemetry message load and gives us a single place to enforce schema.
-//   - Fan telemetry (joint_states, imu, gas, gait_mode, control_mode,
-//     connection status) out to every connected browser over WS `/telemetry`.
-//   - Accept HTTP JSON command bodies under `/api/*`, validate them via the
-//     shared protocol schema, and publish to rosbridge.
-//   - Own the `/cmd_vel` 30 Hz republish loop when Twist is streaming.
-//     `command_mux` has a 250 ms freshness timeout; silence = auto-idle.
-//   - Handle Disconnect = publish `/release_servos=true` + `/estop=true`
-//     atomically.
-//   - Handle "rotate by N degrees": publish angular.z=±rotate_rate for
-//     `degrees * calibration_factor / rotate_rate` seconds, then zero.
-//   - Persist user settings under `~/.argos/` and broadcast them whenever a
-//     new client connects (dashboard UI needs initial state).
-//
-// This file is intentionally the top-of-stack. Lower-level detail lives in
-// the sibling modules: `persistence.js`, `ros_topics.js`, `recording.js`.
+//   - Talk to the ESP32 over serial (firmware/argos_servo) via SerialBridge.
+//   - Run the gait planner + mode state machine via ModeController.
+//   - Forward IMU + thermal + MJPEG from the Python sensor sidecar via
+//     SensorProxy.
+//   - Fan telemetry out to every connected browser over WS `/telemetry`.
+//   - Accept HTTP JSON command bodies under `/api/*`, validate via the shared
+//     protocol schema, route to the right module.
+//   - Persist user settings under `~/.argos/` and replay them on connect.
 
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -52,16 +42,15 @@ import {
   saveServoUpdateRate,
 } from "./persistence.js";
 import { TelemetryRecorder, listRecordings } from "./recording.js";
-import { RosBridgeClient } from "./ros_topics.js";
+import { SerialBridge } from "./serial_bridge.js";
+import { ModeController } from "./mode_controller.js";
+import { SensorProxy } from "./sensor_proxy.js";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const HTTP_PORT = Number(process.env.ARGOS_DASHBOARD_PORT ?? 8787);
-const ROSBRIDGE_URL = process.env.ARGOS_ROSBRIDGE_URL ?? "ws://localhost:9090";
 const STATIC_DIR = path.resolve(__dirname, "..", "dist");
-const TWIST_REPUBLISH_HZ = 30;
-const GAIT_PLANNER_NODE = "/gait_planner_node";
 
 // ─── State ────────────────────────────────────────────────────────────────
 
@@ -69,99 +58,138 @@ const state = {
   rotateSettings: { ...DEFAULT_ROTATE_SETTINGS },
   servoOverrides: {},
   jointLimits: {},
-  servoSpeed: {},           // per-joint-row deg/s (coxa/femur/tibia)
-  servoUpdateRate: { hz: 0 }, // PWM/command update rate; filled in bootstrap
+  servoSpeed: {},
+  servoUpdateRate: { hz: 50 },
   stances: {},
   mode: "idle",
-  // Latest cached telemetry — what we fan out to new WS clients.
   telemetry: {
-    connected: { ros: false, lastEvent: null },
+    connected: { serial: false, sensors: false, lastEvent: null },
     joint_states: null,
     imu: null,
     gas: null,
     gait_mode: null,
     control_mode: null,
   },
-  // Twist streaming state.
+  // Sticky twist state — last twist held for 500 ms so a dropped frame doesn't
+  // freeze the gait. Replaced any time a fresh twist arrives.
   twist: { active: false, x: 0, y: 0, wz: 0, expiresAt: 0 },
-  // Rotate-by-degrees state (only one at a time).
   rotate: { active: false, endAt: 0, direction: null },
 };
 
 const recorder = new TelemetryRecorder();
 
-// ─── ROS client ───────────────────────────────────────────────────────────
+// ─── Hardware modules ─────────────────────────────────────────────────────
 
-const ros = new RosBridgeClient({ url: ROSBRIDGE_URL });
+const serial = new SerialBridge();
+const mode = new ModeController({
+  serial,
+  getStances: async () => state.stances,
+});
+const sensors = new SensorProxy();
 
-ros.onStatus((status) => {
-  state.telemetry.connected = {
-    ros: ros.connected,
-    lastEvent: status,
-  };
+serial.on("open", () => {
+  state.telemetry.connected = { ...state.telemetry.connected, serial: true, lastEvent: { event: "serial-open" } };
   broadcast({ type: "connected", connected: state.telemetry.connected });
 });
-
-ros.subscribeJointStates((msg) => {
-  state.telemetry.joint_states = msg;
-  broadcast({ type: "joint_states", msg });
-  appendRecorderSample();
+serial.on("close", () => {
+  state.telemetry.connected = { ...state.telemetry.connected, serial: false, lastEvent: { event: "serial-close" } };
+  broadcast({ type: "connected", connected: state.telemetry.connected });
+});
+serial.on("error", (err) => {
+  console.warn("[serial]", err.message || err);
 });
 
-ros.subscribeImu((msg) => {
-  const [roll, pitch, yaw] = euler_from_quaternion(msg.orientation);
-  const enriched = {
-    ...msg,
-    _euler_rad: { roll, pitch, yaw },
+// Joint states from the firmware (actual hardware positions in servo-deg).
+serial.on("joint_states", (msg) => {
+  // Merge with planner-emitted positions so the dashboard sees both the
+  // commanded radians and the latest actual servo degrees.
+  const last = state.telemetry.joint_states || {};
+  state.telemetry.joint_states = {
+    ...last,
+    name: msg.name,
+    position_servo_deg: msg.position_servo_deg,
   };
-  state.telemetry.imu = enriched;
-  broadcast({ type: "imu", msg: enriched });
-  appendRecorderSample();
+  broadcast({ type: "joint_states", msg: state.telemetry.joint_states });
 });
 
-ros.subscribeGas((msg) => {
+serial.on("gas", (msg) => {
   state.telemetry.gas = msg;
   broadcast({ type: "gas", msg });
   appendRecorderSample();
 });
 
-ros.subscribeGaitMode((msg) => {
-  state.telemetry.gait_mode = msg;
-  broadcast({ type: "gait_mode", msg });
+// Joint states the planner just commanded (radians, the canonical reading).
+mode.on("joint_states", (msg) => {
+  state.telemetry.joint_states = {
+    name: msg.name,
+    position: msg.position,
+    position_servo_deg: msg.position_servo_deg,
+  };
+  broadcast({ type: "joint_states", msg: state.telemetry.joint_states });
+  appendRecorderSample();
+});
+mode.on("mode", (m) => {
+  state.mode = m;
+  state.telemetry.gait_mode = { data: m };
+  state.telemetry.control_mode = { data: m.startsWith("direct_") ? "manual" : "auto" };
+  broadcast({ type: "mode", mode: m });
+  broadcast({ type: "gait_mode", msg: state.telemetry.gait_mode });
+  broadcast({ type: "control_mode", msg: state.telemetry.control_mode });
+});
+mode.on("error", (errMsg) => {
+  broadcast({ type: "error", error: String(errMsg) });
 });
 
-ros.subscribeControlMode((msg) => {
-  state.telemetry.control_mode = msg;
-  broadcast({ type: "control_mode", msg });
+sensors.on("open", () => {
+  state.telemetry.connected = { ...state.telemetry.connected, sensors: true };
+  broadcast({ type: "connected", connected: state.telemetry.connected });
+});
+sensors.on("close", () => {
+  state.telemetry.connected = { ...state.telemetry.connected, sensors: false };
+  broadcast({ type: "connected", connected: state.telemetry.connected });
+});
+sensors.on("imu", (msg) => {
+  // Expected shape from sidecar: {type:"imu", quaternion:[x,y,z,w], accel, gyro, ts}.
+  let enriched = msg;
+  if (Array.isArray(msg.quaternion) && msg.quaternion.length === 4) {
+    const [x, y, z, w] = msg.quaternion;
+    const [roll, pitch, yaw] = euler_from_quaternion({ x, y, z, w });
+    enriched = { ...msg, orientation: { x, y, z, w }, _euler_rad: { roll, pitch, yaw } };
+    mode.setImu({ roll, pitch, yaw });
+  }
+  state.telemetry.imu = enriched;
+  broadcast({ type: "imu", msg: enriched });
+  appendRecorderSample();
+});
+sensors.on("thermal", (msg) => {
+  broadcast({ type: "thermal", msg });
 });
 
 // ─── HTTP app ─────────────────────────────────────────────────────────────
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
-
-// Static bundle (built by `npm run build` at the dashboard root).
 app.use(express.static(STATIC_DIR));
 
-// Basic health/info endpoint — handy for the "connection pill" in the UI.
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
-    ros_connected: ros.connected,
+    serial_connected: serial.connected,
+    sensors_connected: sensors.connected,
     mode: state.mode,
     rotate_settings: state.rotateSettings,
     recording: recorder.status(),
   });
 });
 
+// MJPEG proxy: <img src="/api/camera/stream" />
+app.get("/api/camera/stream", (req, res) => sensors.proxyCameraStream(req, res));
+
 // ─── Settings: servo overrides ───────────────────────────────────────────
-app.get("/api/settings/servo_overrides", (_req, res) => {
-  res.json(state.servoOverrides);
-});
+app.get("/api/settings/servo_overrides", (_req, res) => res.json(state.servoOverrides));
 app.post("/api/settings/servo_overrides", async (req, res) => {
   try {
     state.servoOverrides = await saveServoOverrides(req.body);
-    ros.publishServoOverrides(state.servoOverrides);
     broadcast({ type: "settings:servo_overrides", payload: state.servoOverrides });
     res.json(state.servoOverrides);
   } catch (err) {
@@ -170,13 +198,11 @@ app.post("/api/settings/servo_overrides", async (req, res) => {
 });
 
 // ─── Settings: joint limits ──────────────────────────────────────────────
-app.get("/api/settings/joint_limits", (_req, res) => {
-  res.json(state.jointLimits);
-});
+app.get("/api/settings/joint_limits", (_req, res) => res.json(state.jointLimits));
 app.post("/api/settings/joint_limits", async (req, res) => {
   try {
     state.jointLimits = await saveJointLimits(req.body);
-    ros.publishJointLimits(state.jointLimits);
+    mode.setJointLimits(state.jointLimits);
     broadcast({ type: "settings:joint_limits", payload: state.jointLimits });
     res.json(state.jointLimits);
   } catch (err) {
@@ -185,9 +211,7 @@ app.post("/api/settings/joint_limits", async (req, res) => {
 });
 
 // ─── Settings: rotate tuneables ──────────────────────────────────────────
-app.get("/api/settings/rotate", (_req, res) => {
-  res.json(state.rotateSettings);
-});
+app.get("/api/settings/rotate", (_req, res) => res.json(state.rotateSettings));
 app.post("/api/settings/rotate", async (req, res) => {
   try {
     state.rotateSettings = await saveRotateSettings(req.body);
@@ -198,17 +222,12 @@ app.post("/api/settings/rotate", async (req, res) => {
   }
 });
 
-// ─── Settings: per-joint-row servo speed limit (deg/s) ───────────────────
-// Dashboard posts {coxa, femur, tibia}. The bridge node turns that into a
-// per-joint slew limit applied before /joint_command/raw publishes, so the
-// servos can't be commanded to move faster than the linkage tolerates.
-app.get("/api/settings/servo_speed", (_req, res) => {
-  res.json(state.servoSpeed);
-});
+// ─── Settings: servo speed limit (deg/s, per joint row) ──────────────────
+app.get("/api/settings/servo_speed", (_req, res) => res.json(state.servoSpeed));
 app.post("/api/settings/servo_speed", async (req, res) => {
   try {
     state.servoSpeed = await saveServoSpeed(req.body);
-    ros.publishServoSpeedLimits(state.servoSpeed);
+    mode.setServoSpeedLimit(state.servoSpeed);
     broadcast({ type: "settings:servo_speed", payload: state.servoSpeed });
     res.json(state.servoSpeed);
   } catch (err) {
@@ -216,17 +235,12 @@ app.post("/api/settings/servo_speed", async (req, res) => {
   }
 });
 
-// ─── Settings: PWM / joint-command update rate (Hz) ──────────────────────
-// Scalar value driving both (a) how fast the Pi republishes /joint_command/raw
-// and (b) how often the firmware re-latches the PCA9685 pulse. Bumping this
-// smooths motion; dropping it saves CPU. Broadcast as Float32.
-app.get("/api/settings/servo_update_rate", (_req, res) => {
-  res.json(state.servoUpdateRate);
-});
+// ─── Settings: servo update rate (Hz) ────────────────────────────────────
+app.get("/api/settings/servo_update_rate", (_req, res) => res.json(state.servoUpdateRate));
 app.post("/api/settings/servo_update_rate", async (req, res) => {
   try {
     state.servoUpdateRate = await saveServoUpdateRate(req.body);
-    ros.publishServoUpdateRate(state.servoUpdateRate.hz);
+    mode.setServoUpdateRate(state.servoUpdateRate.hz);
     broadcast({ type: "settings:servo_update_rate", payload: state.servoUpdateRate });
     res.json(state.servoUpdateRate);
   } catch (err) {
@@ -239,19 +253,16 @@ app.get("/api/stances", (_req, res) => res.json(state.stances));
 app.post("/api/stances/:name", async (req, res) => {
   try {
     const { name } = req.params;
-    // If the client provides explicit angles_rad, use them. Otherwise snapshot
-    // the latest /joint_states positions. Snapshotting from the latest
-    // JointState is the common UI path — "I've posed the dog by hand, save it".
     let anglesRad = req.body?.angles_rad;
     if (!Array.isArray(anglesRad)) {
       const js = state.telemetry.joint_states;
       if (!js || !Array.isArray(js.position) || !Array.isArray(js.name)) {
-        return res.status(409).json({ error: "No /joint_states available to snapshot." });
+        return res.status(409).json({ error: "No joint_states available to snapshot." });
       }
       const indexByName = Object.fromEntries(js.name.map((n, i) => [n, i]));
       anglesRad = JOINT_NAMES.map((n) => Number(js.position[indexByName[n]]));
       if (anglesRad.some((v) => !Number.isFinite(v))) {
-        return res.status(409).json({ error: "Latest /joint_states was incomplete." });
+        return res.status(409).json({ error: "Latest joint_states was incomplete." });
       }
     }
     state.stances = await upsertStance(name, anglesRad);
@@ -261,59 +272,42 @@ app.post("/api/stances/:name", async (req, res) => {
     res.status(400).json({ error: String(err.message || err) });
   }
 });
-app.post("/api/stances/:name/play", (req, res) => {
+app.post("/api/stances/:name/play", async (req, res) => {
   try {
     const { name } = req.params;
     validateCommand({ type: "stance_play", name });
-    ros.publishStancePlay(name);
+    await mode.setMode(name); // crouch / stand / extend
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }
 });
 
-// ─── Params: gait planner ────────────────────────────────────────────────
+// ─── Params: gait planner / stabilizer ───────────────────────────────────
 app.post("/api/params/gait/:name", async (req, res) => {
   try {
     const { name } = req.params;
-    const { value } = req.body ?? {};
-    if (!Number.isFinite(Number(value))) {
-      return res.status(400).json({ error: "value must be numeric" });
-    }
-    const result = await ros.setParameter(GAIT_PLANNER_NODE, name, Number(value));
-    res.json({ ok: true, result });
+    const value = Number(req.body?.value);
+    if (!Number.isFinite(value)) return res.status(400).json({ error: "value must be numeric" });
+    const patch = mapGaitParam(name, value);
+    if (!patch) return res.status(400).json({ error: `Unknown gait param: ${name}` });
+    mode.updatePlannerConfig(patch);
+    res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }
 });
 
-// Stabilizer params live on gait_planner_node too (same node, different param).
 app.post("/api/params/stabilizer", async (req, res) => {
   try {
-    const body = req.body ?? {};
-    const allowed = [
-      "stabilization_roll_gain",
-      "stabilization_pitch_gain",
-      "stabilization_max_correction_rad",
-      "imu_filter_alpha",
-      "use_imu_stabilization",
-    ];
-    const results = {};
-    for (const key of allowed) {
-      if (body[key] === undefined) continue;
-      results[key] = await ros.setParameter(GAIT_PLANNER_NODE, key, body[key]);
-    }
-    res.json({ ok: true, results });
+    mode.updateStabilizerParams(req.body || {});
+    res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }
 });
 
 // ─── Rotate by N degrees ─────────────────────────────────────────────────
-// The dashboard posts {direction, degrees}. We spin cmd_vel.angular.z at
-// ±rotate_rate_rad_s for (degrees * rotate_calibration_factor) / rate seconds
-// and then zero. Default factor 1.02 is calibrated against bench runs; tuning
-// it lives in the Settings drawer.
 app.post("/api/rotate", (req, res) => {
   try {
     const cmd = validateCommand({
@@ -323,16 +317,11 @@ app.post("/api/rotate", (req, res) => {
     });
     const { rotate_rate_rad_s, rotate_calibration_factor } = state.rotateSettings;
     const sign = cmd.direction === "left" ? +1 : -1;
-    const deg = cmd.degrees;
     const durationMs = Math.max(
       50,
-      (deg * rotate_calibration_factor * (Math.PI / 180) / rotate_rate_rad_s) * 1000,
+      (cmd.degrees * rotate_calibration_factor * (Math.PI / 180) / rotate_rate_rad_s) * 1000,
     );
-    state.rotate = {
-      active: true,
-      endAt: Date.now() + durationMs,
-      direction: cmd.direction,
-    };
+    state.rotate = { active: true, endAt: Date.now() + durationMs, direction: cmd.direction };
     state.twist = {
       active: true,
       x: 0,
@@ -340,6 +329,7 @@ app.post("/api/rotate", (req, res) => {
       wz: sign * rotate_rate_rad_s,
       expiresAt: Date.now() + durationMs,
     };
+    mode.setTwist({ x: 0, y: 0, yaw: state.twist.wz });
     res.json({ ok: true, duration_ms: durationMs });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
@@ -347,12 +337,10 @@ app.post("/api/rotate", (req, res) => {
 });
 
 // ─── Generic command dispatch ─────────────────────────────────────────────
-// Anything matching the shared protocol schema. Keeps the server open for
-// small commands without bolting a dedicated route onto every one.
-app.post("/api/command", (req, res) => {
+app.post("/api/command", async (req, res) => {
   try {
     const cmd = validateCommand(req.body);
-    handleCommand(cmd);
+    await handleCommand(cmd);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
@@ -386,9 +374,9 @@ app.get("/api/recording/list", async (_req, res) => {
   }
 });
 
-// SPA fallback — the React router handles unknown routes.
-app.get("*", (_req, res, next) => {
-  if (_req.path.startsWith("/api") || _req.path.startsWith("/telemetry")) return next();
+// SPA fallback
+app.get("*", (req, res, next) => {
+  if (req.path.startsWith("/api") || req.path.startsWith("/telemetry")) return next();
   res.sendFile(path.join(STATIC_DIR, "index.html"), (err) => {
     if (err) next();
   });
@@ -396,87 +384,46 @@ app.get("*", (_req, res, next) => {
 
 // ─── Command handlers ─────────────────────────────────────────────────────
 
-function handleCommand(cmd) {
+async function handleCommand(cmd) {
   switch (cmd.type) {
-    case "set_mode": {
-      if (!MODE_OPTIONS.includes(cmd.mode)) throw new Error(`Unknown mode: ${cmd.mode}`);
-      state.mode = cmd.mode;
-      ros.publishGaitMode(cmd.mode);
-      ros.publishControlMode(cmd.mode.startsWith("direct_") ? "manual" : "auto");
-      broadcast({ type: "mode", mode: cmd.mode });
+    case "set_mode":
+      await mode.setMode(cmd.mode);
       break;
-    }
-    case "twist": {
+    case "twist":
       state.twist = {
         active: true,
         x: cmd.x,
         y: cmd.y,
         wz: cmd.yaw,
-        // Twist is "sticky" for 500 ms so a dropped frame in the browser
-        // doesn't immediately kill the gait. Client is expected to keep
-        // streaming while held.
         expiresAt: Date.now() + 500,
       };
-      // Suppress a competing rotate.
       state.rotate.active = false;
+      mode.setTwist({ x: cmd.x, y: cmd.y, yaw: cmd.yaw });
       break;
-    }
-    case "foot_targets": {
-      ros.publishFootTargets(cmd.targets);
+    case "foot_targets":
+      await mode.setFootTargets(cmd.targets);
       break;
-    }
-    case "joint_angles": {
-      // Flat 12-element array matching JOINT_NAMES order (radians).
-      ros.publishJointAnglesRad(JOINT_NAMES, cmd.angles);
+    case "joint_angles":
+      await mode.setJointAngles(cmd.angles);
       break;
-    }
-    case "servo_angles": {
-      // Servo-horn degrees: the ESP32 firmware receives these through the
-      // bridge node converting deg→rad. Same topic as joint_angles since the
-      // bridge knows to apply the cal table in reverse.
-      const rad = cmd.angles_deg.map((d) => (d - 90.0) * (Math.PI / 180.0));
-      ros.publishJointAnglesRad(JOINT_NAMES, rad);
+    case "servo_angles":
+      await mode.setServoAnglesDeg(cmd.angles_deg);
       break;
-    }
-    case "disconnect": {
-      // Emergency path. `release_servos=true` unpowers the PCA9685 outputs;
-      // `estop=true` freezes command_mux. Both go at once so neither wins a
-      // race with a still-in-flight gait publisher.
-      ros.publishReleaseServos(true);
-      ros.publishEstop(true);
+    case "disconnect":
+      serial.releaseServos();
       state.twist.active = false;
       state.rotate.active = false;
-      state.mode = "idle";
+      await mode.setMode("idle");
       broadcast({ type: "disconnect" });
       break;
-    }
-    case "animation_play":
-    case "animation_stop":
-    case "recording_start":
-    case "recording_stop": {
-      // These route through the dedicated endpoints — but when they come via
-      // /api/command we forward through the same code paths.
-      if (cmd.type === "animation_play") {
-        ros.publishStancePlay(cmd.name); // reuse the stance/animation string channel
-      }
-      break;
-    }
     case "stance_play":
-    case "stance_save": {
-      ros.publishStancePlay(cmd.name);
+    case "stance_save":
+      await mode.setMode(cmd.name); // crouch / stand / extend
       break;
-    }
-    case "stabilizer_set": {
-      for (const [key, value] of Object.entries(cmd.params)) {
-        ros.setParameter(GAIT_PLANNER_NODE, key, value).catch((err) => {
-          console.warn(`[stabilizer_set] ${key} failed: ${err.message}`);
-        });
-      }
+    case "stabilizer_set":
+      mode.updateStabilizerParams(cmd.params);
       break;
-    }
     case "rotate_degrees": {
-      // Routes through /api/rotate in practice, but we accept the same shape
-      // via /api/command for scripted clients.
       const { rotate_rate_rad_s, rotate_calibration_factor } = state.rotateSettings;
       const sign = cmd.direction === "left" ? +1 : -1;
       const durationMs = Math.max(
@@ -491,51 +438,63 @@ function handleCommand(cmd) {
         wz: sign * rotate_rate_rad_s,
         expiresAt: Date.now() + durationMs,
       };
+      mode.setTwist({ x: 0, y: 0, yaw: state.twist.wz });
       break;
     }
-    case "set_servo_overrides": {
-      saveServoOverrides(cmd.overrides).then((clean) => {
-        state.servoOverrides = clean;
-        ros.publishServoOverrides(clean);
-        broadcast({ type: "settings:servo_overrides", payload: clean });
-      });
+    case "set_servo_overrides":
+      state.servoOverrides = await saveServoOverrides(cmd.overrides);
+      broadcast({ type: "settings:servo_overrides", payload: state.servoOverrides });
       break;
-    }
-    case "set_joint_limits": {
-      saveJointLimits(cmd.limits).then((clean) => {
-        state.jointLimits = clean;
-        ros.publishJointLimits(clean);
-        broadcast({ type: "settings:joint_limits", payload: clean });
-      });
+    case "set_joint_limits":
+      state.jointLimits = await saveJointLimits(cmd.limits);
+      mode.setJointLimits(state.jointLimits);
+      broadcast({ type: "settings:joint_limits", payload: state.jointLimits });
       break;
-    }
+    case "animation_play":
+    case "animation_stop":
+      // Animations are TODO; route through stance mode for now.
+      await mode.setMode(cmd.type === "animation_play" ? "animation_playback" : "idle");
+      break;
+    case "recording_start":
+      await recorder.start();
+      broadcast({ type: "recording", status: recorder.status() });
+      break;
+    case "recording_stop":
+      await recorder.stop();
+      broadcast({ type: "recording", status: recorder.status() });
+      break;
     default:
       throw new Error(`Command type ${cmd.type} has no server handler`);
   }
 }
 
-// ─── 30 Hz Twist republish ───────────────────────────────────────────────
-// command_mux has a 250 ms freshness window — silence → idle. Republishing
-// the cached twist at 30 Hz keeps the selected source "fresh" for as long
-// as the browser streams. When the rotate timer expires we flip to a
-// single zero-twist publish so the dog stops cleanly.
+function mapGaitParam(name, value) {
+  switch (name) {
+    case "delta_x_mm":      return { delta_x: value / 1000 };
+    case "delta_y_mm":      return { delta_y: value / 1000 };
+    case "swing_time_ms":   return { swing_time_ms: value };
+    case "rotate_rate_max": return { rotate_rate_max: value };
+    case "default_z_ref_mm":return { default_z_ref: value / 1000 };
+    default: return null;
+  }
+}
+
+// ─── Twist decay loop ────────────────────────────────────────────────────
+// Without a 30 Hz republish, the planner reads the latest twist anyway, but
+// we still need a timer to expire stale twists and end rotate-by-degrees.
 setInterval(() => {
   const now = Date.now();
   if (state.rotate.active && now >= state.rotate.endAt) {
-    ros.publishTwist({ x: 0, y: 0, wz: 0 });
     state.rotate.active = false;
     state.twist.active = false;
+    mode.setTwist({ x: 0, y: 0, yaw: 0 });
     return;
   }
-  if (!state.twist.active) return;
-  if (now > state.twist.expiresAt) {
-    // Sticky window elapsed — one explicit zero twist to settle the mux.
-    ros.publishTwist({ x: 0, y: 0, wz: 0 });
+  if (state.twist.active && now > state.twist.expiresAt) {
     state.twist.active = false;
-    return;
+    mode.setTwist({ x: 0, y: 0, yaw: 0 });
   }
-  ros.publishTwist({ x: state.twist.x, y: state.twist.y, wz: state.twist.wz });
-}, 1000 / TWIST_REPUBLISH_HZ);
+}, 50);
 
 // ─── WebSocket fan-out ───────────────────────────────────────────────────
 
@@ -543,7 +502,6 @@ const httpServer = createServer(app);
 const wss = new WebSocketServer({ server: httpServer, path: "/telemetry" });
 
 wss.on("connection", (ws) => {
-  // Seed the new client with the latest snapshot of every topic + settings.
   const snapshot = {
     type: "snapshot",
     telemetry: state.telemetry,
@@ -560,12 +518,11 @@ wss.on("connection", (ws) => {
   };
   safeSend(ws, snapshot);
 
-  ws.on("message", (raw) => {
-    // Allow commands over WS too (for scripted debug). Same schema.
+  ws.on("message", async (raw) => {
     try {
       const msg = JSON.parse(raw.toString());
       const cmd = validateCommand(msg);
-      handleCommand(cmd);
+      await handleCommand(cmd);
     } catch (err) {
       safeSend(ws, { type: "error", error: String(err.message || err) });
     }
@@ -575,29 +532,21 @@ wss.on("connection", (ws) => {
 function broadcast(payload) {
   const str = JSON.stringify(payload);
   for (const client of wss.clients) {
-    if (client.readyState === 1 /* OPEN */) {
-      try {
-        client.send(str);
-      } catch {
-        /* drop */
-      }
+    if (client.readyState === 1) {
+      try { client.send(str); } catch { /* drop */ }
     }
   }
 }
 
 function safeSend(ws, payload) {
-  try {
-    ws.send(JSON.stringify(payload));
-  } catch {
-    /* drop */
-  }
+  try { ws.send(JSON.stringify(payload)); } catch { /* drop */ }
 }
 
 function appendRecorderSample() {
   if (!recorder.isActive) return;
   const { joint_states: js, imu, gas } = state.telemetry;
   const positions = {};
-  if (js?.name && js?.position) {
+  if (js?.name && Array.isArray(js?.position)) {
     for (let i = 0; i < js.name.length && i < js.position.length; i++) {
       positions[js.name[i]] = Number(js.position[i]);
     }
@@ -624,20 +573,21 @@ async function bootstrap() {
   state.servoSpeed = await loadServoSpeed();
   state.servoUpdateRate = await loadServoUpdateRate();
 
-  // Republish persisted settings as soon as rosbridge is ready so a fresh
-  // Pi boot picks up the same calibration state the UI last saved.
-  ros.onStatus((s) => {
-    if (s.event === "connected") {
-      ros.publishServoOverrides(state.servoOverrides);
-      ros.publishJointLimits(state.jointLimits);
-      ros.publishServoSpeedLimits(state.servoSpeed);
-      ros.publishServoUpdateRate(state.servoUpdateRate.hz);
-    }
+  serial.connect();
+  sensors.connect();
+  mode.start();
+
+  // Push persisted settings to the firmware once it's open.
+  serial.once("open", () => {
+    if (state.servoUpdateRate?.hz) mode.setServoUpdateRate(state.servoUpdateRate.hz);
+    if (Object.keys(state.servoSpeed).length) mode.setServoSpeedLimit(state.servoSpeed);
+    if (Object.keys(state.jointLimits).length) mode.setJointLimits(state.jointLimits);
   });
 
   httpServer.listen(HTTP_PORT, () => {
     console.log(`[argos-dashboard] HTTP :${HTTP_PORT}`);
-    console.log(`[argos-dashboard] rosbridge ${ROSBRIDGE_URL}`);
+    console.log(`[argos-dashboard] serial ${process.env.ARGOS_SERIAL_PORT || "/dev/ttyUSB0"}`);
+    console.log(`[argos-dashboard] sensors ${process.env.ARGOS_SIDECAR_HOST || "127.0.0.1"}:${process.env.ARGOS_SIDECAR_PORT || 8788}`);
     console.log(`[argos-dashboard] static ${STATIC_DIR}`);
   });
 }
@@ -647,19 +597,15 @@ bootstrap().catch((err) => {
   process.exit(1);
 });
 
-// Graceful shutdown: publish release_servos=true so an accidental SIGTERM
-// during a demo doesn't leave the dog straining against a held pose.
 function shutdown(signal) {
   console.log(`[argos-dashboard] caught ${signal}, releasing servos`);
   try {
-    ros.publishReleaseServos(true);
-    ros.publishEstop(true);
-  } catch {
-    /* ros might already be closed */
-  }
-  if (recorder.isActive) {
-    recorder.stop().catch(() => {});
-  }
+    serial.releaseServos();
+  } catch { /* serial might be closed */ }
+  if (recorder.isActive) recorder.stop().catch(() => {});
+  serial.disconnect();
+  sensors.disconnect();
+  mode.stop();
   setTimeout(() => process.exit(0), 200);
 }
 process.on("SIGINT", () => shutdown("SIGINT"));

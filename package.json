@@ -1,0 +1,14 @@
+{
+  "name": "argos",
+  "version": "0.3.0",
+  "private": true,
+  "description": "Tethered quadruped — Pi Node dashboard + Python sensor sidecar + ESP32/Arduino servo firmware.",
+  "scripts": {
+    "start": "bash scripts/start_pi.sh",
+    "build": "npm --prefix dashboard run build",
+    "dev": "npm --prefix dashboard run dev",
+    "server": "npm --prefix dashboard run server",
+    "test": "npm --prefix dashboard test",
+    "install:all": "npm --prefix dashboard install"
+  }
+}

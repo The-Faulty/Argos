@@ -1,19 +1,11 @@
 // Guardrail tests for shared/robot-config.js.
 //
-// The JS config has to stay in sync with two Python sources of truth:
-//   - ros_support.JOINT_NAMES (authoritative joint-name ordering)
-//   - gait_planner_node.py's allowed mode set + dashboard MODE_OPTIONS
-//
-// We don't import the Python files (no Python runtime in node --test).
-// Instead we pin the expected values here and cross-check by reading the
-// Python files as text — any future drift on either side raises an obvious
-// diff. If you rename a joint, update BOTH files + this test together.
+// JOINT_NAMES, JOINT_ROWS, LEG_IDS, and MODE_OPTIONS feed every panel and the
+// gait planner. These tests pin the shape and the mode strings so a rename
+// has to update the test file too — making drift impossible to land silently.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 
 import {
   JOINT_NAMES,
@@ -22,45 +14,14 @@ import {
   MODE_OPTIONS,
 } from "../shared/robot-config.js";
 
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(HERE, "..", "..");
-
-function readRosSupport() {
-  return readFileSync(
-    resolve(REPO, "ros2_ws", "argos_control", "ros_support.py"),
-    "utf8",
-  );
-}
-
-function parsePyTuple(src, name) {
-  // Match `NAME = ( "a", "b", ... )` or `NAME = [ ... ]`. Returns the string
-  // entries in declaration order.
-  const re = new RegExp(`^${name}\\s*=\\s*[\\(\\[]([^\\)\\]]+)[\\)\\]]`, "m");
-  const match = src.match(re);
-  if (!match) return null;
-  return match[1]
-    .split(",")
-    .map((s) => s.trim().replace(/['"]/g, ""))
-    .filter(Boolean);
-}
-
-test("LEG_IDS matches ros_support.LEG_ORDER", () => {
-  const pyOrder = parsePyTuple(readRosSupport(), "LEG_ORDER");
-  assert.ok(pyOrder, "Could not locate LEG_ORDER in ros_support.py");
-  assert.deepEqual(LEG_IDS, pyOrder);
+test("LEG_IDS has the four expected legs in order", () => {
+  assert.deepEqual(LEG_IDS, ["FR", "FL", "RR", "RL"]);
 });
 
-test("JOINT_NAMES matches the ros_support comprehension", () => {
-  // JOINT_NAMES in ros_support.py is built via a comprehension:
-  //   [f"{leg}_{joint}_joint" for leg in LEG_ORDER for joint in JOINT_ROWS]
-  // We reconstruct the same ordering from the parsed tuples and compare.
-  const src = readRosSupport();
-  const pyLegs = parsePyTuple(src, "LEG_ORDER");
-  const pyRows = parsePyTuple(src, "JOINT_ROWS");
-  assert.ok(pyLegs && pyRows, "Could not locate LEG_ORDER / JOINT_ROWS");
+test("JOINT_NAMES is 12 entries built from LEG_IDS × JOINT_ROWS", () => {
   const expected = [];
-  for (const leg of pyLegs) {
-    for (const row of pyRows) {
+  for (const leg of LEG_IDS) {
+    for (const row of JOINT_ROWS) {
       expected.push(`${leg}_${row}_joint`);
     }
   }
@@ -80,9 +41,8 @@ test("JOINT_NAMES row suffixes map to JOINT_ROWS for all legs", () => {
 });
 
 test("MODE_OPTIONS uses 'extend' not 'extended'", () => {
-  // This matches the gait_planner_node's allowed string set — the Python
-  // side only accepts 'extend'; a regression here would silently break mode
-  // switching from the dashboard.
+  // The gait planner only accepts 'extend'; a regression here would silently
+  // break mode switching from the dashboard.
   assert.ok(MODE_OPTIONS.includes("extend"));
   assert.ok(!MODE_OPTIONS.includes("extended"));
 });

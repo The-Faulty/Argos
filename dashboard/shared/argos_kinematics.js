@@ -1,9 +1,8 @@
-// Argos 3-DOF inverse + forward kinematics, ported line-for-line from
-// ros2_ws/argos_control/Kinematics.py. Tagged @preview-only — the Python
-// implementation is the authoritative copy for the robot; this JS port
-// exists so the dashboard can render accurate per-leg previews without a
-// rosbridge round-trip. Any behavioural drift is a bug; golden-fixture
-// tests in dashboard/tests/kinematics.test.js pin us to 1e-4 rad per joint.
+// Argos 3-DOF inverse + forward kinematics. This is the only IK in the
+// stack — the Pi gait planner imports the same module the React dashboard
+// uses for previews, so the angles you see in the UI are the angles that
+// hit the servos. Golden-fixture tests in dashboard/tests/kinematics.test.js
+// pin us to 1e-4 rad per joint against canned trajectories.
 //
 // All distances in meters. All angles in radians. Joint ordering follows
 // LEG_IDS = ["FR", "FL", "RR", "RL"] and JOINT_ROWS = ["coxa","femur","tibia"]

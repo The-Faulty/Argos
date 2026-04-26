@@ -1,8 +1,8 @@
 // Browser ↔ Pi command protocol. The dashboard POSTs JSON bodies matching
-// these shapes to the Node server (pi_server/server.js), which fans them
-// out to rosbridge topics. Validation lives here so both ends agree on the
-// schema — the server rejects bad commands early and the UI can preview
-// validation errors without a round-trip.
+// these shapes to the Node server (pi_server/server.js), which routes them
+// to the gait planner / mode controller / serial bridge. Validation lives
+// here so both ends agree on the schema — the server rejects bad commands
+// early and the UI can preview validation errors without a round-trip.
 
 import { LEG_IDS, MODE_OPTIONS, JOINT_NAMES } from "./robot-config.js";
 

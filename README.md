@@ -1,144 +1,167 @@
 # Argos
 
-Argos is a low-cost search and rescue quadruped being built for Georgia Tech
-Senior Design in Spring 2026. The system is split between a Raspberry Pi 4
-running ROS 2 Humble and an ESP32-class controller handling the fast control loop.
+Argos is a low-cost search-and-rescue quadruped built for Georgia Tech Senior
+Design (ECE 4014, Spring 2026). The robot is tethered — there is no battery
+or wireless control loop. Power and ethernet run to the chassis from the
+operator station.
 
-## Current expo focus
+The stack is intentionally small:
 
-The current design expo target is intentionally narrow:
+- **ESP32 + Arduino sketch** drives 12 servos through a PCA9685 over I²C and
+  reports a gas reading on its ADC.
+- **Raspberry Pi** runs a Node.js dashboard server and a Python sensor
+  sidecar. The Node server speaks JSON-over-serial @921600 to the ESP32, runs
+  the gait planner and IK in JavaScript, persists user settings, records
+  telemetry, and serves the React dashboard.
+- **React dashboard** renders 14 panels for joint/leg/foot control, IMU,
+  gas, thermal, RealSense camera, stance presets, animations, and recording.
+  It opens one WebSocket to the Pi server.
+- **Python sidecar** reads the Intel RealSense (color stream + IMU) and the
+  MLX90640 thermal grid, exposes them over MJPEG + WebSocket on `:8788`.
 
-- stable stand and walk
-- live RPLiDAR + RealSense bring-up
-- real-time mapping in RViz
-
-Gazebo, thermal, gas mapping, and higher-level mission logic are optional
-future work, not the current critical path.
-
-## Current workspace
-
-- `ros2_ws/src/argos_control`: ROS 2 package wrapper and node entry points
-- `ros2_ws/src/argos_mission`: ROS 2 package wrapper for mission/perception bench nodes
-- `ros2_ws/src/quadruped_bringup`: launch files and sensor bring-up assets
-- `ros2_ws/src/argos_description`: robot description, frames, meshes, and RViz assets
-- `ros2_ws/argos_control`: leg math, control helpers, and single-leg bench tools
-- `ros2_ws/argos_mission`: mission state, gas hazard map, and thermal demo nodes
-- `firmware/esp32c6`: ESP-IDF + micro-ROS firmware for the C6 (servos, IMU, gas)
-- `dashboard`: React/Node web dashboard served from the Pi — see `docs/dashboard_guide.md`
-
-## Physical Robot Bring-up
-
-The repo now includes physical bring-up scripts in `quadruped_bringup`:
-
-- `ros2 run quadruped_bringup argos_component_check preflight`
-- `ros2 run quadruped_bringup argos_component_check full --include-thermal`
-- `ros2 run quadruped_bringup argos_joint_jog --bidirectional`
-
-Primary docs:
-
-- `docs/build_guide.md`
-- `docs/component_test_guide.md`
-- `docs/pi_minimal_setup.md` for the current Pi + HUZZAH32, no-sensor state
-
-## Development environment
-
-The repo includes a Dockerfile, Docker Compose service, and VS Code devcontainer
-setup for a ROS 2 Humble workflow.
-
-Typical flow:
-
-```bash
-docker compose build
-docker compose up -d
-cd /workspace/ros2_ws
-colcon build --symlink-install
-source install/setup.bash
+```
+Browser ──HTTP/WS──▶ Pi Node server (8787) ──serial JSON──▶ ESP32 + PCA9685
+                          │
+                          └──HTTP+WS──▶ Pi Python sidecar (8788) ──▶ RealSense + MLX90640
 ```
 
-## Sensor bring-up
+There is no ROS, no SLAM, no autonomous navigation, no LiDAR.
 
-LiDAR only:
+---
 
-```bash
-ros2 launch quadruped_bringup rplidar.launch.py
-ros2 launch quadruped_bringup view_lidar.launch.py
+## Hardware
+
+| Component         | Notes                                                   |
+| ----------------- | ------------------------------------------------------- |
+| Raspberry Pi 4/5  | Ubuntu 22.04 or Raspberry Pi OS 64-bit                  |
+| ESP32 (any variant) | Flashed with Arduino IDE; USB serial to the Pi        |
+| PCA9685            | I²C servo driver, 12 channels used                     |
+| 12× hobby servos   | Three per leg (hip / thigh / calf)                     |
+| Intel RealSense D435i or D455 | D435 (no `i`) has no IMU — see notes        |
+| MLX90640           | I²C thermal grid (24 × 32)                              |
+| MQ-x gas sensor    | Wired to one ESP32 ADC pin                             |
+
+---
+
+## Repo layout
+
+```
+Argos/
+├── dashboard/              # React UI + Node Pi server
+│   ├── pi_server/          # serial bridge, gait planner, mode controller
+│   ├── shared/             # robot config, kinematics, protocol, servo cal
+│   ├── src/                # React components and hooks
+│   └── tests/              # node --test unit tests
+├── pi_sensors/             # Python sidecar (RealSense + MLX90640)
+└── firmware/argos_servo/   # Arduino sketch for the ESP32
 ```
 
-RealSense only:
+---
+
+## Setup — Pi
+
+Install once:
 
 ```bash
-ros2 launch quadruped_bringup realsense.launch.py
-ros2 launch quadruped_bringup view_camera.launch.py
+# Node 20 + npm
+curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+sudo apt install -y nodejs
+
+# Python sidecar deps
+sudo apt install -y python3-venv python3-pip libusb-1.0-0
+cd pi_sensors
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# Dashboard build
+cd ../dashboard
+npm install
+npm run build
+
+# Serial port permissions (one-time)
+sudo usermod -aG dialout $USER
+# log out and back in
 ```
 
-Both sensors:
+A udev rule keeps the ESP32 at a stable name:
+
+```
+# /etc/udev/rules.d/99-argos.rules
+SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", SYMLINK+="ttyESP32"
+```
+
+Reload with `sudo udevadm control --reload && sudo udevadm trigger`.
+
+---
+
+## Setup — ESP32
+
+1. Open `firmware/argos_servo/argos_servo.ino` in Arduino IDE 2.x.
+2. Install board support for ESP32 and the Adafruit PCA9685 library.
+3. Select the correct board, set baud to 921600.
+4. Flash. The serial monitor should print `{"type":"hello",...}` on boot.
+
+---
+
+## Run
+
+Two processes on the Pi. From the repo root:
 
 ```bash
-ros2 launch quadruped_bringup sensors.launch.py
+./scripts/start_pi.sh
 ```
 
-Robot description only:
+That launches:
+
+- `pi_sensors/.venv/bin/python sensor_server.py` (port 8788)
+- `node dashboard/pi_server/server.js` (port 8787)
+
+Open `http://<pi-ip>:8787/` in a browser. The header pill shows three
+indicators: **pi**, **esp**, **sensors**.
+
+For autostart on boot, install the systemd units:
 
 ```bash
-ros2 launch quadruped_bringup state_publisher.launch.py start_rviz:=true
+sudo cp scripts/argos-dashboard.service /etc/systemd/system/
+sudo cp pi_sensors/argos-sensors.service /etc/systemd/system/
+sudo systemctl enable --now argos-dashboard argos-sensors
 ```
 
-Control stack only:
+---
+
+## Tests
 
 ```bash
-ros2 launch quadruped_bringup control_stack.launch.py
+cd dashboard
+npm test
 ```
 
-Full stack:
+---
 
-```bash
-ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true start_rviz:=true
-```
+## Troubleshooting
 
-Expo demo stack:
+- **Header shows `esp ✕`.** The Pi can't reach the ESP32 over serial. Check
+  `ls -l /dev/ttyUSB0` (or `/dev/ttyESP32`), `dmesg | tail` after plugging
+  the cable, and confirm your user is in `dialout`. Override the device or
+  baud with `ARGOS_SERIAL_PORT` / `ARGOS_SERIAL_BAUD`.
+- **Header shows `sensors ✕`.** The Python sidecar isn't responding. Run
+  `systemctl status argos-sensors` (or check the foreground console). Most
+  failures are a missing RealSense (`pyrealsense2` import), or the MLX90640
+  not on I²C — both cases will show in `/health` at `:8788`.
+- **No camera image but `sensors ✓`.** D435 (no `i`) has no IMU; the camera
+  still works. If the IMU pill is missing too, you have the wrong model.
+- **Joints jitter / move the wrong way.** Use the dashboard's settings drawer
+  to adjust per-servo offsets, then the joint-limit fields. They persist to
+  `~/.argos/`.
+- **`gas` value pinned at 0.** Confirm the ADC pin in `argos_servo.ino`
+  matches your wiring (default `GAS_ADC_PIN = 1`).
 
-```bash
-ros2 launch quadruped_bringup expo_demo.launch.py enable_esp32:=true start_demo_commander:=true
-```
-
-Mission stack only:
-
-```bash
-ros2 launch quadruped_bringup mission_stack.launch.py
-```
-
-Full stack with mission nodes:
-
-```bash
-ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_mission:=true start_rviz:=true
-```
-
-## Web dashboard
-
-The dashboard replaces the retired `web/leg_viz/` single-leg tool with a
-full-robot control + telemetry panel. Launch it with the rest of the
-stack:
-
-```bash
-ros2 launch quadruped_bringup full_system.launch.py enable_esp32:=true enable_dashboard:=true
-```
-
-Then open `http://<pi-ip>:8787` in a browser on the same LAN. Full setup
-and feature walkthrough: `docs/dashboard_guide.md`.
+---
 
 ## Notes
 
-- `ROS_DOMAIN_ID` is set to `42` to match the Pi/ESP32-C6 design.
-- On the Pi, the intended serial aliases are `/dev/ttyLIDAR` and `/dev/ttyESP32`.
-- The control library is now wrapped as a ROS 2 package so `colcon` can see it.
-- The web dashboard (React + Node) is documented in `docs/dashboard_guide.md`
-  and listens on port `8787`; `rosbridge_websocket` on `9090` is bound to
-  localhost (the Node server proxies).
-- The mission bench stack is optional and not part of the current expo-critical path.
-- The ROS 2 topic contract is documented in `docs/ros2_topic_contract.md`.
-- The Pi device and bring-up contract is documented in `docs/pi_hardware_contract.md`.
-- The recommended expo-critical execution order is documented in `docs/expo_execution_plan.md`.
-- The single source-of-truth expo checklist is documented in `docs/expo_master_todo.md`.
-- The repeatable demo launch flow is documented in `docs/expo_demo_runbook.md`.
-- The architecture, safety, terrain, and scope talking points are documented in `docs/expo_story.md`.
-- The end-to-end build instructions (Pi + ESP32 + sensors) are documented in `docs/build_guide.md`.
+- Argos is **tethered**. Do not add battery telemetry or wireless-link UI.
+- The dashboard's `useRosbridge` hook is a historical name; the WebSocket
+  target is the same-origin Node server, not rosbridge.
+- All persistence lives under `~/.argos/` (servo overrides, joint limits,
+  rotate settings, stance presets, telemetry recordings).

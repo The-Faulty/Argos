@@ -1,13 +1,13 @@
 // Pi-server telemetry socket hook.
 //
-// The browser speaks to the Pi-side Node server (not rosbridge directly) —
-// one WS per tab, the server fans every client the cached snapshot of every
-// ROS topic we care about. This halves network traffic vs per-browser
-// rosbridge clients and lets us swap the transport later without touching UI.
+// One WS per tab to the Pi Node server. The server fans every client the
+// cached snapshot of joint_states / imu / gas / mode / settings, then pushes
+// deltas. The hook reduces those messages into a flat `data` object the rest
+// of the UI consumes.
 //
 // Shape of what `data` holds (filled progressively as messages arrive):
 //   {
-//     connected: { ws: bool, ros: bool, lastEvent: {...} },
+//     connected: { ws: bool, serial: bool, sensors: bool, lastEvent: {...} },
 //     mode: string,
 //     rotate_settings, servo_overrides, joint_limits, stances,
 //     joint_states: {name, position, ...} | null,
@@ -19,6 +19,9 @@
 //     recording: {active, rowCount, ...},
 //     lastError: string | null,
 //   }
+//
+// `ws` reflects the browser↔Pi socket; `serial` reflects the ESP32 link;
+// `sensors` reflects the Python sidecar (RealSense + MLX90640).
 //
 // Auto-reconnect with capped backoff so the UI recovers silently if the Pi
 // server restarts mid-demo.
@@ -36,7 +39,7 @@ const MAX_BACKOFF_MS = 8_000;
 
 export function useRosbridge({ url = DEFAULT_URL } = {}) {
   const [data, setData] = useState(() => ({
-    connected: { ws: false, ros: false, lastEvent: null },
+    connected: { ws: false, serial: false, sensors: false, lastEvent: null },
     mode: "idle",
     rotate_settings: null,
     servo_overrides: {},
@@ -47,6 +50,7 @@ export function useRosbridge({ url = DEFAULT_URL } = {}) {
     joint_states: null,
     imu: null,
     gas: null,
+    thermal: null,
     gait_mode: null,
     control_mode: null,
     leg_ids: ["FR", "FL", "RR", "RL"],
@@ -160,6 +164,8 @@ function reduce(prev, msg) {
       return { ...prev, imu: msg.msg };
     case "gas":
       return { ...prev, gas: msg.msg };
+    case "thermal":
+      return { ...prev, thermal: msg.msg };
     case "gait_mode":
       return { ...prev, gait_mode: msg.msg };
     case "control_mode":

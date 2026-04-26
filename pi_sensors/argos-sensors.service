@@ -1,0 +1,18 @@
+[Unit]
+Description=Argos sensor sidecar (RealSense + MLX90640)
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=argos
+Group=argos
+WorkingDirectory=/home/argos/Argos/pi_sensors
+ExecStart=/home/argos/Argos/pi_sensors/.venv/bin/python sensor_server.py
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

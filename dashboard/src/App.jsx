@@ -23,6 +23,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import AnimationPlayer from "./components/AnimationPlayer.jsx";
+import CameraPanel from "./components/CameraPanel.jsx";
 import FootXYZPanel from "./components/FootXYZPanel.jsx";
 import GasPanel from "./components/GasPanel.jsx";
 import ImuPanel from "./components/ImuPanel.jsx";
@@ -33,6 +34,7 @@ import RobotOverview from "./components/RobotOverview.jsx";
 import ServoPanel from "./components/ServoPanel.jsx";
 import SettingsDrawer from "./components/SettingsDrawer.jsx";
 import StancePresets from "./components/StancePresets.jsx";
+import ThermalPanel from "./components/ThermalPanel.jsx";
 import TelemetryRecorder from "./components/TelemetryRecorder.jsx";
 import WalkingPanel from "./components/WalkingPanel.jsx";
 
@@ -75,8 +77,12 @@ function AppBody() {
   }, [setActiveLeg]);
 
   const wsConnected = Boolean(data.connected?.ws);
-  const rosConnected = Boolean(data.connected?.ros);
-  const connected = wsConnected && rosConnected;
+  const serialConnected = Boolean(data.connected?.serial);
+  const sensorsConnected = Boolean(data.connected?.sensors);
+  // The dashboard is "connected" enough to send commands once the browser↔Pi
+  // socket is up and the ESP32 serial link is open. Sensors are optional —
+  // camera/IMU/thermal can be missing without blocking servo control.
+  const connected = wsConnected && serialConnected;
   const rotateSettings = data.rotate_settings || DEFAULT_ROTATE_SETTINGS;
 
   // Direct-mode flags drive which optional extra panel is shown under the
@@ -135,7 +141,8 @@ function AppBody() {
       <TopBar
         connected={connected}
         wsConnected={wsConnected}
-        rosConnected={rosConnected}
+        serialConnected={serialConnected}
+        sensorsConnected={sensorsConnected}
         mode={mode}
         gaitMode={data.gait_mode?.data}
         onOpenSettings={() => setSettingsOpen(true)}
@@ -213,12 +220,15 @@ function AppBody() {
 
       {/* Footer row: read-only telemetry + playback controls. Kept out of
           the sidebar so RobotOverview + WalkingPanel breathe, and grouped
-          into 3 columns (telemetry / playback / recording) so related
-          panels sit next to each other. */}
+          into 4 columns: sensors / camera+thermal / playback / recording. */}
       <section className="app__footer">
         <div className="app__footer-col">
           <ImuPanel imu={data.imu} />
           <GasPanel gas={data.gas} />
+        </div>
+        <div className="app__footer-col">
+          <CameraPanel />
+          <ThermalPanel thermal={data.thermal} />
         </div>
         <div className="app__footer-col">
           <StancePresets
@@ -272,16 +282,16 @@ function AppBody() {
   );
 }
 
-function TopBar({ connected, wsConnected, rosConnected, mode, gaitMode, onOpenSettings, onDisconnect }) {
+function TopBar({ connected, wsConnected, serialConnected, sensorsConnected, mode, gaitMode, onOpenSettings, onDisconnect }) {
   return (
     <header className="app__topbar">
       <div className="app__brand">
         <h1>Argos</h1>
         <span className={`pill${connected ? " is-ok" : " is-bad"}`}>
-          {wsConnected ? "pi ✓" : "pi ✕"} · {rosConnected ? "ros ✓" : "ros ✕"}
+          {wsConnected ? "pi ✓" : "pi ✕"} · {serialConnected ? "esp ✓" : "esp ✕"} · {sensorsConnected ? "sensors ✓" : "sensors ✕"}
         </span>
         <span className="pill">mode {mode}</span>
-        {gaitMode && <span className="pill">/gait_mode {gaitMode}</span>}
+        {gaitMode && <span className="pill">gait {gaitMode}</span>}
       </div>
       <div className="app__topbar-actions">
         <button type="button" className="ghost-btn" onClick={onOpenSettings}>

@@ -1,10 +1,16 @@
 __pycache__/
 *.pyc
 *.pyo
-*.egg-info/
-.pytest_cache/
 .venv/
-ros2_ws/build/
-ros2_ws/install/
-ros2_ws/log/
+
+# Node / dashboard build artifacts
+node_modules/
+dashboard/dist/
+
+# User runtime state
+.argos/
+
+# Editor / agent
 .claude/worktrees/
+.vscode/
+.idea/

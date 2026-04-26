@@ -1,0 +1,18 @@
+[Unit]
+Description=Argos dashboard (Node server + serial bridge to ESP32)
+After=network.target argos-sensors.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=argos
+Group=argos
+WorkingDirectory=/home/argos/Argos/dashboard
+ExecStart=/usr/bin/node pi_server/server.js
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

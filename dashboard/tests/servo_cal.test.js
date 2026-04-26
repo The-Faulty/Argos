@@ -1,17 +1,12 @@
-// Extracts ros2_ws/argos_control/Config.py::SERVO_CAL_PER_JOINT at test time
-// and diffs it against the JS mirror. If either the firmware or the Python
-// Config drifts without updating this JS table, the dashboard's direct-servo
-// slider + overrides get pointed at the wrong channel and the robot binds.
+// Self-consistency tests for shared/servo_cal.js.
 //
-// The firmware table in firmware/esp32c6/main/main.c::s_servo_cal is the real
-// source of truth. Keeping JS ↔ Python in sync here is the lightweight
-// version of that guarantee — a third test could parse the C file too.
+// The firmware's PCA9685 channel/direction table is the real source of
+// truth (firmware/argos_servo/argos_servo.ino::LEG_CONFIGS). These tests
+// pin the JS mirror's shape and round-trip behavior so calibration drift
+// or a bad refactor on the JS side fails fast.
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { dirname, resolve } from "node:path";
 
 import {
   SERVO_CAL_PER_JOINT,
@@ -22,55 +17,6 @@ import {
   clampServoDeg,
 } from "../shared/servo_cal.js";
 import { JOINT_NAMES, SERVO_CENTER_DEG } from "../shared/robot-config.js";
-
-const HERE = dirname(fileURLToPath(import.meta.url));
-const REPO = resolve(HERE, "..", "..");
-
-/**
- * Parse the Python SERVO_CAL_PER_JOINT list into `[{joint, channel, direction,
- * offset_deg, min_deg, max_deg}, ...]`. We intentionally use a simple field-
- * per-field regex rather than trying to run Python — the table is stable and
- * only this one shape is expected.
- */
-function parsePyCalTable() {
-  const src = readFileSync(
-    resolve(REPO, "ros2_ws", "argos_control", "Config.py"),
-    "utf8",
-  );
-  const block = src.match(/SERVO_CAL_PER_JOINT\s*=\s*\[([\s\S]*?)\]/);
-  if (!block) throw new Error("Could not find SERVO_CAL_PER_JOINT block");
-  const entries = [];
-  const rowRe = /\{\s*"joint"\s*:\s*"([^"]+)"\s*,\s*"channel"\s*:\s*(-?\d+)\s*,\s*"direction"\s*:\s*(-?\d+)\s*,\s*"offset_deg"\s*:\s*(-?\d+(?:\.\d+)?)\s*,\s*"min_deg"\s*:\s*(-?\d+(?:\.\d+)?)\s*,\s*"max_deg"\s*:\s*(-?\d+(?:\.\d+)?)\s*\}/g;
-  let match;
-  while ((match = rowRe.exec(block[1])) !== null) {
-    entries.push({
-      joint: match[1],
-      channel: Number(match[2]),
-      direction: Number(match[3]),
-      offset_deg: Number(match[4]),
-      min_deg: Number(match[5]),
-      max_deg: Number(match[6]),
-    });
-  }
-  return entries;
-}
-
-test("SERVO_CAL_PER_JOINT matches Python Config.py row-for-row", () => {
-  const py = parsePyCalTable();
-  assert.equal(py.length, 12, "Python table should have 12 rows");
-  assert.equal(SERVO_CAL_PER_JOINT.length, 12);
-
-  for (let i = 0; i < 12; i++) {
-    const p = py[i];
-    const j = SERVO_CAL_PER_JOINT[i];
-    assert.equal(j.joint, p.joint, `row ${i} joint`);
-    assert.equal(j.channel, p.channel, `row ${i} channel`);
-    assert.equal(j.direction, p.direction, `row ${i} direction`);
-    assert.equal(j.offset_deg, p.offset_deg, `row ${i} offset_deg`);
-    assert.equal(j.min_deg, p.min_deg, `row ${i} min_deg`);
-    assert.equal(j.max_deg, p.max_deg, `row ${i} max_deg`);
-  }
-});
 
 test("SERVO_CAL_PER_JOINT joint order matches JOINT_NAMES", () => {
   const calOrder = SERVO_CAL_PER_JOINT.map((e) => e.joint);
