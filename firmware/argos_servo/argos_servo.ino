@@ -2026,13 +2026,19 @@ static void processCommandLine(const char *line) {
 }
 
 void setup() {
-    // Bump RX FIFO before begin() — every 100 ms the firmware blocks for
-    // ~30 ms transmitting state telemetry at 921600, during which the host
-    // can land 4× set_leg_servo_angles (~480 bytes). The default 256-byte
-    // ring overflows, the next command is truncated, JSON parse falls
-    // through to "unknown command type" and the servo never moves.
+    // Buffer sizing for 921600 baud telemetry + command bursts.
+    //
+    // RX: the host sends 4× set_leg_servo_angles (~480 B) per gait tick.
+    // TX: state telemetry is ~3.5 KB every 100 ms. With the default 0-byte
+    // TX ring, Serial.print blocks for ~35 ms while the FIFO drains. During
+    // that block the RX driver task is starved, the 128-byte UART FIFO
+    // overflows, and a chunk in the middle of the 4th inbound command goes
+    // missing — observed as `{"t...servo_angles"`. Sizing TX large enough
+    // to swallow a whole telemetry frame makes Serial.print return
+    // immediately and keeps the RX task fed.
 #if defined(ESP32)
     Serial.setRxBufferSize(4096);
+    Serial.setTxBufferSize(8192);
 #endif
     Serial.begin(SERIAL_BAUD);
     unsigned long serialStartMs = millis();
