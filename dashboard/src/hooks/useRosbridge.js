@@ -150,6 +150,7 @@ function reduce(prev, msg) {
         joint_states: msg.telemetry?.joint_states ?? prev.joint_states,
         imu: msg.telemetry?.imu ?? prev.imu,
         gas: msg.telemetry?.gas ?? prev.gas,
+        thermal: msg.telemetry?.thermal ?? prev.thermal,
         gait_mode: msg.telemetry?.gait_mode ?? prev.gait_mode,
         control_mode: msg.telemetry?.control_mode ?? prev.control_mode,
         leg_ids: msg.leg_ids ?? prev.leg_ids,

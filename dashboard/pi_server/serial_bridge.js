@@ -19,6 +19,7 @@ import {
   JOINT_ROWS,
   DEFAULT_SERVO_UPDATE_RATE_HZ,
 } from "../shared/robot-config.js";
+import { inverseServoCal } from "../shared/servo_cal.js";
 
 const DASH_TO_FW_LEG = {
   FR: "front_right",
@@ -46,13 +47,20 @@ const DEFAULT_BAUD = Number(process.env.ARGOS_SERIAL_BAUD || 921600);
 // still see truncated frames in firmware error logs; tune down for snappier
 // teleop. 0 disables.
 const DEFAULT_PACING_MS = Number(process.env.ARGOS_SERIAL_PACING_MS ?? 5);
+const DEFAULT_ACK_TIMEOUT_MS = Number(process.env.ARGOS_SERIAL_ACK_TIMEOUT_MS ?? 40);
 
 export class SerialBridge extends EventEmitter {
-  constructor({ path = DEFAULT_PORT, baudRate = DEFAULT_BAUD, pacingMs = DEFAULT_PACING_MS } = {}) {
+  constructor({
+    path = DEFAULT_PORT,
+    baudRate = DEFAULT_BAUD,
+    pacingMs = DEFAULT_PACING_MS,
+    ackTimeoutMs = DEFAULT_ACK_TIMEOUT_MS,
+  } = {}) {
     super();
     this.path = path;
     this.baudRate = baudRate;
     this.pacingMs = Math.max(0, Number.isFinite(pacingMs) ? pacingMs : 0);
+    this.ackTimeoutMs = Math.max(0, Number.isFinite(ackTimeoutMs) ? ackTimeoutMs : 0);
     this.port = null;
     this.parser = null;
     this.seq = 0;
@@ -69,6 +77,7 @@ export class SerialBridge extends EventEmitter {
     this._pendingServoByLeg = new Map(); // fwLegId -> {hipServoDeg, thighServoDeg, calfServoDeg}
     this._lastSentServoByLeg = new Map(); // fwLegId -> last-sent angles, for dedupe
     this._pendingOther = []; // FIFO queue of non-servo command objects
+    this._pendingAcks = new Map(); // seq -> { resolve, timer }
     this._pumping = false;
   }
 
@@ -87,6 +96,7 @@ export class SerialBridge extends EventEmitter {
       this._pendingServoByLeg.clear();
       this._lastSentServoByLeg.clear();
       this._pendingOther.length = 0;
+      this._clearPendingAcks();
       this.emit("open");
       this._send({ type: "hello" });
       this._send({ type: "set_mode", mode: "direct_servo_angles" });
@@ -94,6 +104,7 @@ export class SerialBridge extends EventEmitter {
     });
     port.on("close", () => {
       this.connected = false;
+      this._clearPendingAcks();
       this.emit("close");
       this._scheduleReopen();
     });
@@ -232,9 +243,11 @@ export class SerialBridge extends EventEmitter {
         this._handleState(msg.payload || {});
         break;
       case "hello_ack":
+        this._resolveAck(msg.seq);
         this.emit("hello_ack", msg);
         break;
       case "ack":
+        this._resolveAck(msg.seq);
         this.emit("ack", msg);
         break;
       case "error": {
@@ -245,6 +258,7 @@ export class SerialBridge extends EventEmitter {
           Number.isFinite(msg.seq)
             ? ` (seq=${msg.seq}${sentType ? `, type=${sentType}` : ""})`
             : "";
+        this._resolveAck(msg.seq);
         this.emit("error", new Error(`${text}${tag}`));
         break;
       }
@@ -261,6 +275,7 @@ export class SerialBridge extends EventEmitter {
     // Build a JointState-shaped object that matches what the dashboard
     // expects on `joint_states`: {name: [...], position: [...]}.
     const positionDeg = new Array(JOINT_NAMES.length).fill(0);
+    const positionRad = new Array(JOINT_NAMES.length).fill(0);
     for (let li = 0; li < LEG_IDS.length; li++) {
       const legKey = LEG_IDS[li];
       const legState = dashState.legs?.[legKey];
@@ -269,11 +284,15 @@ export class SerialBridge extends EventEmitter {
       for (let ji = 0; ji < JOINT_ROWS.length; ji++) {
         const joint = JOINT_ROWS[ji];
         const idx = li * 3 + ji;
+        const jointName = JOINT_NAMES[idx];
         positionDeg[idx] = Number.isFinite(cur[joint]) ? cur[joint] : 0;
+        const jointRad = inverseServoCal(jointName, positionDeg[idx]);
+        positionRad[idx] = Number.isFinite(jointRad) ? jointRad : 0;
       }
     }
     this.emit("joint_states", {
       name: [...JOINT_NAMES],
+      position: positionRad,
       position_servo_deg: positionDeg,
     });
 
@@ -325,6 +344,7 @@ export class SerialBridge extends EventEmitter {
         return;
       }
       const seq = ++this.seq;
+      const waitForAck = this._waitForAck(seq);
       this._sentTypes.set(seq, obj.type);
       if (this._sentTypes.size > 256) {
         const firstKey = this._sentTypes.keys().next().value;
@@ -333,20 +353,50 @@ export class SerialBridge extends EventEmitter {
       const line = JSON.stringify({ ...obj, seq }) + "\n";
       this.port.write(line, (err) => {
         if (err) {
+          this._resolveAck(seq);
           this.emit("error", err);
           resolve();
           return;
         }
         if (!this.port || !this.port.isOpen) {
+          this._resolveAck(seq);
           resolve();
           return;
         }
         this.port.drain((drainErr) => {
           if (drainErr) this.emit("error", drainErr);
-          resolve();
+          waitForAck.finally(resolve);
         });
       });
     });
+  }
+
+  _waitForAck(seq) {
+    if (!(this.ackTimeoutMs > 0)) return Promise.resolve();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this._pendingAcks.delete(seq);
+        resolve();
+      }, this.ackTimeoutMs);
+      this._pendingAcks.set(seq, { resolve, timer });
+    });
+  }
+
+  _resolveAck(seq) {
+    if (!Number.isFinite(seq)) return;
+    const pending = this._pendingAcks.get(seq);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this._pendingAcks.delete(seq);
+    pending.resolve();
+  }
+
+  _clearPendingAcks() {
+    for (const pending of this._pendingAcks.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve();
+    }
+    this._pendingAcks.clear();
   }
 }
 

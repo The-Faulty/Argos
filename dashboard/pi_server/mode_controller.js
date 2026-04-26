@@ -89,6 +89,10 @@ export class ModeController extends EventEmitter {
       stabilization_pitch_gain: num(params.stabilization_pitch_gain, this.planner.config.stabilization_pitch_gain),
       stabilization_max_correction_rad: num(params.stabilization_max_correction_rad, this.planner.config.stabilization_max_correction_rad),
       imu_filter_alpha: num(params.imu_filter_alpha, this.planner.config.imu_filter_alpha),
+      use_imu_stabilization:
+        typeof params.use_imu_stabilization === "boolean"
+          ? params.use_imu_stabilization
+          : this.planner.config.use_imu_stabilization,
     });
   }
 

@@ -124,7 +124,7 @@ export class GaitPlanner {
 
   _gaitPose(mode) {
     const phases = CONTACT_PHASES[mode];
-    const phaseDur = PHASE_TIMES[mode];
+    const phaseDur = gaitPhaseTimes(this.config, mode);
     const cycleMs = phaseDur.stance_ms * 3 + phaseDur.swing_ms;
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
 
@@ -163,6 +163,7 @@ export class GaitPlanner {
   // Per-leg foot displacement contributing to one full gait cycle.
   _strideOffsets() {
     const { x, y, yaw } = this.twist;
+    const swingSeconds = gaitPhaseTimes(this.config, this.mode).swing_ms / 1000;
     const offsets = [];
     for (let i = 0; i < 4; i++) {
       const origin = [LEG_ORIGINS[0][i], LEG_ORIGINS[1][i], 0];
@@ -170,8 +171,8 @@ export class GaitPlanner {
       const yawDx = -yaw * origin[1];
       const yawDy = yaw * origin[0];
       offsets.push([
-        (x + yawDx) * (PHASE_TIMES[this.mode].swing_ms / 1000),
-        (y + yawDy) * (PHASE_TIMES[this.mode].swing_ms / 1000),
+        (x + yawDx) * swingSeconds,
+        (y + yawDy) * swingSeconds,
         0,
       ]);
     }
@@ -179,6 +180,7 @@ export class GaitPlanner {
   }
 
   _applyImuTilt(feet) {
+    if (!this.config.use_imu_stabilization) return;
     const alpha = this.config.imu_filter_alpha;
     this.imuFiltered.roll  = alpha * this.imu.roll  + (1 - alpha) * this.imuFiltered.roll;
     this.imuFiltered.pitch = alpha * this.imu.pitch + (1 - alpha) * this.imuFiltered.pitch;
@@ -238,15 +240,40 @@ function makeDefaultConfig() {
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
     imu_filter_alpha: STABILIZER_PARAM_BOUNDS.imu_filter_alpha.default,
+    use_imu_stabilization: true,
   };
 }
 
 function makeStanceFeet(cfg, zShift = 0) {
-  // 4×3 array of foot positions in body frame, FR/FL/RR/RL.
+  // 4×3 array of foot positions in body frame, FR/FL/RR/RL. Keep the per-leg
+  // front/rear offsets from DEFAULT_STANCE, but let the live-tuneable spread
+  // parameters actually shape the footprint.
+  const deltaX = cfg?.delta_x ?? GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
+  const deltaY = cfg?.delta_y ?? GAIT_TUNABLE_PARAMS.delta_y_mm.default / 1000;
+  const frontShift = DEFAULT_STANCE.FR[0] - GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
+  const rearShift = DEFAULT_STANCE.RR[0] + GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
   return LEG_IDS.map((id) => {
-    const stance = DEFAULT_STANCE[id];
-    return [stance[0], stance[1], (cfg?.default_z_ref ?? DEFAULT_Z_REF) + zShift];
+    const isFront = id === "FR" || id === "FL";
+    const isLeft = id === "FL" || id === "RL";
+    const x = isFront ? deltaX + frontShift : -deltaX + rearShift;
+    const y = isLeft ? deltaY : -deltaY;
+    return [x, y, (cfg?.default_z_ref ?? DEFAULT_Z_REF) + zShift];
   });
+}
+
+function gaitPhaseTimes(cfg, mode) {
+  const defaults = PHASE_TIMES[mode];
+  if (!defaults) return { stance_ms: 0, swing_ms: 0 };
+  const scale = clampNum(
+    (cfg?.swing_time_ms ?? GAIT_TUNABLE_PARAMS.swing_time_ms.default)
+      / GAIT_TUNABLE_PARAMS.swing_time_ms.default,
+    0.25,
+    4.0,
+  );
+  return {
+    stance_ms: defaults.stance_ms * scale,
+    swing_ms: defaults.swing_ms * scale,
+  };
 }
 
 function makeZeroJoints() {
@@ -282,6 +309,7 @@ export const _internals = {
   TICK_DT,
   CONTACT_PHASES,
   PHASE_TIMES,
+  gaitPhaseTimes,
   makeStanceFeet,
   jointAnglesRadToServoDeg,
 };

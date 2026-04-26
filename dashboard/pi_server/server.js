@@ -68,6 +68,7 @@ const state = {
     joint_states: null,
     imu: null,
     gas: null,
+    thermal: null,
     gait_mode: null,
     control_mode: null,
   },
@@ -102,12 +103,14 @@ serial.on("error", (err) => {
 
 // Joint states from the firmware (actual hardware positions in servo-deg).
 serial.on("joint_states", (msg) => {
-  // Merge with planner-emitted positions so the dashboard sees both the
-  // commanded radians and the latest actual servo degrees.
+  // Firmware joint_states are the ground truth for the live robot. Keep the
+  // planner's commanded values in separate fields so the UI does not render
+  // a pose the hardware has not physically reached.
   const last = state.telemetry.joint_states || {};
   state.telemetry.joint_states = {
     ...last,
     name: msg.name,
+    position: msg.position,
     position_servo_deg: msg.position_servo_deg,
   };
   broadcast({ type: "joint_states", msg: state.telemetry.joint_states });
@@ -121,10 +124,16 @@ serial.on("gas", (msg) => {
 
 // Joint states the planner just commanded (radians, the canonical reading).
 mode.on("joint_states", (msg) => {
+  const last = state.telemetry.joint_states || {};
   state.telemetry.joint_states = {
+    ...last,
     name: msg.name,
-    position: msg.position,
-    position_servo_deg: msg.position_servo_deg,
+    commanded_position: msg.position,
+    commanded_position_servo_deg: msg.position_servo_deg,
+    position: Array.isArray(last.position) ? last.position : msg.position,
+    position_servo_deg: Array.isArray(last.position_servo_deg)
+      ? last.position_servo_deg
+      : msg.position_servo_deg,
   };
   broadcast({ type: "joint_states", msg: state.telemetry.joint_states });
   appendRecorderSample();
@@ -166,6 +175,7 @@ sensors.on("imu", (msg) => {
   appendRecorderSample();
 });
 sensors.on("thermal", (msg) => {
+  state.telemetry.thermal = msg;
   broadcast({ type: "thermal", msg });
 });
 
