@@ -23,6 +23,7 @@ from launch.substitutions import LaunchConfiguration
 
 def generate_launch_description():
     bringup_dir = get_package_share_directory("quadruped_bringup")
+    default_control_params = os.path.join(bringup_dir, "config", "control_stack.yaml")
 
     use_sim_time_arg = DeclareLaunchArgument(
         "use_sim_time",
@@ -54,6 +55,26 @@ def generate_launch_description():
         default_value="false",
         description="Launch the rosbridge/dashboard bridge stack and Node.js dashboard server.",
     )
+    control_params_file_arg = DeclareLaunchArgument(
+        "control_params_file",
+        default_value=default_control_params,
+        description="YAML file with control-stack parameters.",
+    )
+    publish_joint_states_preview_arg = DeclareLaunchArgument(
+        "publish_joint_states_preview",
+        default_value="false",
+        description="Mirror commanded joints to /joint_states when no MCU feedback is available.",
+    )
+    esp32_serial_device_arg = DeclareLaunchArgument(
+        "esp32_serial_device",
+        default_value="/dev/ttyESP32",
+        description="Serial device passed to esp32_bridge.launch.py.",
+    )
+    esp32_baudrate_arg = DeclareLaunchArgument(
+        "esp32_baudrate",
+        default_value="115200",
+        description="Serial baud rate passed to esp32_bridge.launch.py.",
+    )
 
     state_publisher_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -71,6 +92,11 @@ def generate_launch_description():
         ),
         launch_arguments={
             "use_sim_time": LaunchConfiguration("use_sim_time"),
+            "params_file": LaunchConfiguration("control_params_file"),
+            "publish_joint_states_preview": LaunchConfiguration(
+                "publish_joint_states_preview"
+            ),
+            "enable_foothold_checker": LaunchConfiguration("enable_sensors"),
         }.items(),
     )
 
@@ -89,6 +115,10 @@ def generate_launch_description():
             os.path.join(bringup_dir, "launch", "esp32_bridge.launch.py")
         ),
         condition=IfCondition(LaunchConfiguration("enable_esp32")),
+        launch_arguments={
+            "serial_device": LaunchConfiguration("esp32_serial_device"),
+            "baudrate": LaunchConfiguration("esp32_baudrate"),
+        }.items(),
     )
     mission_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -114,6 +144,10 @@ def generate_launch_description():
             enable_mission_arg,
             start_rviz_arg,
             enable_dashboard_arg,
+            control_params_file_arg,
+            publish_joint_states_preview_arg,
+            esp32_serial_device_arg,
+            esp32_baudrate_arg,
             state_publisher_launch,
             control_stack_launch,
             sensors_launch,

@@ -1,8 +1,10 @@
-"""Start the micro-ROS serial agent that bridges the ESP32-C6 to the ROS 2 network.
+"""Start the micro-ROS serial agent that bridges the ESP32 to the ROS 2 network.
 
-The ESP32 runs micro-ROS firmware and communicates over UART at 921600 baud.
-This agent forwards those messages onto the ROS 2 DDS bus so the control nodes
-can talk to the servo driver and IMU as if they were normal ROS topics.
+The current Feather HUZZAH32 firmware uses the custom UART transport in
+firmware/esp32c6/main/esp32_serial_transport.c, which is configured for
+115200 baud. This agent forwards those messages onto the ROS 2 DDS bus so the
+control nodes can talk to the servo driver and any attached peripherals as if
+they were normal ROS topics.
 
 Usage:
   ros2 launch quadruped_bringup esp32_bridge.launch.py
@@ -19,11 +21,11 @@ def generate_launch_description():
     serial_device_arg = DeclareLaunchArgument(
         "serial_device",
         default_value="/dev/ttyESP32",
-        description="Serial device used by the ESP32-C6.",
+        description="Serial device used by the ESP32 board.",
     )
     baudrate_arg = DeclareLaunchArgument(
         "baudrate",
-        default_value="921600",
+        default_value="115200",
         description="micro-ROS serial baud rate.",
     )
 

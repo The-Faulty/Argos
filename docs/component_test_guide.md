@@ -15,8 +15,9 @@ connected component.
 
 | Component | What should already be running | Checker command | Pass signal |
 |---|---|---|---|
-| Host + device aliases | nothing | `ros2 run quadruped_bringup argos_component_check preflight --expect-lidar --expect-realsense --expect-thermal` | serial aliases, USB visibility, and optional I2C all pass |
-| ESP32 bridge | `ros2 launch quadruped_bringup esp32_bridge.launch.py` | `ros2 run quadruped_bringup argos_component_check esp32` | `/joint_states`, `/imu/data_raw`, `/gas` all pass |
+| Host + device aliases | nothing | `ros2 run quadruped_bringup argos_component_check preflight --esp32-device /dev/ttyESP32` | required host tools and the ESP32 serial path are present |
+| Minimal Pi + ESP32 path | `ros2 launch quadruped_bringup pi_minimal.launch.py` | `ros2 run quadruped_bringup argos_component_check core` | `/joint_states` is live at the expected rate |
+| ESP32 bridge | `ros2 launch quadruped_bringup esp32_bridge.launch.py` | `ros2 run quadruped_bringup argos_component_check esp32 --skip-imu` | `/joint_states` plus any installed MCU-side topics pass |
 | IMU only | `esp32_bridge.launch.py` | `ros2 run quadruped_bringup argos_component_check imu` | IMU topic rate and finite values pass |
 | Gas only | `esp32_bridge.launch.py` | `ros2 run quadruped_bringup argos_component_check gas` | gas topic appears and stays finite |
 | Joint actuation | `esp32_bridge.launch.py`, servo rail on | `ros2 run quadruped_bringup argos_joint_jog --joint FR_coxa_joint` | expected joint moves and returns to zero |
@@ -30,13 +31,25 @@ connected component.
 ## Recommended order for a new robot
 
 1. `argos_component_check preflight`
-2. `argos_component_check esp32`
+2. `argos_component_check core`
 3. `argos_joint_jog --joint FR_coxa_joint`
 4. `argos_joint_jog --bidirectional`
-5. `argos_component_check lidar`
-6. `argos_component_check realsense`
-7. `argos_component_check thermal`
-8. `argos_component_check full --include-thermal`
+5. `argos_component_check esp32 --skip-imu`
+6. `argos_component_check lidar`
+7. `argos_component_check realsense`
+8. `argos_component_check thermal`
+9. `argos_component_check full --include-thermal`
+
+## Current stripped-down robot
+
+If the current hardware is only Pi + ESP32 and you do not have the IMU, lidar,
+or RealSense installed yet, use this sequence:
+
+1. `ros2 run quadruped_bringup argos_component_check preflight --esp32-device /dev/serial/by-id/<your-board>`
+2. `ros2 launch quadruped_bringup pi_minimal.launch.py serial_device:=/dev/serial/by-id/<your-board>`
+3. `ros2 run quadruped_bringup argos_component_check core`
+4. `ros2 run quadruped_bringup argos_component_check esp32 --skip-imu`
+5. `ros2 run quadruped_bringup argos_joint_jog --joint FR_coxa_joint`
 
 ## When to use the older bench tools
 

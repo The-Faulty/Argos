@@ -177,8 +177,8 @@ def run_preflight(args: argparse.Namespace) -> int:
         check_command("micro_ros_agent", required=True),
         check_command("lsusb", required=False),
         check_command("i2cdetect", required=False),
-        check_path("/dev/ttyESP32", "ESP32 serial alias", required=True),
-        check_path("/dev/ttyLIDAR", "RPLidar serial alias", required=args.expect_lidar),
+        check_path(args.esp32_device, "ESP32 serial device", required=True),
+        check_path(args.lidar_device, "RPLidar serial device", required=args.expect_lidar),
     ]
 
     if args.expect_realsense:
@@ -310,6 +310,18 @@ def format_camera_info(msg: Any) -> str:
     return f"{msg.width}x{msg.height}"
 
 
+def build_joint_state_topic_spec(joint_state_type: Any) -> TopicSpec:
+    return TopicSpec(
+        label="joint states",
+        topic="/joint_states",
+        msg_type=joint_state_type,
+        min_messages=4,
+        min_rate_hz=20.0,
+        validator=validate_joint_state,
+        formatter=format_joint_state,
+    )
+
+
 def build_topic_specs(args: argparse.Namespace, ros: dict[str, Any]) -> tuple[str, list[TopicSpec]]:
     JointState = ros["JointState"]
     Imu = ros["Imu"]
@@ -319,39 +331,40 @@ def build_topic_specs(args: argparse.Namespace, ros: dict[str, Any]) -> tuple[st
     CameraInfo = ros["CameraInfo"]
 
     camera_root = f"/{args.camera_name}/{args.camera_name}"
+    esp32_specs = [build_joint_state_topic_spec(JointState)]
+    if not getattr(args, "skip_imu", False):
+        esp32_specs.append(
+            TopicSpec(
+                label="imu",
+                topic="/imu/data_raw",
+                msg_type=Imu,
+                min_messages=4,
+                min_rate_hz=20.0,
+                validator=validate_imu,
+                formatter=format_imu,
+            )
+        )
+    if not getattr(args, "skip_gas", False):
+        esp32_specs.append(
+            TopicSpec(
+                label="gas",
+                topic="/gas",
+                msg_type=Float32,
+                min_messages=2,
+                min_rate_hz=2.0,
+                validator=validate_gas,
+                formatter=format_gas,
+            )
+        )
 
     specs_by_command: dict[str, tuple[str, list[TopicSpec]]] = {
+        "core": (
+            "Start ros2 launch quadruped_bringup pi_minimal.launch.py enable_esp32:=true first.",
+            [build_joint_state_topic_spec(JointState)],
+        ),
         "esp32": (
             "Start ros2 launch quadruped_bringup esp32_bridge.launch.py first.",
-            [
-                TopicSpec(
-                    label="joint states",
-                    topic="/joint_states",
-                    msg_type=JointState,
-                    min_messages=4,
-                    min_rate_hz=20.0,
-                    validator=validate_joint_state,
-                    formatter=format_joint_state,
-                ),
-                TopicSpec(
-                    label="imu",
-                    topic="/imu/data_raw",
-                    msg_type=Imu,
-                    min_messages=4,
-                    min_rate_hz=20.0,
-                    validator=validate_imu,
-                    formatter=format_imu,
-                ),
-                TopicSpec(
-                    label="gas",
-                    topic="/gas",
-                    msg_type=Float32,
-                    min_messages=2,
-                    min_rate_hz=2.0,
-                    validator=validate_gas,
-                    formatter=format_gas,
-                ),
-            ],
+            esp32_specs,
         ),
         "imu": (
             "Start ros2 launch quadruped_bringup esp32_bridge.launch.py first.",
@@ -456,11 +469,7 @@ def build_topic_specs(args: argparse.Namespace, ros: dict[str, Any]) -> tuple[st
         "Start esp32_bridge.launch.py plus sensors.launch.py first. "
         "Add mission_stack.launch.py if you pass --include-thermal."
     )
-    full_specs = (
-        specs_by_command["esp32"][1]
-        + specs_by_command["lidar"][1]
-        + specs_by_command["realsense"][1]
-    )
+    full_specs = esp32_specs + specs_by_command["lidar"][1] + specs_by_command["realsense"][1]
     if getattr(args, "include_thermal", False):
         full_specs += specs_by_command["thermal"][1]
     specs_by_command["full"] = (full_hint, full_specs)
@@ -557,6 +566,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Check commands, device aliases, USB visibility, and optional I2C devices.",
     )
     preflight.add_argument(
+        "--esp32-device",
+        default="/dev/ttyESP32",
+        help="ESP32 serial path or alias to require. Default: /dev/ttyESP32.",
+    )
+    preflight.add_argument(
+        "--lidar-device",
+        default="/dev/ttyLIDAR",
+        help="Lidar serial path or alias to require. Default: /dev/ttyLIDAR.",
+    )
+    preflight.add_argument(
         "--expect-lidar",
         action="store_true",
         help="Require the lidar alias and attempt a USB sanity check.",
@@ -590,7 +609,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     for command, help_text in (
-        ("esp32", "Check the MCU bridge, /joint_states, /imu/data_raw, and /gas."),
+        ("core", "Check only the MCU /joint_states feedback path."),
+        ("esp32", "Check /joint_states plus optional /imu/data_raw and /gas."),
         ("imu", "Check only the IMU topic."),
         ("gas", "Check only the gas topic."),
         ("lidar", "Check only /scan."),
@@ -610,6 +630,17 @@ def build_parser() -> argparse.ArgumentParser:
             default="camera",
             help="RealSense camera namespace. Default: camera.",
         )
+        if command in {"esp32", "full"}:
+            subparser.add_argument(
+                "--skip-imu",
+                action="store_true",
+                help="Do not require /imu/data_raw.",
+            )
+            subparser.add_argument(
+                "--skip-gas",
+                action="store_true",
+                help="Do not require /gas.",
+            )
         if command == "full":
             subparser.add_argument(
                 "--include-thermal",

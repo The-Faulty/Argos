@@ -39,7 +39,7 @@ def _dashboard_server_dir() -> str:
 
 
 def generate_launch_description():
-    bringup_dir = get_package_share_directory("argos_bringup")
+    bringup_dir = get_package_share_directory("quadruped_bringup")
     dashboard_dir = _dashboard_server_dir()
 
     port_arg = DeclareLaunchArgument(

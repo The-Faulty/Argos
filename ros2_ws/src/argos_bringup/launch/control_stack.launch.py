@@ -36,8 +36,13 @@ def generate_launch_description():
     )
     publish_joint_states_preview_arg = DeclareLaunchArgument(
         "publish_joint_states_preview",
-        default_value="true",
+        default_value="false",
         description="Mirror commanded joints to /joint_states so RViz can show the robot pose.",
+    )
+    enable_foothold_checker_arg = DeclareLaunchArgument(
+        "enable_foothold_checker",
+        default_value="true",
+        description="Start the foothold_checker_node that consumes aligned depth images.",
     )
     enable_dashboard_bridge_arg = DeclareLaunchArgument(
         "enable_dashboard_bridge",
@@ -75,6 +80,7 @@ def generate_launch_description():
         name="foothold_checker_node",
         parameters=common_parameters,
         output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_foothold_checker")),
     )
     safety_node = Node(
         package="argos_control",
@@ -117,6 +123,7 @@ def generate_launch_description():
             params_file_arg,
             use_sim_time_arg,
             publish_joint_states_preview_arg,
+            enable_foothold_checker_arg,
             enable_dashboard_bridge_arg,
             command_mux,
             gait_planner,

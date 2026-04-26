@@ -2,7 +2,7 @@
 
 Argos is a low-cost search and rescue quadruped being built for Georgia Tech
 Senior Design in Spring 2026. The system is split between a Raspberry Pi 4
-running ROS 2 Humble and an ESP32-C6 handling the fast control loop.
+running ROS 2 Humble and an ESP32-class controller handling the fast control loop.
 
 ## Current expo focus
 
@@ -38,6 +38,7 @@ Primary docs:
 
 - `docs/build_guide.md`
 - `docs/component_test_guide.md`
+- `docs/pi_minimal_setup.md` for the current Pi + HUZZAH32, no-sensor state
 
 ## Development environment
 

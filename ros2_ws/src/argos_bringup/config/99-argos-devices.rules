@@ -13,11 +13,15 @@
 # RPLiDAR A1M8 via CP2102 USB-UART bridge
 SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", SYMLINK+="ttyLIDAR", GROUP="dialout", MODE="0660"
 
-# ESP32-C6 running micro-ROS over native USB CDC.
+# ESP32 dev boards vary a lot. The current Feather HUZZAH32 uses a USB-UART
+# bridge, so you should match on SERIAL as well as vendor/product; otherwise it
+# can collide with the LiDAR's CP210x bridge and both devices may claim the
+# same alias. Discover the fields with:
 #
-# 303a:1001 is Espressif's standard JTAG/CDC composite (covers most C-series
-# boards via the built-in USB Serial/JTAG controller). Verify on the actual
-# board with `lsusb` before relying on this — third-party boards sometimes
-# wire a CP210x or CH340 instead, in which case the IDs match the LiDAR rule
-# above and you'll need a SERIAL match to disambiguate.
-SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", SYMLINK+="ttyESP32", GROUP="dialout", MODE="0660"
+#   udevadm info -a -n /dev/ttyUSB0 | grep -E '{idVendor}|{idProduct}|{serial}'
+#
+# Example for a CP210x-based ESP32 board:
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="10c4", ATTRS{idProduct}=="ea60", ATTRS{serial}=="<board-serial>", SYMLINK+="ttyESP32", GROUP="dialout", MODE="0660"
+#
+# Native-USB ESP32-C6 boards often look like this instead:
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", ATTRS{serial}=="<board-serial>", SYMLINK+="ttyESP32", GROUP="dialout", MODE="0660"

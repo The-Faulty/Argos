@@ -51,6 +51,7 @@ export class RosBridgeClient {
     this._listeners = new Set();
     this._publishers = new Map();
     this._subscribers = new Map();
+    this._reconnectTimer = null;
 
     this.ros.on("connection", () => {
       this.connected = true;
@@ -59,11 +60,25 @@ export class RosBridgeClient {
     this.ros.on("error", (error) => {
       this.connected = false;
       this._emit({ event: "error", error: String(error?.message ?? error) });
+      this._scheduleReconnect();
     });
     this.ros.on("close", () => {
       this.connected = false;
       this._emit({ event: "closed" });
+      this._scheduleReconnect();
     });
+  }
+
+  _scheduleReconnect() {
+    if (this._reconnectTimer) return;
+    this._reconnectTimer = setTimeout(() => {
+      this._reconnectTimer = null;
+      try {
+        this.ros.connect(this.url);
+      } catch {
+        this._scheduleReconnect();
+      }
+    }, 1000);
   }
 
   onStatus(listener) {
