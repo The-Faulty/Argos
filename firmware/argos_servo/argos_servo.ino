@@ -45,9 +45,12 @@ static const uint8_t PCA9685_ADDRESS = 0x40;
 static const float DEFAULT_PCA9685_FREQUENCY_HZ = 150.0f;
 static const float MIN_PCA9685_FREQUENCY_HZ = 40.0f;
 static const float MAX_PCA9685_FREQUENCY_HZ = 200.0f;
-static const uint8_t I2C_SDA_PIN = 6;
-static const uint8_t I2C_SCL_PIN = 7;
-static const int GAS_ADC_PIN = 1;
+// Adafruit HUZZAH32 Feather: SDA=23, SCL=22 (silkscreen labels). GPIO 6/7
+// on classic ESP32 are wired to the internal SPI flash and unusable.
+static const uint8_t I2C_SDA_PIN = 23;
+static const uint8_t I2C_SCL_PIN = 22;
+// GPIO 36 = A4 on the Feather, ADC1 channel — safe with WiFi/Serial.
+static const int GAS_ADC_PIN = 36;
 static const float SERVO_MIN_PULSE_US = 500.0f;
 static const float SERVO_MAX_PULSE_US = 2500.0f;
 static const float NEUTRAL_THIGH_THETA = 0.0f;

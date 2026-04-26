@@ -148,6 +148,9 @@ sensors.on("close", () => {
   state.telemetry.connected = { ...state.telemetry.connected, sensors: false };
   broadcast({ type: "connected", connected: state.telemetry.connected });
 });
+sensors.on("error", (err) => {
+  console.warn("[sensors]", err.message || err);
+});
 sensors.on("imu", (msg) => {
   // Expected shape from sidecar: {type:"imu", quaternion:[x,y,z,w], accel, gyro, ts}.
   let enriched = msg;
