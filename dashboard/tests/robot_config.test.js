@@ -89,8 +89,14 @@ test("coupled femur/tibia samples match measured safe envelope", () => {
   assert.deepEqual(COUPLED_BOT_MAX_SAMPLES_DEG, [95.0, 120.0, 150.0, 180.0, 180.0]);
 });
 
-test("walking and rotate defaults are intentionally assertive", () => {
-  assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.50);
+test("walking and rotate defaults are tuned for controlled motion", () => {
+  // MAX_LIN_VEL = 0.18 m/s saturates the trot stride near full deflection
+  // (with MAX_STRIDE_X = 0.045 m and ~280 ms stance). Was 0.50 — at that
+  // speed the joystick became binary "off / full speed" past the deadzone
+  // because stride hit the cap at <50% deflection. Changing this also
+  // requires re-checking that full-stick stride still fits inside
+  // DEFAULT_FOOT_REACH_X without invoking the per-leg blend-back.
+  assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.18);
   assert.equal(JOYSTICK_SCALE.MAX_ANG_VEL, 1.4);
   assert.deepEqual(DEFAULT_ROTATE_SETTINGS, {
     rotate_increment_deg: 20.0,

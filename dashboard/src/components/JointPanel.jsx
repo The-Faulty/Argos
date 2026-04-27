@@ -21,6 +21,7 @@ import {
   LEG_LABELS,
 } from "../../shared/robot-config.js";
 import {
+  clamp_joint_matrix,
   coupled_bot_limits_joint_rad,
   coupled_top_limits_joint_rad,
 } from "../../shared/kinematics.js";
@@ -51,9 +52,10 @@ export default function JointPanel({
     // rows at their current effective value). Push it to the shared
     // preview first so LegDetail's SVG + stats move in lock-step, then
     // fire the 12-vector command so the Pi catches up on the next tick.
-    const activeAngles = JOINT_ROWS.map((r) =>
+    const proposedAngles = JOINT_ROWS.map((r) =>
       r === row ? valueRad : (full[`${activeLeg}_${r}_joint`] ?? 0),
     );
+    const [activeAngles] = clamp_joint_matrix([proposedAngles], 0.0, DEFAULT_JOINT_LIMITS_RAD);
     onPreviewAngles?.({ leg: activeLeg, angles: activeAngles });
 
     const next = { ...full };
@@ -81,7 +83,7 @@ export default function JointPanel({
         const maxDeg = limits[1] * RAD2DEG;
         const absMinDeg = absLimits[0] * RAD2DEG;
         const absMaxDeg = absLimits[1] * RAD2DEG;
-        const sliderDeg = clampNum(deg, minDeg, maxDeg);
+        const sliderDeg = clampNum(deg, absMinDeg, absMaxDeg);
         const nearLimit = deg - minDeg < NEAR_LIMIT_DEG || maxDeg - deg < NEAR_LIMIT_DEG;
         // True when the coupled envelope is currently tighter than the
         // hardware-absolute envelope — i.e., the other joint's position is
@@ -89,11 +91,11 @@ export default function JointPanel({
         // the operator can see the coupling is actively constraining them.
         const coupledTighter =
           Math.abs(minDeg - absMinDeg) > 0.05 || Math.abs(maxDeg - absMaxDeg) > 0.05;
-        // Place the coupled-allowed band as a colored region on the track.
-        // The slider's min/max are kept at the coupled values (so the thumb
-        // can't visit the disallowed zone) but the absolute envelope is
-        // overlaid as a faint outer band so the operator can see HOW MUCH
-        // of the joint's full range is currently locked out.
+        // Place the current coupled-allowed band as a colored region on the
+        // track. The slider itself spans the full measured joint range; when
+        // a drag crosses the current coupled band, the paired femur/tibia
+        // value is clamped in the outgoing command instead of trapping the
+        // thumb at an old-looking limit.
         const absSpan = Math.max(1e-6, absMaxDeg - absMinDeg);
         const coupledLoPct = Math.max(0, (minDeg - absMinDeg) / absSpan) * 100;
         const coupledHiPct = Math.min(100, (maxDeg - absMinDeg) / absSpan) * 100;
@@ -123,9 +125,7 @@ export default function JointPanel({
               step="0.1"
               value={sliderDeg}
               onChange={(e) => {
-                // Clamp to coupled limits at the input boundary so a value
-                // that violates the coupled envelope can't ever be sent.
-                const next = clampNum(Number(e.target.value), minDeg, maxDeg);
+                const next = clampNum(Number(e.target.value), absMinDeg, absMaxDeg);
                 onChange(row, next * DEG2RAD);
               }}
               style={{ background: trackBg }}

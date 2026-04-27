@@ -14,7 +14,7 @@ import {
   MODE_OPTIONS,
   DEFAULT_JOINT_LIMITS_RAD,
 } from "../shared/robot-config.js";
-import { fourLegsInverseKinematics } from "../shared/argos_kinematics.js";
+import { clamp_joint_matrix, fourLegsInverseKinematics } from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 import { GaitPlanner, clampFootInReach, _internals as gaitInternals } from "./gait_planner.js";
 
@@ -136,8 +136,9 @@ export class ModeController extends EventEmitter {
       this.emit("error", "joint_angles requires 12 numbers");
       return;
     }
-    const servoDeg = jointAnglesRadToServoDeg(anglesRad);
-    this._publishServoDeg(servoDeg, anglesRad);
+    const clamped = clampFlatJointAnglesRad(anglesRad, this.planner.jointLimitsRad);
+    const servoDeg = jointAnglesRadToServoDeg(clamped);
+    this._publishServoDeg(servoDeg, clamped);
   }
 
   // dashboard `servo_angles` command. anglesDeg = 12-element array, 0..180.
@@ -269,9 +270,10 @@ export class ModeController extends EventEmitter {
       const stances = await this.getStances();
       const saved = stances[mode];
       if (saved && Array.isArray(saved.angles_rad) && saved.angles_rad.length === 12) {
+        const clamped = clampFlatJointAnglesRad(saved.angles_rad, this.planner.jointLimitsRad);
         return {
-          jointAnglesRad: saved.angles_rad,
-          servoAnglesDeg: jointAnglesRadToServoDeg(saved.angles_rad),
+          jointAnglesRad: clamped,
+          servoAnglesDeg: jointAnglesRadToServoDeg(clamped),
         };
       }
     }
@@ -291,6 +293,18 @@ function flattenJoints(angles4x3) {
     }
   }
   return out;
+}
+
+function unflattenJoints(angles12) {
+  const out = [];
+  for (let li = 0; li < 4; li++) {
+    out.push(angles12.slice(li * 3, li * 3 + 3));
+  }
+  return out;
+}
+
+function clampFlatJointAnglesRad(angles12, limits = DEFAULT_JOINT_LIMITS_RAD) {
+  return flattenJoints(clamp_joint_matrix(unflattenJoints(angles12), 0.0, limits));
 }
 
 function sleep(ms) {

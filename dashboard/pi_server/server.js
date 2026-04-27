@@ -30,7 +30,6 @@ import { euler_from_quaternion } from "./quaternion.js";
 import {
   loadServoOverrides,
   saveServoOverrides,
-  loadJointLimits,
   saveJointLimits,
   loadStances,
   saveStances,
@@ -599,7 +598,11 @@ function appendRecorderSample() {
 async function bootstrap() {
   state.servoOverrides = await loadServoOverrides();
   setServoCalOverrides(state.servoOverrides);
-  state.jointLimits = await loadJointLimits();
+  // Joint limits now come from the measured defaults + coupled femur/tibia
+  // envelope in shared/robot-config.js and firmware/argos_servo.ino. Ignore
+  // any stale hand-edited joint_limits.json so old settings cannot silently
+  // narrow the dashboard sliders or gait planner on boot.
+  state.jointLimits = {};
   state.stances = await loadStances();
   state.rotateSettings = await loadRotateSettings();
   state.servoSpeed = await loadServoSpeed();

@@ -255,10 +255,22 @@ export const MODE_OPTIONS = [
 ];
 
 // ─── Servo speed + PWM rate defaults (ported from andy-servo-control) ────
+// Defaults are deliberately conservative — slower than the SG90's hardware
+// max so mode transitions (idle → stand → trot) ease in instead of snapping
+// and so the operator's first impression is "controlled and smooth" rather
+// than the previous twitchy 180–300 °/s. Per-tick gait deltas at 50 Hz are
+// well under these caps (femur swings ~2°/tick at moderate joystick), so
+// gait motion isn't rate-limited; the caps only engage on big setpoint
+// jumps like mode transitions, which is exactly when smoothness matters.
+//
+// The Settings drawer's "Servo speed" sliders override these per-row, so
+// the operator can crank them back up to match the old aggressive behavior
+// if a slower demo isn't what they want. Bounds below allow up to 600 °/s
+// for that case.
 export const DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = {
-  coxa:  180.0,
-  femur: 240.0,
-  tibia: 300.0,
+  coxa:  60.0,
+  femur: 80.0,
+  tibia: 100.0,
 };
 export const SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC = { min: 30.0, max: 600.0 };
 
@@ -317,10 +329,12 @@ export const GAIT_TUNABLE_PARAMS = {
     label: "Swing time per foot",
     min: 40,
     // 300 ms swing × 0.6 m/s twist = 0.18 m step per cycle, just under the
-    // sagittal IK limit at neutral z. Was 200; longer swings let the operator
-    // dial in a real walking stride from the joystick.
+    // sagittal IK limit at neutral z. Was 120; bumped to 180 so the default
+    // gait reads as a deliberate walk instead of a quick scuttle. The
+    // WalkingPanel "Step duration" slider exposes this live so the operator
+    // can dial it tighter for demos.
     max: 300,
-    default: 120,
+    default: 180,
     units: "ms",
   },
   rotate_rate_max: {
@@ -344,12 +358,17 @@ export const GAIT_TUNABLE_PARAMS = {
 // ─── Joystick → SI mapping ────────────────────────────────────────────────
 // Joystick UI emits unit-vector deflection in [-1, 1]. The planner clamps
 // twist at ±0.6 m/s (gait_planner.setTwist) and ±rotate_rate_max rad/s, so
-// MAX_LIN_VEL must stay ≤ 0.6. Lower for safer demo runs; raise toward the
-// planner cap once stride sizing is happy. DEADZONE is a radial fraction —
-// any |stick| below it sends zero so a slightly off-center stick doesn't
-// dribble commands.
+// MAX_LIN_VEL must stay ≤ 0.6. DEADZONE is a radial fraction — any |stick|
+// below it sends zero so a slightly off-center stick doesn't dribble
+// commands.
+//
+// MAX_LIN_VEL was 0.50 — at that speed the trot stride hits MAX_STRIDE_X
+// (0.045 m) at less than half-deflection, so the joystick was effectively
+// binary "off / full speed" past the deadzone. 0.18 m/s puts the saturation
+// point near full deflection, giving the operator a usable control range
+// across the whole stick travel and matching the slower-by-default gait.
 export const JOYSTICK_SCALE = {
-  MAX_LIN_VEL: 0.50, // m/s at full deflection
+  MAX_LIN_VEL: 0.18, // m/s at full deflection (was 0.50; lower = more controlled)
   MAX_ANG_VEL: 1.4,  // rad/s; reserved for yaw stick
   DEADZONE: 0.08,    // normalized fraction
 };

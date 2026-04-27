@@ -1,47 +1,36 @@
 // Slide-out settings drawer.
 //
-// Six sections:
+// Five sections:
 //   1. Per-joint servo inversion toggles (12 switches) → /api/settings/servo_overrides
-//   2. Per-joint min/max number inputs (12 × 2) → /api/settings/joint_limits
-//   3. Servo speed limits (per-row deg/s) + PWM update rate (Hz) → /api/settings/servo_speed, /api/settings/servo_update_rate
-//   4. Rotate tuneables (increment, rate, calibration factor) → /api/settings/rotate
-//   5. Stabilizer params (roll gain, pitch gain, max correction, filter alpha, on/off) → /api/params/stabilizer
-//   6. Body-height slider → /api/params/gait/default_z_ref_mm
+//   2. Servo speed limits (per-row deg/s) + PWM update rate (Hz) → /api/settings/servo_speed, /api/settings/servo_update_rate
+//   3. Rotate tuneables (increment, rate, calibration factor) → /api/settings/rotate
+//   4. Stabilizer params (roll gain, pitch gain, max correction, filter alpha, on/off) → /api/params/stabilizer
+//   5. Body-height slider → /api/params/gait/default_z_ref_mm
 //
 // All edits debounce before POSTing so a slider drag doesn't spam the Pi server.
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
-  COUPLED_BOT_MAX_SAMPLES_DEG,
-  COUPLED_BOT_MIN_SAMPLES_DEG,
-  COUPLED_TOP_SAMPLES_DEG,
-  DEFAULT_JOINT_LIMITS_RAD,
   DEFAULT_ROTATE_SETTINGS,
   DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
   DEFAULT_SERVO_UPDATE_RATE_HZ,
   GAIT_TUNABLE_PARAMS,
   JOINT_NAMES,
   JOINT_ROWS,
-  LEG_IDS,
   ROTATE_SETTINGS_BOUNDS,
   SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC,
-  SERVO_CENTER_DEG,
   SERVO_UPDATE_RATE_BOUNDS_HZ,
   STABILIZER_PARAM_BOUNDS,
 } from "../../shared/robot-config.js";
-
-const RAD2DEG = 180.0 / Math.PI;
 
 export default function SettingsDrawer({
   open,
   onClose,
   servoOverrides,
-  jointLimits,
   rotateSettings,
   servoSpeed,
   servoUpdateRate,
   onSaveServoOverrides,
-  onSaveJointLimits,
   onSaveRotateSettings,
   onSaveStabilizerParams,
   onSaveGaitParam,
@@ -56,8 +45,6 @@ export default function SettingsDrawer({
       </header>
       <div className="settings-drawer__scroll">
         <ServoOverridesSection value={servoOverrides} onSave={onSaveServoOverrides} />
-        <JointLimitsSection value={jointLimits} onSave={onSaveJointLimits} />
-        <CoupledEnvelopeSection />
         <ServoRateSection
           speed={servoSpeed}
           updateRate={servoUpdateRate}
@@ -133,101 +120,6 @@ function ServoOverridesSection({ value, onSave }) {
       </table>
     </Section>
   );
-}
-
-// ─── Section: per-joint min/max limits ──────────────────────────────────
-
-function JointLimitsSection({ value, onSave }) {
-  const initial = useMemo(() => computeInitial(value), [value]);
-  const [draft, setDraft] = useState(initial);
-  useEffect(() => setDraft(initial), [initial]);
-
-  function setLimit(jointName, kind, deg) {
-    const cur = draft[jointName] || { ...initial[jointName] };
-    const next = { ...draft, [jointName]: { ...cur, [kind]: deg } };
-    setDraft(next);
-    // Drop entries matching defaults so the persisted file stays small.
-    const outgoing = {};
-    for (const [n, v] of Object.entries(next)) {
-      const d = defaultDegFor(n);
-      if (v.min_deg === d.min_deg && v.max_deg === d.max_deg) continue;
-      outgoing[n] = v;
-    }
-    onSave?.(outgoing);
-  }
-
-  function resetAll() {
-    const clean = {};
-    setDraft(computeInitial(clean));
-    onSave?.(clean);
-  }
-
-  return (
-    <Section title="Joint limits (per leg)">
-      <p className="muted">Measured defaults in degrees; enter decimals for tight tuning.</p>
-      <button type="button" className="ghost-btn" onClick={resetAll}>
-        Reset limits to measured defaults
-      </button>
-      <div className="settings-grid-legs">
-        {LEG_IDS.map((leg) => (
-          <div key={leg}>
-            <h4>{leg}</h4>
-            <table className="settings-table">
-              <thead><tr><th>Joint</th><th>min°</th><th>max°</th></tr></thead>
-              <tbody>
-                {JOINT_ROWS.map((row) => {
-                  const jointName = `${leg}_${row}_joint`;
-                  const cur = draft[jointName] || defaultDegFor(jointName);
-                  return (
-                    <tr key={row}>
-                      <th scope="row">{row}</th>
-                      <td><input type="number" step="1" value={cur.min_deg}
-                                 onChange={(e) => setLimit(jointName, "min_deg", Number(e.target.value))}
-                                 style={{ width: 70 }} /></td>
-                      <td><input type="number" step="1" value={cur.max_deg}
-                                 onChange={(e) => setLimit(jointName, "max_deg", Number(e.target.value))}
-                                 style={{ width: 70 }} /></td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        ))}
-      </div>
-      <h4>Coupled femur/tibia envelope</h4>
-      <table className="settings-table">
-        <thead><tr><th>Femur°</th><th>Tibia min°</th><th>Tibia max°</th></tr></thead>
-        <tbody>
-          {COUPLED_TOP_SAMPLES_DEG.map((topServoDeg, i) => (
-            <tr key={topServoDeg}>
-              <th scope="row">{fmtDeg(topServoDeg - SERVO_CENTER_DEG)}</th>
-              <td>{fmtDeg(COUPLED_BOT_MIN_SAMPLES_DEG[i] - SERVO_CENTER_DEG)}</td>
-              <td>{fmtDeg(COUPLED_BOT_MAX_SAMPLES_DEG[i] - SERVO_CENTER_DEG)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </Section>
-  );
-}
-
-function defaultDegFor(jointName) {
-  const row = jointName.split("_")[1];
-  const [lo, hi] = DEFAULT_JOINT_LIMITS_RAD[row];
-  return { min_deg: lo * RAD2DEG, max_deg: hi * RAD2DEG };
-}
-
-function computeInitial(value) {
-  const out = {};
-  for (const n of JOINT_NAMES) {
-    out[n] = value?.[n] ? { ...value[n] } : defaultDegFor(n);
-  }
-  return out;
-}
-
-function fmtDeg(value) {
-  return Number(value).toFixed(0);
 }
 
 // ─── Section: rotate tuneables ──────────────────────────────────────────
@@ -318,56 +210,6 @@ function StabilizerSection({ onSave }) {
       <RangeField label="IMU filter α" bounds={b.imu_filter_alpha}
                   value={draft.imu_filter_alpha} step={0.01}
                   onChange={(v) => setField("imu_filter_alpha", v)} />
-    </Section>
-  );
-}
-
-// ─── Section: coupled bell-crank envelope (read-only) ───────────────────
-//
-// The femur and tibia are mechanically coupled through the bell-crank, so
-// the per-joint min/max in `JointLimitsSection` is only the outer hardware
-// envelope. The realistic envelope at any moment is a polygon: at femur
-// = -50° tibia is restricted to [-90, +5]; at femur = 0 tibia is restricted
-// to [-25, +90]. The IK and the JointPanel slider both enforce this live;
-// this table just documents the five operator-measured sample points so
-// it's clear from one place what the dashboard considers reachable.
-//
-// Source: scripts/limit_finder.py probe output, pinned in robot-config.js
-// as COUPLED_TOP_SAMPLES_DEG / COUPLED_BOT_MIN_SAMPLES_DEG /
-// COUPLED_BOT_MAX_SAMPLES_DEG. Re-probe and re-edit those constants if the
-// measured envelope changes (no edit needed here — the table reads them
-// directly).
-function CoupledEnvelopeSection() {
-  const rows = COUPLED_TOP_SAMPLES_DEG.map((femurServoDeg, i) => ({
-    femurJointDeg: femurServoDeg - SERVO_CENTER_DEG,
-    tibiaMinJointDeg: COUPLED_BOT_MIN_SAMPLES_DEG[i] - SERVO_CENTER_DEG,
-    tibiaMaxJointDeg: COUPLED_BOT_MAX_SAMPLES_DEG[i] - SERVO_CENTER_DEG,
-  }));
-  return (
-    <Section title="Coupled bell-crank envelope (read-only)">
-      <p className="muted" style={{ marginTop: 0 }}>
-        Allowed tibia range at each femur control point. The slider in the
-        joint panel narrows live to whatever value sits between these samples
-        as you move the other joint.
-      </p>
-      <table className="settings-table">
-        <thead>
-          <tr>
-            <th>femur (°)</th>
-            <th>tibia min (°)</th>
-            <th>tibia max (°)</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.femurJointDeg}>
-              <td>{r.femurJointDeg.toFixed(0)}</td>
-              <td>{r.tibiaMinJointDeg.toFixed(0)}</td>
-              <td>{r.tibiaMaxJointDeg.toFixed(0)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
     </Section>
   );
 }

@@ -78,27 +78,18 @@ const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 const MAX_STRIDE_X = 0.045;
 const MAX_STRIDE_Y = 0.025;
 
-// Default contact phase patterns (4 columns = phases, rows = legs FR/FL/RR/RL).
-// 1 = stance (foot down), 0 = swing (foot in air).
-const CONTACT_PHASES = {
-  trot: [
-    [1, 0, 1, 1], // FR
-    [1, 1, 1, 0], // FL
-    [1, 1, 1, 0], // RR
-    [1, 0, 1, 1], // RL
-  ],
-  crawl: [
-    [1, 1, 1, 0], // FR — swings on phase 4
-    [1, 0, 1, 1], // FL — swings on phase 2
-    [1, 1, 0, 1], // RR — swings on phase 3
-    [0, 1, 1, 1], // RL — swings on phase 1
-  ],
-};
-
-const PHASE_TIMES = {
-  // ms per phase: 3 stance phases + 1 swing phase per leg
-  trot:  { stance_ms: 75,  swing_ms: 150 },
-  crawl: { stance_ms: 250, swing_ms: 250 },
+// Gait profiles. Each leg gets one swing window per cycle; the rest is
+// stance. Phase offsets are in FR/FL/RR/RL order. Trot moves diagonal pairs;
+// crawl is a conservative four-beat sequence with one leg lifted at a time.
+const GAIT_PROFILES = {
+  trot: {
+    swingFraction: 0.34,
+    phaseOffsets: [0.00, 0.50, 0.50, 0.00],
+  },
+  crawl: {
+    swingFraction: 0.22,
+    phaseOffsets: [0.75, 0.25, 0.50, 0.00],
+  },
 };
 
 export class GaitPlanner {
@@ -205,9 +196,9 @@ export class GaitPlanner {
   }
 
   _gaitPose(mode) {
-    const phases = CONTACT_PHASES[mode];
-    const phaseDur = gaitPhaseTimes(this.config, mode);
-    const cycleMs = phaseDur.stance_ms * 3 + phaseDur.swing_ms;
+    const timing = gaitProfileTiming(this.config, mode);
+    if (!timing) return null;
+    const { cycleMs, stanceMs, swingFraction, phaseOffsets } = timing;
 
     // Zero twist → freeze the gait clock and emit the neutral footprint.
     // Without this, gaitTickMs keeps advancing and swing legs still lift to
@@ -220,12 +211,10 @@ export class GaitPlanner {
       this._applyImuTilt(baseFeet);
       // All four feet are on the ground at neutral pose → stance window.
       const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i], "stance", this.jointLimitsRad));
-      return this._solveAndCache(clamped);
+      return this._solveAndCache(clamped, { lockCoxa: true });
     }
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
 
-    const phaseDurMs = cycleMs / 4;
-    const stanceMs = cycleMs - phaseDurMs; // 3 of 4 phases under both contact patterns
     // Stride amplitude during stance is body_velocity × stance_time (foot
     // must travel that far backward in body frame to keep ground contact
     // while the body advances). Using cycle time instead overshoots by the
@@ -244,33 +233,27 @@ export class GaitPlanner {
     const phaseTag = new Array(4);
 
     const feet = baseFeet.map((foot, legIdx) => {
-      // Each leg has exactly one swing phase per cycle in CONTACT_PHASES.
-      const swingPhase = phases[legIdx].indexOf(0);
-      const swingStartMs = swingPhase * phaseDurMs;
-      const swingEndMs   = swingStartMs + phaseDurMs;
-      const t = this.gaitTickMs;
-      const inSwing = t >= swingStartMs && t < swingEndMs;
+      const phase = ((this.gaitTickMs / cycleMs) + phaseOffsets[legIdx]) % 1.0;
+      const inSwing = phase < swingFraction;
 
       if (inSwing) {
-        // Swing: -stride/2 → +stride/2 with sin-arc lift (peak at u=0.5).
-        const u = (t - swingStartMs) / phaseDurMs;
+        // Swing: -stride/2 -> +stride/2 with a smooth fore/aft transfer and
+        // sin-arc lift (peak at u=0.5). Using the true swing duration here
+        // keeps the operator's "step duration" setting literal.
+        const u = phase / swingFraction;
+        const eased = smoothStep(u);
         const lift = this.config.z_clearance * Math.sin(Math.PI * u);
         phaseTag[legIdx] = "swing";
         return [
-          foot[0] + stride[legIdx][0] * (u - 0.5),
-          foot[1] + stride[legIdx][1] * (u - 0.5),
+          foot[0] + stride[legIdx][0] * (eased - 0.5),
+          foot[1] + stride[legIdx][1] * (eased - 0.5),
           foot[2] + lift,
         ];
       }
 
       // Stance: continuous slide from +stride/2 (just touched down) to
-      // -stride/2 (about to lift) over the FULL stance duration. Compute
-      // elapsed-since-swing-end with a wrap so the slide doesn't reset at
-      // the cycle boundary.
-      const elapsed = (t >= swingEndMs)
-        ? t - swingEndMs
-        : t + (cycleMs - swingEndMs);
-      const u = elapsed / stanceMs;
+      // -stride/2 (about to lift) over the true stance duration.
+      const u = (phase - swingFraction) / (1.0 - swingFraction);
       phaseTag[legIdx] = "stance";
       return [
         foot[0] + stride[legIdx][0] * (0.5 - u),
@@ -287,7 +270,8 @@ export class GaitPlanner {
     // reach the target. Re-probe both windows with
     // scripts/probe_foot_reach.mjs after any z_clearance change.
     const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i], phaseTag[i], this.jointLimitsRad));
-    return this._solveAndCache(clamped);
+    const lockCoxa = Math.abs(this.twist.y) < 1e-6 && Math.abs(this.twist.yaw) < 1e-6;
+    return this._solveAndCache(clamped, { lockCoxa });
   }
 
   // Per-leg peak-to-peak foot displacement over one stance window (in body
@@ -340,7 +324,7 @@ export class GaitPlanner {
     }
   }
 
-  _solveAndCache(feet) {
+  _solveAndCache(feet, { lockCoxa = false } = {}) {
     const ik = fourLegsInverseKinematics(feet, { limits: this.jointLimitsRad });
     if (!ik.ok) {
       // Refuse to publish bad IK — return last good output.
@@ -352,6 +336,9 @@ export class GaitPlanner {
       };
     }
     const jointAnglesRad = flattenJoints(ik.angles);
+    if (lockCoxa) {
+      for (let i = 0; i < 4; i++) jointAnglesRad[i * 3] = 0.0;
+    }
     const servoAnglesDeg = jointAnglesRadToServoDeg(jointAnglesRad);
     this.lastJointAnglesRad = jointAnglesRad;
     this.lastServoAnglesDeg = servoAnglesDeg;
@@ -421,18 +408,22 @@ function makeStanceFeet(cfg, zShift = 0) {
   });
 }
 
-function gaitPhaseTimes(cfg, mode) {
-  const defaults = PHASE_TIMES[mode];
-  if (!defaults) return { stance_ms: 0, swing_ms: 0 };
-  const scale = clampNum(
-    (cfg?.swing_time_ms ?? GAIT_TUNABLE_PARAMS.swing_time_ms.default)
-      / GAIT_TUNABLE_PARAMS.swing_time_ms.default,
-    0.25,
-    4.0,
+function gaitProfileTiming(cfg, mode) {
+  const profile = GAIT_PROFILES[mode];
+  if (!profile) return null;
+  const swingMs = clampNum(
+    cfg?.swing_time_ms ?? GAIT_TUNABLE_PARAMS.swing_time_ms.default,
+    GAIT_TUNABLE_PARAMS.swing_time_ms.min,
+    GAIT_TUNABLE_PARAMS.swing_time_ms.max,
   );
+  const swingFraction = clampNum(profile.swingFraction, 0.05, 0.90);
+  const cycleMs = swingMs / swingFraction;
   return {
-    stance_ms: defaults.stance_ms * scale,
-    swing_ms: defaults.swing_ms * scale,
+    swingMs,
+    stanceMs: cycleMs - swingMs,
+    cycleMs,
+    swingFraction,
+    phaseOffsets: profile.phaseOffsets,
   };
 }
 
@@ -530,6 +521,11 @@ function lerp(a, b, t) {
   return a + (b - a) * t;
 }
 
+function smoothStep(t) {
+  const u = clampNum(t, 0.0, 1.0);
+  return u * u * (3.0 - 2.0 * u);
+}
+
 function blendFoot(from, to, t) {
   return [
     lerp(from[0], to[0], t),
@@ -543,9 +539,8 @@ const DEFAULT_NEUTRAL_FEET = makeStanceFeet(makeDefaultConfig());
 export const _internals = {
   TICK_HZ,
   TICK_DT,
-  CONTACT_PHASES,
-  PHASE_TIMES,
-  gaitPhaseTimes,
+  GAIT_PROFILES,
+  gaitProfileTiming,
   makeStanceFeet,
   jointAnglesRadToServoDeg,
 };

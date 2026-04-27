@@ -89,3 +89,31 @@ test("held trot rotation produces visible reachable yaw stride", () => {
     assert.ok(ySpan > 0.020, `expected visible yaw y travel, got ${ySpan}`);
   }
 });
+
+test("straight trot keeps coxa pinned while steering uses coxa", () => {
+  const straight = new GaitPlanner();
+  straight.setMode("trot");
+  straight.setTwist({ x: 0.5, y: 0, yaw: 0 });
+
+  for (let tick = 0; tick < 80; tick++) {
+    const out = straight.step();
+    assert.equal(out.error, undefined, `straight tick ${tick}: ${out.error}`);
+    for (let leg = 0; leg < 4; leg++) {
+      assert.equal(out.jointAnglesRad[leg * 3], 0);
+    }
+  }
+
+  const turning = new GaitPlanner();
+  turning.setMode("trot");
+  turning.setTwist({ x: 0, y: 0, yaw: 2.0 });
+
+  let maxCoxa = 0;
+  for (let tick = 0; tick < 80; tick++) {
+    const out = turning.step();
+    assert.equal(out.error, undefined, `turning tick ${tick}: ${out.error}`);
+    for (let leg = 0; leg < 4; leg++) {
+      maxCoxa = Math.max(maxCoxa, Math.abs(out.jointAnglesRad[leg * 3]));
+    }
+  }
+  assert.ok(maxCoxa > 1 * Math.PI / 180, `expected steering to use coxa, got ${maxCoxa}`);
+});

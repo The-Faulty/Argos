@@ -46,6 +46,10 @@ static const float DEFAULT_THIGH_MIN_DEG = -50.0f;
 static const float DEFAULT_THIGH_MAX_DEG = 0.0f;
 static const float DEFAULT_CALF_MIN_DEG = -90.0f;
 static const float DEFAULT_CALF_MAX_DEG = 90.0f;
+static const int COUPLED_LIMIT_SAMPLE_COUNT = 5;
+static const float COUPLED_THIGH_SAMPLES_DEG[COUPLED_LIMIT_SAMPLE_COUNT] = {-50.0f, -38.0f, -25.0f, -13.0f, 0.0f};
+static const float COUPLED_CALF_MIN_SAMPLES_DEG[COUPLED_LIMIT_SAMPLE_COUNT] = {-90.0f, -90.0f, -70.0f, -50.0f, -25.0f};
+static const float COUPLED_CALF_MAX_SAMPLES_DEG[COUPLED_LIMIT_SAMPLE_COUNT] = {  5.0f,  30.0f,  60.0f,  90.0f,  90.0f};
 static const uint8_t PCA9685_ADDRESS = 0x40;
 static const float DEFAULT_PCA9685_FREQUENCY_HZ = 150.0f;
 static const float MIN_PCA9685_FREQUENCY_HZ = 40.0f;
@@ -432,6 +436,66 @@ static JointLimitsDeg defaultJointLimits(void) {
     return limits;
 }
 
+static float interpCoupledLimit(float x, const float *xs, const float *ys, int count) {
+    if (x <= xs[0]) {
+        return ys[0];
+    }
+    if (x >= xs[count - 1]) {
+        return ys[count - 1];
+    }
+
+    for (int i = 1; i < count; ++i) {
+        if (x <= xs[i]) {
+            float span = xs[i] - xs[i - 1];
+            float t = span == 0.0f ? 0.0f : (x - xs[i - 1]) / span;
+            return lerpf(ys[i - 1], ys[i], t);
+        }
+    }
+
+    return ys[count - 1];
+}
+
+static JointLimitRangeDeg coupledCalfLimitsForThighDeg(float thighDeg, const JointLimitsDeg *limits) {
+    float limitedThighDeg = clampf(thighDeg, limits->thighDeg.min, limits->thighDeg.max);
+    JointLimitRangeDeg range;
+    range.min = interpCoupledLimit(
+        limitedThighDeg,
+        COUPLED_THIGH_SAMPLES_DEG,
+        COUPLED_CALF_MIN_SAMPLES_DEG,
+        COUPLED_LIMIT_SAMPLE_COUNT
+    );
+    range.max = interpCoupledLimit(
+        limitedThighDeg,
+        COUPLED_THIGH_SAMPLES_DEG,
+        COUPLED_CALF_MAX_SAMPLES_DEG,
+        COUPLED_LIMIT_SAMPLE_COUNT
+    );
+    range.min = fmaxf(range.min, limits->calfDeg.min);
+    range.max = fminf(range.max, limits->calfDeg.max);
+
+    if (range.min > range.max) {
+        float mid = 0.5f * (range.min + range.max);
+        range.min = mid;
+        range.max = mid;
+    }
+
+    return range;
+}
+
+static bool jointAnglesWithinLimits(float thighDeg, float calfDeg, const JointLimitsDeg *limits) {
+    if (
+        thighDeg < limits->thighDeg.min ||
+        thighDeg > limits->thighDeg.max ||
+        calfDeg < limits->calfDeg.min ||
+        calfDeg > limits->calfDeg.max
+    ) {
+        return false;
+    }
+
+    JointLimitRangeDeg coupledCalf = coupledCalfLimitsForThighDeg(thighDeg, limits);
+    return calfDeg >= coupledCalf.min && calfDeg <= coupledCalf.max;
+}
+
 static bool geometryWithinJointLimits(const LegGeometry *geometry, const JointLimitsDeg *limits) {
     if (!geometry->valid) {
         return false;
@@ -439,17 +503,13 @@ static bool geometryWithinJointLimits(const LegGeometry *geometry, const JointLi
 
     float thighDeg = radToDeg(geometry->thetaThigh);
     float calfDeg = radToDeg(geometry->thetaCalf);
-    return (
-        thighDeg >= limits->thighDeg.min &&
-        thighDeg <= limits->thighDeg.max &&
-        calfDeg >= limits->calfDeg.min &&
-        calfDeg <= limits->calfDeg.max
-    );
+    return jointAnglesWithinLimits(thighDeg, calfDeg, limits);
 }
 
 static JointAnglesDeg clampJointAnglesToLimits(JointAnglesDeg jointAngles, const JointLimitsDeg *limits) {
     jointAngles.thighDeg = clampf(jointAngles.thighDeg, limits->thighDeg.min, limits->thighDeg.max);
-    jointAngles.calfDeg = clampf(jointAngles.calfDeg, limits->calfDeg.min, limits->calfDeg.max);
+    JointLimitRangeDeg calfLimits = coupledCalfLimitsForThighDeg(jointAngles.thighDeg, limits);
+    jointAngles.calfDeg = clampf(jointAngles.calfDeg, calfLimits.min, calfLimits.max);
     return jointAngles;
 }
 
