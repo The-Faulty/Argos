@@ -23,6 +23,7 @@ import {
   DEFAULT_Z_REF,
   DEFAULT_JOINT_LIMITS_RAD,
   DEFAULT_FOOT_REACH_X,
+  DEFAULT_FOOT_REACH_X_LIFTED,
   STABILIZER_PARAM_BOUNDS,
   GAIT_TUNABLE_PARAMS,
 } from "../shared/robot-config.js";
@@ -33,12 +34,16 @@ import {
 } from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 
-// Dropped from 50 Hz to 30 Hz: each gait tick emits 4× set_leg_servo_angles
-// (~480 B) at 921600 baud. The ESP32's 32 B UART RX FIFO drains slowly when
-// the firmware is mid-I²C-write to the PCA9685, so 50 Hz bursts reproducibly
-// truncated frames ("unknown command type" with corrupted bodies). 30 Hz
-// gives the firmware ~33 ms between bursts to drain — empirically enough.
-const TICK_HZ = 30.0;
+// Back to 50 Hz once the firmware fix landed. Earlier we had to drop to 30 Hz
+// because each gait tick emits 4× set_leg_servo_angles (~480 B) at 921600
+// baud and the ESP32 RX FIFO was overflowing mid-frame, dropping commands.
+// The actual root cause turned out to be TX-induced RX starvation: the old
+// chained-Serial.print() sendStateMessage() in firmware/argos_servo.ino was
+// making ~160 driver hand-offs per state burst, starving the RX driver task
+// long enough for the FIFO to overflow. Single-buffer Serial.write() (one
+// hand-off) + halved telemetry rate fixed it; 50 Hz is back on the table.
+// Roll back to 30 if "unknown command type" errors return after re-flashing.
+const TICK_HZ = 50.0;
 const TICK_DT = 1.0 / TICK_HZ;
 const REACH_BLEND_STEPS = 12;
 
@@ -204,7 +209,8 @@ export class GaitPlanner {
       this.gaitTickMs = 0;
       const baseFeet = makeStanceFeet(this.config);
       this._applyImuTilt(baseFeet);
-      const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i], this.jointLimitsRad));
+      // All four feet are on the ground at neutral pose → stance window.
+      const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i], "stance", this.jointLimitsRad));
       return this._solveAndCache(clamped);
     }
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
@@ -221,6 +227,13 @@ export class GaitPlanner {
     const stride = this._strideForPeriod(stanceMs / 1000);
     const baseFeet = makeStanceFeet(this.config);
 
+    // Per-leg phase tag so clampFootInReach can pick the right reach window:
+    // stance feet stay inside the tighter stance window; swing feet get the
+    // wider lifted window (the linkage extends at peak lift, so the
+    // reachable foot.x range shifts/widens). Computed in the same loop as
+    // the position so the two stay in lock-step.
+    const phaseTag = new Array(4);
+
     const feet = baseFeet.map((foot, legIdx) => {
       // Each leg has exactly one swing phase per cycle in CONTACT_PHASES.
       const swingPhase = phases[legIdx].indexOf(0);
@@ -233,6 +246,7 @@ export class GaitPlanner {
         // Swing: -stride/2 → +stride/2 with sin-arc lift (peak at u=0.5).
         const u = (t - swingStartMs) / phaseDurMs;
         const lift = this.config.z_clearance * Math.sin(Math.PI * u);
+        phaseTag[legIdx] = "swing";
         return [
           foot[0] + stride[legIdx][0] * (u - 0.5),
           foot[1] + stride[legIdx][1] * (u - 0.5),
@@ -248,6 +262,7 @@ export class GaitPlanner {
         ? t - swingEndMs
         : t + (cycleMs - swingEndMs);
       const u = elapsed / stanceMs;
+      phaseTag[legIdx] = "stance";
       return [
         foot[0] + stride[legIdx][0] * (0.5 - u),
         foot[1] + stride[legIdx][1] * (0.5 - u),
@@ -255,13 +270,14 @@ export class GaitPlanner {
       ];
     });
     this._applyImuTilt(feet);
-    // The base rear stance foot sits at body x = -0.140 — only 5 mm inside
-    // the rear leg's reach lower bound (-0.145). Even modest backward stride
-    // (forward joystick) would otherwise push the rear feet just outside
-    // their reach window every tick. Snap each foot's x into its per-leg
-    // window so swing/stance trajectories degrade to held-at-boundary motion
-    // instead of an IK refusal that holds the whole-body last-good pose.
-    const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i], this.jointLimitsRad));
+    // Phase-aware reach clamp: stance feet against the tight stance window,
+    // swing feet against the wider lifted window. Without the phase split,
+    // every foot was clamped to the stance window and swing trajectories at
+    // the edges of the stride got snapped back toward neutral, shrinking
+    // the visible step amplitude even though the lifted geometry could
+    // reach the target. Re-probe both windows with
+    // scripts/probe_foot_reach.mjs after any z_clearance change.
+    const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i], phaseTag[i], this.jointLimitsRad));
     return this._solveAndCache(clamped);
   }
 
@@ -344,10 +360,18 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    // Swing-foot vertical lift. STAND_FOOT_Z = -0.195 m leaves about 59 mm
-    // before the leg straightens, so 18 mm produces a visible step while
-    // staying inside the measured IK envelope.
-    z_clearance: 0.018,
+    // Swing-foot vertical lift. STAND_FOOT_Z = -0.195 m gives a workable
+    // vertical-reach budget; 0.020 m is the empirical sweet spot per
+    // scripts/probe_foot_reach.mjs — at z_clearance ≥ 0.022 the lifted
+    // reach window starts excluding the gait's neutral foot.x position
+    // (e.g. 0.100 m for FR), which would make the foot fail IK at peak
+    // swing. 0.020 m keeps the lifted window comfortably wider than the
+    // stance window. Re-probe before raising further.
+    //
+    // If you change this value, also re-probe DEFAULT_FOOT_REACH_X_LIFTED
+    // in robot-config.js with `node scripts/probe_foot_reach.mjs --lift-mm
+    // <new_z_clearance_mm>` and update both numbers together.
+    z_clearance: 0.020,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
@@ -439,13 +463,21 @@ function cloneLimits(src) {
   };
 }
 
-// Clamp a foot target into the leg's reachable envelope. Start with the
-// measured body-x window, then, if the larger swing/yaw request still lands
-// on an unreachable x/y/z corner, blend that one foot back toward its neutral
-// stance point until IK accepts it. That keeps the gait moving instead of
-// holding the last-good whole-body servo frame.
-export function clampFootInReach(foot, legId, limits = DEFAULT_JOINT_LIMITS_RAD) {
-  const range = DEFAULT_FOOT_REACH_X[legId];
+// Clamp a foot target into the leg's reachable envelope. Picks the stance
+// or lifted reach window based on `phase` — swing-phase trajectories live
+// at z = stance + z_clearance where the linkage's reachable foot.x range
+// is shifted/widened, so clamping swing feet against the stance window
+// would silently shrink step amplitude. After x is clamped, if IK still
+// rejects (y/z corner of the envelope), blend that foot back toward its
+// neutral stance point until IK accepts. Keeps the gait moving instead of
+// freezing on the last-good whole-body servo frame.
+//
+// `phase` accepts "stance" | "swing"; anything else falls back to stance.
+// `limits` defaults to DEFAULT_JOINT_LIMITS_RAD so callers from the
+// gait_planner instance can pass `this.jointLimitsRad`.
+export function clampFootInReach(foot, legId, phase = "stance", limits = DEFAULT_JOINT_LIMITS_RAD) {
+  const reachTable = phase === "swing" ? DEFAULT_FOOT_REACH_X_LIFTED : DEFAULT_FOOT_REACH_X;
+  const range = reachTable[legId];
   if (!range) return foot;
   const candidate = [clampNum(foot[0], range[0], range[1]), foot[1], foot[2]];
   if (isFootReachable(candidate, legId, limits)) return candidate;

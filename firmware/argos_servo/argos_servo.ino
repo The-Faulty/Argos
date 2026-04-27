@@ -18,7 +18,12 @@
 #define MAX_NAME_LEN 32
 #define MAX_ERROR_LEN 96
 #define MAX_ANIM_KEYFRAMES 32
-#define TELEMETRY_INTERVAL_MS 100
+// 200 ms (5 Hz) state telemetry. The dashboard smooths this fine; halving
+// the rate cuts TX pressure and gives the RX driver more headroom between
+// telemetry bursts. Pair this with the single-buffer sendStateMessage() —
+// the chained Serial.print() implementation at 100 ms was overflowing the
+// RX FIFO mid-frame and dropping inbound set_leg_servo_angles commands.
+#define TELEMETRY_INTERVAL_MS 200
 #define BUILTIN_STATUS_INTERVAL_MS 400
 #define ANIMATION_STATUS_INTERVAL_MS 250
 
@@ -1481,75 +1486,90 @@ static void sendBenchmarkResult(int seq, uint32_t iterations, const SolverTiming
     Serial.println("}}");
 }
 
+// Append `value` to `buf` (capacity `cap`) starting at `*pos`, escaping JSON
+// special characters. Updates `*pos`. Stops cleanly at the buffer edge so the
+// caller's snprintf safety chain stays valid even if the input string is too
+// long. Returns the new position.
+static int jsonAppendEscaped(char *buf, size_t cap, int pos, const char *value) {
+    if (!buf || pos < 0) return pos;
+    while (*value && (size_t)pos + 2 < cap) {
+        char c = *value++;
+        if (c == '"' || c == '\\') {
+            buf[pos++] = '\\';
+        }
+        buf[pos++] = c;
+    }
+    return pos;
+}
+
+// Bounded snprintf wrapper. snprintf returns the *desired* byte count which
+// can exceed remaining capacity; if we naively `pos += snprintf(...)` and
+// then call again with `cap - pos`, the second size argument can become
+// negative and underflow to a huge size_t — which lets snprintf overrun the
+// buffer. This wrapper saturates at `cap` so subsequent calls stay safe.
+#define BUF_PRINTF(buf, cap, pos, ...)                          \
+    do {                                                        \
+        if ((pos) < (cap)) {                                    \
+            int _n = snprintf((buf) + (pos), (size_t)((cap) - (pos)), __VA_ARGS__); \
+            if (_n < 0) { /* encoding error */ }                \
+            else if ((pos) + _n >= (cap)) (pos) = (cap);        \
+            else (pos) += _n;                                   \
+        }                                                       \
+    } while (0)
+
+// State telemetry. Built into a single static buffer and shipped with one
+// Serial.write() call so the ESP32 UART driver makes one TX hand-off instead
+// of ~160. The previous chained Serial.print() implementation reproducibly
+// starved the RX driver task during the burst, which overflowed the 4 KB RX
+// FIFO mid-frame and corrupted incoming set_leg_servo_angles commands (host
+// log: `[serial] unknown command type [parsed='' raw='oDeg":...']`). Buffer
+// is sized for the worst-case payload (~2.3 KB) with margin; TX ring is
+// 8192 B (see setup()), so the write is a memcpy and returns immediately.
 static void sendStateMessage(const char *typeName) {
-    Serial.print("{\"type\":\"");
-    Serial.print(typeName);
-    Serial.print("\",\"payload\":{");
-    Serial.print("\"mode\":\"");
-    Serial.print(modeToString(g_mode));
-    Serial.print("\",\"activeAnimation\":\"");
-    jsonPrintEscaped(g_activeAnimationName);
-    Serial.print("\",\"servosReleased\":");
-    Serial.print(g_servosReleased ? "true" : "false");
-    Serial.print(",\"servoUpdateRateHz\":");
-    Serial.print(g_pwmFrequencyHz, 3);
-    Serial.print(",\"gasRaw\":");
-    Serial.print(analogRead(GAS_ADC_PIN));
-    Serial.print(",\"firmwareMs\":");
-    Serial.print(millis());
-    Serial.print(",\"legs\":{");
+    static char buf[3584];
+    int pos = 0;
+    const int cap = (int)sizeof(buf);
+
+    BUF_PRINTF(buf, cap, pos,
+               "{\"type\":\"%s\",\"payload\":{\"mode\":\"%s\",\"activeAnimation\":\"",
+               typeName, modeToString(g_mode));
+    pos = jsonAppendEscaped(buf, cap, pos, g_activeAnimationName);
+    BUF_PRINTF(buf, cap, pos,
+               "\",\"servosReleased\":%s,\"servoUpdateRateHz\":%.3f,\"gasRaw\":%d,"
+               "\"firmwareMs\":%lu,\"legs\":{",
+               g_servosReleased ? "true" : "false",
+               g_pwmFrequencyHz,
+               analogRead(GAS_ADC_PIN),
+               (unsigned long)millis());
 
     for (int i = 0; i < NUM_LEGS; ++i) {
-        if (i > 0) {
-            Serial.print(",");
+        if (i > 0 && pos < cap - 1) {
+            buf[pos++] = ',';
         }
-
         RobotLegState *leg = &g_legs[i];
-        Serial.print("\"");
-        Serial.print(LEG_CONFIGS[i].id);
-        Serial.print("\":{");
-        Serial.print("\"status\":\"");
-        Serial.print(modeToString(g_mode));
-        Serial.print("\",\"lastError\":\"");
-        jsonPrintEscaped(leg->lastError);
-        Serial.print("\",\"servoChannelMap\":{\"hip\":");
-        Serial.print((int)leg->hipChannel);
-        Serial.print(",\"thigh\":");
-        Serial.print((int)leg->thighChannel);
-        Serial.print(",\"calf\":");
-        Serial.print((int)leg->calfChannel);
-        Serial.print("},\"servoSpeedLimitDegPerSec\":{\"hip\":");
-        Serial.print(leg->hip.speedLimitDegPerSec, 3);
-        Serial.print(",\"thigh\":");
-        Serial.print(leg->thigh.speedLimitDegPerSec, 3);
-        Serial.print(",\"calf\":");
-        Serial.print(leg->calf.speedLimitDegPerSec, 3);
-        Serial.print("},\"jointLimits\":{\"thighDeg\":{\"min\":");
-        Serial.print(leg->jointLimits.thighDeg.min, 3);
-        Serial.print(",\"max\":");
-        Serial.print(leg->jointLimits.thighDeg.max, 3);
-        Serial.print("},\"calfDeg\":{\"min\":");
-        Serial.print(leg->jointLimits.calfDeg.min, 3);
-        Serial.print(",\"max\":");
-        Serial.print(leg->jointLimits.calfDeg.max, 3);
-        Serial.print("}},\"desired\":{");
-        Serial.print("\"servoAnglesDeg\":{\"hip\":");
-        Serial.print(leg->desiredServoAngles.hip, 3);
-        Serial.print(",\"thigh\":");
-        Serial.print(leg->desiredServoAngles.thigh, 3);
-        Serial.print(",\"calf\":");
-        Serial.print(leg->desiredServoAngles.calf, 3);
-        Serial.print("}},\"current\":{");
-        Serial.print("\"servoAnglesDeg\":{\"hip\":");
-        Serial.print(leg->currentServoAngles.hip, 3);
-        Serial.print(",\"thigh\":");
-        Serial.print(leg->currentServoAngles.thigh, 3);
-        Serial.print(",\"calf\":");
-        Serial.print(leg->currentServoAngles.calf, 3);
-        Serial.print("}}}");
+        BUF_PRINTF(buf, cap, pos,
+                   "\"%s\":{\"status\":\"%s\",\"lastError\":\"",
+                   LEG_CONFIGS[i].id, modeToString(g_mode));
+        pos = jsonAppendEscaped(buf, cap, pos, leg->lastError);
+        BUF_PRINTF(buf, cap, pos,
+                   "\",\"servoChannelMap\":{\"hip\":%d,\"thigh\":%d,\"calf\":%d},"
+                   "\"servoSpeedLimitDegPerSec\":{\"hip\":%.3f,\"thigh\":%.3f,\"calf\":%.3f},"
+                   "\"jointLimits\":{\"thighDeg\":{\"min\":%.3f,\"max\":%.3f},"
+                   "\"calfDeg\":{\"min\":%.3f,\"max\":%.3f}},"
+                   "\"desired\":{\"servoAnglesDeg\":{\"hip\":%.3f,\"thigh\":%.3f,\"calf\":%.3f}},"
+                   "\"current\":{\"servoAnglesDeg\":{\"hip\":%.3f,\"thigh\":%.3f,\"calf\":%.3f}}}",
+                   (int)leg->hipChannel, (int)leg->thighChannel, (int)leg->calfChannel,
+                   leg->hip.speedLimitDegPerSec, leg->thigh.speedLimitDegPerSec, leg->calf.speedLimitDegPerSec,
+                   leg->jointLimits.thighDeg.min, leg->jointLimits.thighDeg.max,
+                   leg->jointLimits.calfDeg.min, leg->jointLimits.calfDeg.max,
+                   leg->desiredServoAngles.hip, leg->desiredServoAngles.thigh, leg->desiredServoAngles.calf,
+                   leg->currentServoAngles.hip, leg->currentServoAngles.thigh, leg->currentServoAngles.calf);
+        if (pos >= cap - 1) break;
     }
 
-    Serial.println("}}}");
+    BUF_PRINTF(buf, cap, pos, "}}}\n");
+
+    Serial.write((const uint8_t *)buf, (size_t)pos);
 }
 
 static bool jsonExtractString(const char *json, const char *key, char *out, size_t outSize) {

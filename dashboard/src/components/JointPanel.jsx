@@ -74,22 +74,61 @@ export default function JointPanel({
       {JOINT_ROWS.map((row) => {
         const jointName = `${activeLeg}_${row}_joint`;
         const limits = dynamicLimitsFor(row, activeLeg, full);
+        const absLimits = DEFAULT_JOINT_LIMITS_RAD[row];
         const rad = full[jointName] ?? 0;
         const deg = rad * RAD2DEG;
         const minDeg = limits[0] * RAD2DEG;
         const maxDeg = limits[1] * RAD2DEG;
+        const absMinDeg = absLimits[0] * RAD2DEG;
+        const absMaxDeg = absLimits[1] * RAD2DEG;
         const sliderDeg = clampNum(deg, minDeg, maxDeg);
         const nearLimit = deg - minDeg < NEAR_LIMIT_DEG || maxDeg - deg < NEAR_LIMIT_DEG;
+        // True when the coupled envelope is currently tighter than the
+        // hardware-absolute envelope — i.e., the other joint's position is
+        // restricting this joint's reach. Shown explicitly in the label so
+        // the operator can see the coupling is actively constraining them.
+        const coupledTighter =
+          Math.abs(minDeg - absMinDeg) > 0.05 || Math.abs(maxDeg - absMaxDeg) > 0.05;
+        // Place the coupled-allowed band as a colored region on the track.
+        // The slider's min/max are kept at the coupled values (so the thumb
+        // can't visit the disallowed zone) but the absolute envelope is
+        // overlaid as a faint outer band so the operator can see HOW MUCH
+        // of the joint's full range is currently locked out.
+        const absSpan = Math.max(1e-6, absMaxDeg - absMinDeg);
+        const coupledLoPct = Math.max(0, (minDeg - absMinDeg) / absSpan) * 100;
+        const coupledHiPct = Math.min(100, (maxDeg - absMinDeg) / absSpan) * 100;
+        const trackBg = `linear-gradient(to right,
+          rgba(220,38,38,0.18) 0%,
+          rgba(220,38,38,0.18) ${coupledLoPct.toFixed(2)}%,
+          rgba(34,197,94,0.28) ${coupledLoPct.toFixed(2)}%,
+          rgba(34,197,94,0.28) ${coupledHiPct.toFixed(2)}%,
+          rgba(220,38,38,0.18) ${coupledHiPct.toFixed(2)}%,
+          rgba(220,38,38,0.18) 100%)`;
         return (
           <label key={row} className={`slider${nearLimit ? " is-near-limit" : ""}`}>
-            <span>{row} ({minDeg.toFixed(0)}° … {maxDeg.toFixed(0)}°)</span>
+            <span>
+              {row} (
+              <strong>{minDeg.toFixed(1)}° … {maxDeg.toFixed(1)}°</strong>
+              {coupledTighter && (
+                <span className="muted">
+                  {" "}/ abs {absMinDeg.toFixed(0)}° … {absMaxDeg.toFixed(0)}°
+                </span>
+              )}
+              )
+            </span>
             <input
               type="range"
-              min={minDeg}
-              max={maxDeg}
-              step="0.5"
+              min={absMinDeg}
+              max={absMaxDeg}
+              step="0.1"
               value={sliderDeg}
-              onChange={(e) => onChange(row, Number(e.target.value) * DEG2RAD)}
+              onChange={(e) => {
+                // Clamp to coupled limits at the input boundary so a value
+                // that violates the coupled envelope can't ever be sent.
+                const next = clampNum(Number(e.target.value), minDeg, maxDeg);
+                onChange(row, next * DEG2RAD);
+              }}
+              style={{ background: trackBg }}
             />
             <span className="slider__value">{deg.toFixed(1)}°</span>
           </label>

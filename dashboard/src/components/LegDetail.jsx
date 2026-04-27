@@ -1,40 +1,47 @@
-// Big SVG leg view — one leg, rendered with andy-servo's exact bell-crank
-// sagittal chain. Per user direction ("the leg design is perfect, do not
-// alter it"), the 420×420 stage, 7 colored segments, 8 joint dots, canvas
-// transform, and reverse-solve all come from andy-servo-control verbatim.
+// Big SVG leg view — one leg, rendered with the SAME forward-kinematics the
+// Pi server uses to drive the real robot. Earlier this view ran andy-servo's
+// pixel-space bell-crank (kinematics_legacy.js) with a hand-tuned servo
+// neutral; that math closes against slightly different geometry constants
+// than the real IK in argos_kinematics.js, so the SVG could be off by a few
+// degrees at the same [coxa, femur, tibia] — visible at envelope edges as
+// "the SVG and the leg disagree." Switching to the real FK
+// (buildLegPoseFromJointAngles from argos_kinematics.js) means whatever
+// angles the bridge ships to the firmware put the rendered leg in the same
+// place as the physical leg, by construction.
 //
-// Argos is 3-DOF (coxa/femur/tibia) vs andy-servo's 2-DOF (thigh/calf), so:
+// Argos is 3-DOF (coxa/femur/tibia) vs the 2-D sagittal view, so:
 //   - Coxa is read from /joint_states and shown as a number in the stats
 //     grid. It is NOT drawn — the sagittal view is a 2-D side projection.
-//   - Femur → andy-servo's "thigh", tibia → andy-servo's "calf". We convert
-//     rad → deg and pass them into buildLegPoseFromJointAngles, which runs
-//     andy-servo's coarse 5° sweep + 0.25° refinement over the servo horn
-//     angle until the bell-crank output matches the requested calf.
+//   - Femur and tibia drive the bell-crank linkage in _sagittal_fk_state.
+//     The geometry constants come from LEG_GEOMETRY in robot-config.js
+//     (same source the IK reads), so the visualization is automatically
+//     in sync if those constants ever change.
 //
 // Data flow:
 //   1. Read [coxa, femur, tibia] radians from /joint_states for the active
 //      leg (`readLegAnglesRad`).
-//   2. Feed (thigh=femur°, calf=tibia°) to buildLegPoseFromJointAngles.
-//   3. Map every geometry point through toCanvasPoint once; draw segments
-//      and dots in andy-servo's exact colors/widths.
+//   2. Pass [coxa, femur, tibia] (rad) to buildLegPoseFromJointAngles.
+//      Output geometry is in METERS in the sagittal frame (hip at origin,
+//      +x forward, +y down-along-leg).
+//   3. Scale m → mm and map every geometry point through toCanvasPoint
+//      once; draw segments and dots.
 //   4. Pointer drag on the foot inverts to a sagittal-frame XY (mm) and
 //      forwards as a foot target in direct_foot_xyz mode.
 
 import { useMemo, useRef } from "react";
 import {
-  fromCanvasPoint,
-  LEGACY_LEG_GEOMETRY,
-  LEGACY_NEUTRAL_CALIBRATION,
+  buildLegPoseFromJointAngles,
   clamp_joint_matrix,
+  fromCanvasPoint,
+  leg_explicit_inverse_kinematics,
   segmentPath,
-  solveGeometryLegacy,
-  solveServoForJointAngles,
   toCanvasPoint,
-} from "../../shared/kinematics.js";
+} from "../../shared/argos_kinematics.js";
 import {
   JOINT_NAMES,
   JOINT_ROWS,
   LEG_DRAWING,
+  LEG_GEOMETRY,
   LEG_IDS,
   LEG_LABELS,
   SERVO_CENTER_DEG,
@@ -43,24 +50,37 @@ import { applyServoCal } from "../../shared/servo_cal.js";
 
 const RAD2DEG = 180.0 / Math.PI;
 
-// Seven andy-servo segments, identical colors/widths. Order matters only
-// for painter's ordering (later entries draw on top). Keys reference the
-// legacy geometry names returned by buildLegPoseFromJointAngles.
+// Real-FK output is in meters; the canvas helpers + LEG_DRAWING.scale=1.4
+// expect millimeters (so a neutral leg ends up roughly 178 px tall, matching
+// the legacy view's pixel size). Multiply once at the FK→canvas boundary.
+const M_TO_MM = 1000.0;
+
+function scalePoint(p) {
+  return { x: p.x * M_TO_MM, y: p.y * M_TO_MM };
+}
+
+// Seven segments, drawn in the same colors/widths the legacy view used so
+// the visual identity is preserved. Keys reference the geometry names
+// returned by argos_kinematics.buildLegPoseFromJointAngles:
+//   O          — hip / upper-leg pivot (also doubles as servo pivot)
+//   knee       — upper→lower leg elbow
+//   foot       — toe
+//   horn       — end of the servo horn (rotates about O)
+//   bcLeft     — bell-crank arm carrying the long push-rod (Lr2 → rod2)
+//   bcRight    — bell-crank arm carrying the short push-rod from the horn
+//   rod2       — where the long rod attaches above the knee on the lower link
 const SEGMENTS = [
-  { key: "upper",     from: "hip",          to: "knee",        stroke: "#141414", width: 5 }, // thigh
-  { key: "lower",     from: "knee",         to: "foot",        stroke: "#1d8cff", width: 5 }, // calf
-  { key: "bell-a",    from: "hip",          to: "bellArmA",    stroke: "#21a264", width: 4 }, // bell crank arm A
-  { key: "bell-b",    from: "hip",          to: "bellArmB",    stroke: "#21a264", width: 4 }, // bell crank arm B
-  { key: "horn",      from: "servoPivot",   to: "servoHornEnd",stroke: "#ff5232", width: 4 }, // servo horn
-  { key: "linkShort", from: "servoHornEnd", to: "bellArmA",    stroke: "#ef8a17", width: 4 }, // rod: horn → bell arm A
-  { key: "linkLong",  from: "bellArmB",     to: "calfAttach",  stroke: "#6f4cff", width: 4 }, // rod: bell arm B → calf attach
+  { key: "upper",     from: "O",       to: "knee",    stroke: "#141414", width: 5 }, // femur (thigh)
+  { key: "lower",     from: "knee",    to: "foot",    stroke: "#1d8cff", width: 5 }, // tibia (calf)
+  { key: "bell-a",    from: "O",       to: "bcRight", stroke: "#21a264", width: 4 }, // bell-crank arm (horn-rod side)
+  { key: "bell-b",    from: "O",       to: "bcLeft",  stroke: "#21a264", width: 4 }, // bell-crank arm (long-rod side)
+  { key: "horn",      from: "O",       to: "horn",    stroke: "#ff5232", width: 4 }, // servo horn
+  { key: "linkShort", from: "horn",    to: "bcRight", stroke: "#ef8a17", width: 4 }, // rod 1: horn → bell-crank
+  { key: "linkLong",  from: "bcLeft",  to: "rod2",    stroke: "#6f4cff", width: 4 }, // rod 2: bell-crank → calf attach
 ];
 
-// The 7 non-foot dots. Foot is rendered separately (bigger, blue).
-const DOT_KEYS = [
-  "hip", "knee", "servoPivot", "servoHornEnd",
-  "bellArmA", "bellArmB", "calfAttach",
-];
+// The 6 non-foot dots. Foot is rendered separately (bigger, blue).
+const DOT_KEYS = ["O", "knee", "horn", "bcLeft", "bcRight", "rod2"];
 
 export default function LegDetail({
   activeLeg,
@@ -87,48 +107,38 @@ export default function LegDetail({
 
   const pose = useMemo(() => {
     try {
-      // Argos joint radians are *servo offsets from the 90° neutral*, not
-      // absolute link angles. The legacy bell-crank FK expects an absolute
-      // thigh angle and a servo-horn theta, so:
-      //   thetaThigh = femur_rad (direct-drive femur; servo-neutral = thigh
-      //                0° per LEGACY_NEUTRAL_CALIBRATION.thetaThigh).
-      //   thetaServo = neutralThetaServo + tibia_rad (servo-horn rotates
-      //                linearly with the tibia servo offset).
-      // Going through solveGeometryLegacy directly (instead of the iterative
-      // `buildLegPoseFromJointAngles`) avoids clamping tibia values into the
-      // legacy absolute-calf window [-165°, -25°], which was silently pinning
-      // the slider above -25°.
-      const thetaThigh = effectiveAngles[1];
-      const thetaServo = LEGACY_NEUTRAL_CALIBRATION.thetaServo + effectiveAngles[2];
-      const geometry = solveGeometryLegacy(thetaThigh, thetaServo);
+      // Real FK: identical to the chain the gait planner runs through IK
+      // (same _sagittal_fk_state in argos_kinematics.js). Output geometry
+      // is in METERS in the sagittal frame, with the hip at (0, 0). The
+      // foot stat below stays in millimeters for operator readability.
+      const result = buildLegPoseFromJointAngles(effectiveAngles, { legId: activeLeg });
+      if (!result?.geometry) return null;
       return {
-        geometry,
-        foot: {
-          x: geometry.foot.x - LEGACY_LEG_GEOMETRY.footOriginOffset.x,
-          y: geometry.foot.y - LEGACY_LEG_GEOMETRY.footOriginOffset.y,
-        },
-        reachable: geometry.valid,
+        geometry: result.geometry,
+        // Foot stat is shown in mm so it stays comparable with the legacy
+        // chip readout (and the operator's mental model of leg length).
+        foot: { x: result.foot.x * M_TO_MM, y: result.foot.y * M_TO_MM },
+        reachable: result.reachable,
       };
     } catch {
       return null;
     }
-  }, [effectiveAngles]);
+  }, [effectiveAngles, activeLeg]);
 
-  // Pre-map every geometry point to canvas pixels once per render — the
-  // same pattern andy-servo's LegDetail uses. `segmentPath` expects
-  // pre-mapped points so we don't pay the toCanvasPoint cost twice.
+  // Pre-map every geometry point to canvas pixels once per render. We scale
+  // m → mm at the boundary so toCanvasPoint (which applies LEG_DRAWING.scale
+  // = 1.4 px/mm) ends up with the same pixel footprint as the legacy view.
   const points = useMemo(() => {
     if (!pose?.geometry) return null;
-    const p = (pt) => toCanvasPoint(pt, LEG_DRAWING);
+    const p = (pt) => toCanvasPoint(scalePoint(pt), LEG_DRAWING);
     return {
-      hip:          p(pose.geometry.hip),
-      knee:         p(pose.geometry.knee),
-      foot:         p(pose.geometry.foot),
-      servoPivot:   p(pose.geometry.servoPivot),
-      servoHornEnd: p(pose.geometry.servoHornEnd),
-      bellArmA:     p(pose.geometry.bellArmA),
-      bellArmB:     p(pose.geometry.bellArmB),
-      calfAttach:   p(pose.geometry.calfAttach),
+      O:       p(pose.geometry.O),
+      knee:    p(pose.geometry.knee),
+      foot:    p(pose.geometry.foot),
+      horn:    p(pose.geometry.horn),
+      bcLeft:  p(pose.geometry.bcLeft),
+      bcRight: p(pose.geometry.bcRight),
+      rod2:    p(pose.geometry.rod2),
     };
   }, [pose]);
 
@@ -182,44 +192,42 @@ export default function LegDetail({
     // leg's un-mirrored kinematic frame. Without this, dragging visually
     // right on a mirrored FR/RR would send the foot to the wrong X value.
     if (mirrorX) px = LEG_DRAWING.stageWidth - px;
-    // fromCanvasPoint returns millimeters in andy-servo's math frame
-    // (+x forward, +y up). `absMm` is hip-relative (hip at origin); we
-    // subtract footOriginOffset for the neutral-foot-near-origin value
-    // the drag consumer uses.
+    // fromCanvasPoint returns sagittal-frame millimeters in the real-FK
+    // convention (+x forward, +y down-along-leg). The hip is at the origin
+    // so absMm is already hip-relative.
     const absMm = fromCanvasPoint({ x: px, y: py }, LEG_DRAWING);
-    const offset = LEGACY_LEG_GEOMETRY.footOriginOffset;
-    const localMm = { x: absMm.x - offset.x, y: absMm.y - offset.y };
 
-    // Optimistic preview: 2-link sagittal IK to (thighRad, calfAbsRad)
-    // absolute, then map calf-absolute → Argos tibia (servo offset from
-    // 90° neutral) via the bell-crank reverse-solve so the value we stash
-    // is in the same convention as the slider. Storing absolute angles in
-    // the preview was the bug behind "tibia slider isn't working".
-    const ik = twoLinkSagittalIK(
-      absMm.x,
-      absMm.y,
-      LEGACY_LEG_GEOMETRY.thighLength,
-      LEGACY_LEG_GEOMETRY.calfLength,
-      effectiveAngles[1], // continuity hint in radians
-    );
+    // Real 3-DOF IK using the actual leg geometry. Sagittal frame (mm) →
+    // body frame (m) is straightforward because the rendered hip is the
+    // FK's origin: x_body = x_sag, z_body = -y_sag (y_sag points down,
+    // body z points up). For lateral y we keep the leg at its current
+    // hip-relative lateral so the abductor doesn't snap mid-drag — that
+    // value is computed from the current coxa via the same hip-abductor
+    // geometry the IK uses (`L1_HIP * cos(theta1)`).
+    const xBody = absMm.x / M_TO_MM;
+    const zBody = -absMm.y / M_TO_MM;
+    const legIndex = LEG_IDS.indexOf(activeLeg);
+    if (legIndex < 0) return;
+    const isRight = legIndex === 0 || legIndex === 2; // FR=0, RR=2
+    // Hip-relative lateral from the current coxa. The abductor link of
+    // length L1_HIP places the sagittal-plane origin at this offset from
+    // the hip pivot; the IK negates y for right legs internally so we
+    // match that here.
+    const yMagnitude = LEG_GEOMETRY.L1_HIP * Math.cos(effectiveAngles[0]);
+    const yBody = isRight ? -yMagnitude : yMagnitude;
+
+    const ik = leg_explicit_inverse_kinematics([xBody, yBody, zBody], legIndex);
     if (ik) {
-      const servoSolution = solveServoForJointAngles(ik.thighRad, ik.calfAbsRad);
-      const tibiaRad = servoSolution?.thetaServo != null
-        ? servoSolution.thetaServo - LEGACY_NEUTRAL_CALIBRATION.thetaServo
-        : effectiveAngles[2];
-      const nextAngles = clampLegAngles([effectiveAngles[0], ik.thighRad, tibiaRad]);
-      onPreviewAngles?.({
-        leg: activeLeg,
-        angles: nextAngles,
-      });
-      onFootDrag?.({ x: localMm.x, z: localMm.y, leg: activeLeg, angles: nextAngles });
+      const nextAngles = clampLegAngles(ik);
+      onPreviewAngles?.({ leg: activeLeg, angles: nextAngles });
+      onFootDrag?.({ x: absMm.x, z: absMm.y, leg: activeLeg, angles: nextAngles });
       return;
     }
 
-    // andy-servo's frame labels the vertical axis y; the dashboard thinks
-    // in (x, z) sagittal. Forward both under the same name contract the
-    // old LegDetail used so upstream code doesn't need changes.
-    onFootDrag?.({ x: localMm.x, z: localMm.y, leg: activeLeg });
+    // IK refused (target outside reach window after coupled clamping).
+    // Forward the raw target so upstream foot-XYZ mode can still try; the
+    // bridge will clamp/decline as needed.
+    onFootDrag?.({ x: absMm.x, z: absMm.y, leg: activeLeg });
   }
 
   return (
@@ -444,59 +452,12 @@ function clampLegAngles(angles) {
   return clamped[0] ?? angles;
 }
 
-// ─── 2-link sagittal IK (local drag preview) ─────────────────────────────
-//
-// Standard planar two-link IK: hip at origin, thigh length L1, calf length
-// L2, foot target (fx, fy) in andy-servo's math frame (+x forward, +y up).
-// Returns absolute-angle pair {thighRad, calfAbsRad} in the same convention
-// the bell-crank reverse-solve (buildLegPoseFromJointAngles) expects.
-//
-// There are two IK branches (elbow-up vs elbow-down). The leg has a visually
-// "correct" branch depending on which side the knee should bend; we pick the
-// one whose thigh angle is closer to the continuity hint (the current thigh
-// angle from jointState), so the leg doesn't snap through itself mid-drag.
-//
-// If the target is outside the reachable annulus [|L1-L2|, L1+L2], the
-// target is clamped to the closest reachable radius before the solve runs.
-function twoLinkSagittalIK(fx, fy, L1, L2, hintThighRad) {
-  const r2 = fx * fx + fy * fy;
-  const maxR = L1 + L2 - 1e-6;
-  const minR = Math.abs(L1 - L2) + 1e-6;
-  let r = Math.sqrt(r2);
-  if (r < 1e-6) return null;
-  // Clamp target to reachable annulus.
-  if (r > maxR) {
-    const s = maxR / r;
-    fx *= s; fy *= s; r = maxR;
-  } else if (r < minR) {
-    const s = minR / r;
-    fx *= s; fy *= s; r = minR;
-  }
-
-  const cosE = (r * r - L1 * L1 - L2 * L2) / (2 * L1 * L2);
-  const clamped = Math.max(-1, Math.min(1, cosE));
-  const elbowMagnitude = Math.acos(clamped);
-
-  // Two branches: elbow = +E (knee bends one way) vs elbow = -E.
-  const candidates = [+elbowMagnitude, -elbowMagnitude].map((elbow) => {
-    const k1 = L1 + L2 * Math.cos(elbow);
-    const k2 = L2 * Math.sin(elbow);
-    const thighRad = Math.atan2(fy, fx) - Math.atan2(k2, k1);
-    return { thighRad, calfAbsRad: thighRad + elbow };
-  });
-
-  // Pick the branch whose thigh angle is closest to the continuity hint.
-  // Use a wrapped-angle distance so 179° and -179° are treated as close.
-  const hint = Number.isFinite(hintThighRad) ? hintThighRad : -Math.PI / 2;
-  const dist = (a, b) => {
-    let d = a - b;
-    while (d >  Math.PI) d -= 2 * Math.PI;
-    while (d < -Math.PI) d += 2 * Math.PI;
-    return Math.abs(d);
-  };
-  candidates.sort((a, b) => dist(a.thighRad, hint) - dist(b.thighRad, hint));
-  return candidates[0];
-}
+// (Drag IK now goes through leg_explicit_inverse_kinematics from
+// argos_kinematics.js — see dispatchFootAt above. The legacy 2-link
+// approximation lived here previously; it ran against the legacy bell-crank
+// constants and produced previews that drifted from what the bridge would
+// actually command, which is precisely the "SVG vs leg disagree" symptom we
+// just fixed.)
 
 export function leg_angle_map(jointState) {
   // Utility for panels that want all 12 joints keyed by name.

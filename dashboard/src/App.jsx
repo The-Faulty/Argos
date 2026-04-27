@@ -20,7 +20,7 @@
 // is limited to: active leg, whether the settings drawer is open, and
 // last-error banner toggle.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import AnimationPlayer from "./components/AnimationPlayer.jsx";
 import CameraPanel from "./components/CameraPanel.jsx";
@@ -71,6 +71,14 @@ function AppBody() {
   const [previewAngles, setPreviewAngles] = useState(null);
   useEffect(() => setPreviewAngles(null), [activeLeg]);
 
+  // Joystick auto-mode-switch dedupe. The WalkingPanel heartbeat re-emits
+  // the held twist every 100 ms; until the Pi telemetry confirms the mode
+  // flipped, our `mode` state still reads the old value and the conditional
+  // below would re-fire `setMode("trot")` on every heartbeat. The ref
+  // gates that — true while a switch is in flight, cleared on stick release
+  // OR on a real mode transition (the useEffect below).
+  const trotRequested = useRef(false);
+
   // LegDetail emits a window event when its in-header selector changes,
   // since that subcomponent lives outside the provider tree by design.
   useEffect(() => {
@@ -97,6 +105,12 @@ function AppBody() {
   const mode = data.mode || "idle";
   const isDirectFoot = mode === "direct_foot_xyz";
   const isDirectServo = mode === "direct_servo_angles";
+
+  // Real Pi-side mode transition → drop the in-flight setMode gate so the
+  // next "stick from non-trot" push is allowed to issue a fresh setMode.
+  useEffect(() => {
+    trotRequested.current = false;
+  }, [mode]);
 
   // Joint-slider dispatcher used by the "always-on" JointPanel sitting right
   // under LegDetail. Same auto-switch pattern as the foot drag: flipping to
@@ -246,23 +260,31 @@ function AppBody() {
             mode={mode}
             rotateIncrement={rotateSettings.rotate_increment_deg}
             onTwist={async (x, y, yaw) => {
-              // Same auto-switch pattern as the foot drag and joint sliders:
-              // if the operator grabs the joystick from idle/crouch/stand, the
-              // planner is silently dropping the twist (only crawl/trot consume
-              // it). Flip to trot on first non-zero input so walking "just
-              // works" without requiring the user to tap a chip first.
-              //
-              // Await the mode flip before sending the twist — the two are
-              // independent HTTP requests, and if sendTwist arrived first the
-              // planner was still in the old mode and dropped the very first
-              // joystick push. Once mode is already trot/crawl the conditional
-              // is false, so this adds no mid-walk latency.
-              if (mode !== "trot" && mode !== "crawl" && (x !== 0 || y !== 0 || yaw !== 0)) {
+              // Auto-switch to trot on first non-zero input (only crawl/trot
+              // consume the twist; from idle/stand/crouch the planner would
+              // silently drop it). The trotRequested ref makes this idempotent
+              // across the WalkingPanel heartbeat — without it, every 100 ms
+              // re-emit while mode telemetry hasn't caught up was firing a
+              // fresh `setMode("trot")` HTTP call. The ref is cleared on a
+              // real Pi-side mode transition (useEffect on `mode` above) and
+              // on stick release (below).
+              const moving = x !== 0 || y !== 0 || yaw !== 0;
+              if (
+                moving &&
+                mode !== "trot" &&
+                mode !== "crawl" &&
+                !trotRequested.current
+              ) {
+                trotRequested.current = true;
                 try { await cmd.setMode("trot"); } catch { /* fall through */ }
               }
+              if (!moving) trotRequested.current = false;
               cmd.sendTwist(x, y, yaw).catch(() => {});
             }}
-            onZeroTwist={() => cmd.sendTwist(0, 0, 0).catch(() => {})}
+            onZeroTwist={() => {
+              trotRequested.current = false;
+              cmd.sendTwist(0, 0, 0).catch(() => {});
+            }}
             onRotate={(dir, deg) => cmd.rotate(dir, deg).catch(() => {})}
             onGaitParam={(name, value) => cmd.setGaitParam(name, value).catch(() => {})}
           />

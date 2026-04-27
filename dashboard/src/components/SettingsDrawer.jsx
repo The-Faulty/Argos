@@ -57,6 +57,7 @@ export default function SettingsDrawer({
       <div className="settings-drawer__scroll">
         <ServoOverridesSection value={servoOverrides} onSave={onSaveServoOverrides} />
         <JointLimitsSection value={jointLimits} onSave={onSaveJointLimits} />
+        <CoupledEnvelopeSection />
         <ServoRateSection
           speed={servoSpeed}
           updateRate={servoUpdateRate}
@@ -317,6 +318,56 @@ function StabilizerSection({ onSave }) {
       <RangeField label="IMU filter α" bounds={b.imu_filter_alpha}
                   value={draft.imu_filter_alpha} step={0.01}
                   onChange={(v) => setField("imu_filter_alpha", v)} />
+    </Section>
+  );
+}
+
+// ─── Section: coupled bell-crank envelope (read-only) ───────────────────
+//
+// The femur and tibia are mechanically coupled through the bell-crank, so
+// the per-joint min/max in `JointLimitsSection` is only the outer hardware
+// envelope. The realistic envelope at any moment is a polygon: at femur
+// = -50° tibia is restricted to [-90, +5]; at femur = 0 tibia is restricted
+// to [-25, +90]. The IK and the JointPanel slider both enforce this live;
+// this table just documents the five operator-measured sample points so
+// it's clear from one place what the dashboard considers reachable.
+//
+// Source: scripts/limit_finder.py probe output, pinned in robot-config.js
+// as COUPLED_TOP_SAMPLES_DEG / COUPLED_BOT_MIN_SAMPLES_DEG /
+// COUPLED_BOT_MAX_SAMPLES_DEG. Re-probe and re-edit those constants if the
+// measured envelope changes (no edit needed here — the table reads them
+// directly).
+function CoupledEnvelopeSection() {
+  const rows = COUPLED_TOP_SAMPLES_DEG.map((femurServoDeg, i) => ({
+    femurJointDeg: femurServoDeg - SERVO_CENTER_DEG,
+    tibiaMinJointDeg: COUPLED_BOT_MIN_SAMPLES_DEG[i] - SERVO_CENTER_DEG,
+    tibiaMaxJointDeg: COUPLED_BOT_MAX_SAMPLES_DEG[i] - SERVO_CENTER_DEG,
+  }));
+  return (
+    <Section title="Coupled bell-crank envelope (read-only)">
+      <p className="muted" style={{ marginTop: 0 }}>
+        Allowed tibia range at each femur control point. The slider in the
+        joint panel narrows live to whatever value sits between these samples
+        as you move the other joint.
+      </p>
+      <table className="settings-table">
+        <thead>
+          <tr>
+            <th>femur (°)</th>
+            <th>tibia min (°)</th>
+            <th>tibia max (°)</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.femurJointDeg}>
+              <td>{r.femurJointDeg.toFixed(0)}</td>
+              <td>{r.tibiaMinJointDeg.toFixed(0)}</td>
+              <td>{r.tibiaMaxJointDeg.toFixed(0)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Section>
   );
 }

@@ -414,7 +414,13 @@ function sleep(ms) {
 }
 
 function servoAnglesEqual(a, b) {
-  const eps = 0.05;
+  // 0.01° threshold — well below the smallest visible servo step (~0.1°) but
+  // tight enough that genuine gait-cycle deltas always pass and get sent.
+  // Was 0.05°: that wider band was masking dropped frames as "no resend
+  // needed" while the firmware FIFO overflow was eating commands. With the
+  // overflow fixed (firmware single-buffer Serial.write + 200 ms telemetry),
+  // tightening the dedupe makes the wire honest again.
+  const eps = 0.01;
   return Math.abs(a.hipServoDeg - b.hipServoDeg) < eps
       && Math.abs(a.thighServoDeg - b.thighServoDeg) < eps
       && Math.abs(a.calfServoDeg - b.calfServoDeg) < eps;

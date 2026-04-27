@@ -128,24 +128,48 @@ export const DEFAULT_JOINT_LIMITS_RAD = {
 };
 
 // ─── Per-leg foot reach window (meters, body frame x) ─────────────────────
-// Empirical IK-success window for foot.x at default stance y (±0.1106 m) and
-// default body height z (-0.189 m). The femur joint limits ([-50°, 0°]) are
-// the binding constraint, not the linkage geometry. Bounds are pulled in
-// 2 mm from the measured edge of feasibility (probed at 0.5 mm resolution
-// against fourLegsInverseKinematics) so the IK doesn't sit on the cusp
-// where a sub-millimeter IMU-tilt or rounding nudge flips reachable→
-// unreachable. Re-probe with scripts/limit_finder.py if walking gets erratic
-// after a major joint-limit revision.
+// Empirical IK-success windows from running fourLegsInverseKinematics in a
+// sweep at the gait planner's actual stance (gait_planner STAND_FOOT_Y =
+// ±0.0733 m, STAND_FOOT_Z = -0.195 m). Bounds are pulled in 2 mm from the
+// measured edge of feasibility (probed at 0.5 mm resolution by
+// scripts/probe_foot_reach.mjs) so the IK doesn't sit on the cusp where a
+// sub-millimeter IMU-tilt or rounding nudge flips reachable → unreachable.
+// Re-probe with `node scripts/probe_foot_reach.mjs` after any joint-limit
+// revision, body-height change, or stance-y change.
 //
-// The gait planner and setFootTargets both clamp foot targets against this
-// before solving IK so out-of-reach inputs (max twist, joystick edges,
-// foot-drag past the reachable zone) snap to the boundary instead of
-// stalling on a per-tick IK failure.
+// The earlier values here were probed at robot-config.js's DEFAULT_STANCE
+// (y = ±0.1106 m), which is a different mode's stance — the gait planner's
+// actual feet sit at y = ±0.0733 m, so clampFootInReach was using a window
+// probed at the wrong lateral. Numerically the result is similar (the
+// abductor doesn't shift x much with y) but they're now from the same
+// stance the gait actually uses.
+//
+// The gait planner uses these to clamp stance-phase foot targets and
+// setFootTargets uses them too. Swing-phase foot targets use the
+// _LIFTED window below — see gait_planner.clampFootInReach.
 export const DEFAULT_FOOT_REACH_X = {
-  FR: [ 0.077,  0.147],
-  FL: [ 0.077,  0.147],
-  RR: [-0.150, -0.077],
-  RL: [-0.150, -0.077],
+  FR: [ 0.076,  0.148],
+  FL: [ 0.076,  0.148],
+  RR: [-0.147, -0.075],
+  RL: [-0.147, -0.075],
+};
+
+// ─── Per-leg lifted-foot reach window ─────────────────────────────────────
+// Same probe as DEFAULT_FOOT_REACH_X but at swing-peak z (stance_z +
+// z_clearance = -0.195 + 0.020 = -0.175 m). Used to clamp swing-phase foot
+// targets only — at the lifted z the femur has different reach geometry
+// (the linkage extends differently), so the reachable x window shifts and
+// is significantly wider. Without this, swing-phase clamping was using the
+// stance window and silently shrinking step amplitude as soon as the
+// trajectory tried to put the foot past the stance edge.
+//
+// Re-probe with `node scripts/probe_foot_reach.mjs --lift-mm <z_clearance_mm>`
+// after any z_clearance / body-height change.
+export const DEFAULT_FOOT_REACH_X_LIFTED = {
+  FR: [ 0.028,  0.198],
+  FL: [ 0.028,  0.198],
+  RR: [-0.196, -0.025],
+  RL: [-0.196, -0.025],
 };
 
 // ─── Servo channel map (mirrors firmware s_servo_cal) ────────────────────

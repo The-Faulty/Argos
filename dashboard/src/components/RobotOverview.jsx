@@ -4,19 +4,17 @@
 // column 2 = right-side legs. Clicking a card sets the active leg in the
 // App shell — that's how the user zooms into a particular leg in LegDetail.
 //
-// Each card renders andy-servo's sagittal chain at a reduced size so the
-// mini preview matches the focused LegDetail view pixel-for-pixel. We share
-// the same buildLegPoseFromJointAngles pipeline (the legacy bell-crank
-// reverse-solve) so that visual parity is automatic — if LegDetail's
-// rendering changes, the mini cards follow.
+// Each card renders the sagittal chain at a reduced size so the mini preview
+// matches the focused LegDetail view pixel-for-pixel. We share the same FK
+// (buildLegPoseFromJointAngles from argos_kinematics.js — the same one the
+// IK uses to validate poses on the Pi) so visual parity with LegDetail and
+// with the physical robot is automatic.
 
 import { useMemo } from "react";
 import {
-  LEGACY_LEG_GEOMETRY,
-  LEGACY_NEUTRAL_CALIBRATION,
-  solveGeometryLegacy,
+  buildLegPoseFromJointAngles,
   toCanvasPoint,
-} from "../../shared/kinematics.js";
+} from "../../shared/argos_kinematics.js";
 import { JOINT_ROWS, LEG_DRAWING, LEG_IDS, LEG_LABELS } from "../../shared/robot-config.js";
 
 // Grid order puts left-side legs (FL, RL) in column 1 and right-side legs
@@ -29,43 +27,37 @@ const RAD2DEG = 180.0 / Math.PI;
 const CARD_W = 150;
 const CARD_H = 120;
 
-// Minimal segment set for the mini preview — just the thigh, calf, and
-// bell arms. Full 7-segment rendering would be unreadable at 150px wide.
-// Colors + widths still come from andy-servo for visual parity with
-// LegDetail, just scaled down (widths ÷ ~2).
+// Real FK is in meters; canvas helpers + LEG_DRAWING.scale=1.4 expect mm.
+// Scale once at the FK→canvas boundary (matches LegDetail.jsx M_TO_MM).
+const M_TO_MM = 1000.0;
+function scalePoint(p) { return { x: p.x * M_TO_MM, y: p.y * M_TO_MM }; }
+
+// Minimal segment set for the mini preview — thigh, calf, bell arms, horn,
+// and the two push-rods. Geometry keys match argos_kinematics's FK output
+// (same shape LegDetail consumes).
 const MINI_SEGMENTS = [
-  { key: "upper",     from: "hip",          to: "knee",        stroke: "#141414", width: 6 },
-  { key: "lower",     from: "knee",         to: "foot",        stroke: "#1d8cff", width: 6 },
-  { key: "bell-a",    from: "hip",          to: "bellArmA",    stroke: "#21a264", width: 4 },
-  { key: "bell-b",    from: "hip",          to: "bellArmB",    stroke: "#21a264", width: 4 },
-  { key: "horn",      from: "servoPivot",   to: "servoHornEnd",stroke: "#ff5232", width: 4 },
-  { key: "linkShort", from: "servoHornEnd", to: "bellArmA",    stroke: "#ef8a17", width: 4 },
-  { key: "linkLong",  from: "bellArmB",     to: "calfAttach",  stroke: "#6f4cff", width: 4 },
+  { key: "upper",     from: "O",      to: "knee",    stroke: "#141414", width: 6 },
+  { key: "lower",     from: "knee",   to: "foot",    stroke: "#1d8cff", width: 6 },
+  { key: "bell-a",    from: "O",      to: "bcRight", stroke: "#21a264", width: 4 },
+  { key: "bell-b",    from: "O",      to: "bcLeft",  stroke: "#21a264", width: 4 },
+  { key: "horn",      from: "O",      to: "horn",    stroke: "#ff5232", width: 4 },
+  { key: "linkShort", from: "horn",   to: "bcRight", stroke: "#ef8a17", width: 4 },
+  { key: "linkLong",  from: "bcLeft", to: "rod2",    stroke: "#6f4cff", width: 4 },
 ];
 
 export default function RobotOverview({ activeLeg, onSelectLeg, jointState }) {
-  // Compute all four poses at once — they share the geometry table, and
-  // memoizing here avoids re-computing on every parent re-render. Same FK
-  // path as LegDetail: femur_rad → thetaThigh (direct-drive), tibia_rad →
-  // servo-horn theta = neutralThetaServo + tibia_rad. Avoids the reverse-
-  // solve clamp that used to pin rendering to legacy calf ∈ [-165°, -25°].
+  // Compute all four poses at once — memoizing here avoids re-computing on
+  // every parent re-render. buildLegPoseFromJointAngles takes radians and
+  // returns geometry in meters; we scale to mm at the canvas boundary.
   const posesByLeg = useMemo(() => {
     const out = {};
     for (const leg of LEG_IDS) {
       const angles = readLegAngles(jointState, leg);
       try {
-        const thetaThigh = angles[1];
-        const thetaServo = LEGACY_NEUTRAL_CALIBRATION.thetaServo + angles[2];
-        const geometry = solveGeometryLegacy(thetaThigh, thetaServo);
-        const pose = {
-          geometry,
-          foot: {
-            x: geometry.foot.x - LEGACY_LEG_GEOMETRY.footOriginOffset.x,
-            y: geometry.foot.y - LEGACY_LEG_GEOMETRY.footOriginOffset.y,
-          },
-          reachable: geometry.valid,
-        };
-        out[leg] = { pose, angles };
+        const result = buildLegPoseFromJointAngles(angles, { legId: leg });
+        out[leg] = result?.geometry
+          ? { pose: { geometry: result.geometry, reachable: result.reachable }, angles }
+          : { pose: null, angles };
       } catch {
         out[leg] = { pose: null, angles };
       }
@@ -158,16 +150,15 @@ function LegCard({ leg, isActive, poseData, onSelect }) {
 }
 
 function mapGeometry(geometry) {
-  const p = (pt) => toCanvasPoint(pt, LEG_DRAWING);
+  const p = (pt) => toCanvasPoint(scalePoint(pt), LEG_DRAWING);
   return {
-    hip:          p(geometry.hip),
-    knee:         p(geometry.knee),
-    foot:         p(geometry.foot),
-    servoPivot:   p(geometry.servoPivot),
-    servoHornEnd: p(geometry.servoHornEnd),
-    bellArmA:     p(geometry.bellArmA),
-    bellArmB:     p(geometry.bellArmB),
-    calfAttach:   p(geometry.calfAttach),
+    O:       p(geometry.O),
+    knee:    p(geometry.knee),
+    foot:    p(geometry.foot),
+    horn:    p(geometry.horn),
+    bcLeft:  p(geometry.bcLeft),
+    bcRight: p(geometry.bcRight),
+    rod2:    p(geometry.rod2),
   };
 }
 
