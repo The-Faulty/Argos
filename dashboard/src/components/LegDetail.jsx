@@ -34,7 +34,6 @@ import {
   clamp_joint_matrix,
   fromCanvasPoint,
   leg_explicit_inverse_kinematics,
-  segmentPath,
   toCanvasPoint,
 } from "../../shared/argos_kinematics.js";
 import {
@@ -259,7 +258,7 @@ export default function LegDetail({
               {SEGMENTS.map((seg) => (
                 <path
                   key={seg.key}
-                  d={segmentPath(points[seg.from], points[seg.to])}
+                  d={canvasSegmentPath(points[seg.from], points[seg.to])}
                   stroke={seg.stroke}
                   strokeWidth={seg.width}
                   strokeLinecap="round"
@@ -427,6 +426,10 @@ function StatsGrid({ activeLeg, angles, reachable }) {
 function fmt(n, digits) {
   if (!Number.isFinite(n)) return "—";
   return n.toFixed(digits);
+}
+
+function canvasSegmentPath(a, b) {
+  return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────

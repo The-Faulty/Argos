@@ -138,8 +138,10 @@ test("clamp_joint_matrix tightens the coupled envelope", () => {
 
 test("coupled femur/tibia limits match measured joint-space points", () => {
   const measured = [
+    { femur: -90, tibia: [-90, -90] },
     { femur: -50, tibia: [-90, 5] },
     { femur: -38, tibia: [-90, 30] },
+    { femur: -35, tibia: [-90, 37] },
     { femur: -25, tibia: [-70, 60] },
     { femur: -13, tibia: [-50, 90] },
     { femur: 0, tibia: [-25, 90] },
@@ -153,8 +155,8 @@ test("coupled femur/tibia limits match measured joint-space points", () => {
 
 test("coupled femur limits update from current tibia angle", () => {
   const cases = [
-    { tibia: -90, femur: [-50, -38] },
-    { tibia: -70, femur: [-50, -25] },
+    { tibia: -90, femur: [-90, -35] },
+    { tibia: -70, femur: [-82, -25] },
     { tibia: 5, femur: [-50, 0] },
     { tibia: 30, femur: [-38, 0] },
     { tibia: 60, femur: [-25, 0] },

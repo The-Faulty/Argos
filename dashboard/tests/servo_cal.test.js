@@ -76,7 +76,7 @@ test("clampServoDeg keeps outputs inside [min_deg, max_deg]", () => {
 test("servo offsets shift the clamp window past nominal joint limits", () => {
   try {
     setOverrides({ FR_femur_joint: { offset_deg: 15.0 } });
-    assert.deepEqual(servoCommandLimitsDeg("FR_femur_joint"), [55.0, 105.0]);
+    assert.deepEqual(servoCommandLimitsDeg("FR_femur_joint"), [15.0, 105.0]);
 
     const jointMaxWithOffset = applyServoCal("FR_femur_joint", 0.0);
     assert.equal(jointMaxWithOffset, 105.0);
@@ -91,7 +91,7 @@ test("femur and tibia servo calibration limits match measured travel", () => {
   for (const leg of LEG_IDS) {
     assert.deepEqual(
       pickServoLimits(findCalByJoint(`${leg}_femur_joint`)),
-      [40.0, 90.0],
+      [0.0, 90.0],
       `${leg} femur`,
     );
     assert.deepEqual(

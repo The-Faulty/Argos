@@ -175,7 +175,7 @@ export class GaitPlanner {
     const servoAnglesDeg = jointAnglesRadToServoDeg(jointAnglesRad);
     this.lastJointAnglesRad = jointAnglesRad;
     this.lastServoAnglesDeg = servoAnglesDeg;
-    return { servoAnglesDeg, jointAnglesRad, feet: makeStanceFeet(this.config) };
+    return { servoAnglesDeg, jointAnglesRad, feet: makeStanceFeet(this.config), phaseTag: allStanceTag() };
   }
 
   _stancePose(mode) {
@@ -194,7 +194,7 @@ export class GaitPlanner {
     const servoAnglesDeg = jointAnglesRadToServoDeg(jointAnglesRad);
     this.lastJointAnglesRad = jointAnglesRad;
     this.lastServoAnglesDeg = servoAnglesDeg;
-    return { servoAnglesDeg, jointAnglesRad, feet: makeStanceFeet(this.config) };
+    return { servoAnglesDeg, jointAnglesRad, feet: makeStanceFeet(this.config), phaseTag: allStanceTag() };
   }
 
   _gaitPose(mode) {
@@ -213,7 +213,7 @@ export class GaitPlanner {
       this._applyImuTilt(baseFeet);
       // All four feet are on the ground at neutral pose → stance window.
       const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i], "stance", this.jointLimitsRad));
-      return this._solveAndCache(clamped, { lockCoxa: true });
+      return this._solveAndCache(clamped, { lockCoxa: true, phaseTag: allStanceTag() });
     }
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
 
@@ -273,7 +273,7 @@ export class GaitPlanner {
     // scripts/probe_foot_reach.mjs after any z_clearance change.
     const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i], phaseTag[i], this.jointLimitsRad));
     const lockCoxa = Math.abs(this.twist.y) < 1e-6 && Math.abs(this.twist.yaw) < 1e-6;
-    return this._solveAndCache(clamped, { lockCoxa });
+    return this._solveAndCache(clamped, { lockCoxa, phaseTag });
   }
 
   // Per-leg peak-to-peak foot displacement over one stance window (in body
@@ -326,7 +326,7 @@ export class GaitPlanner {
     }
   }
 
-  _solveAndCache(feet, { lockCoxa = false } = {}) {
+  _solveAndCache(feet, { lockCoxa = false, phaseTag = allStanceTag() } = {}) {
     const ik = fourLegsInverseKinematics(feet, { limits: this.jointLimitsRad });
     if (!ik.ok) {
       // Refuse to publish bad IK — return last good output.
@@ -334,6 +334,7 @@ export class GaitPlanner {
         servoAnglesDeg: this.lastServoAnglesDeg,
         jointAnglesRad: this.lastJointAnglesRad,
         feet,
+        phaseTag,
         error: `IK failed for ${ik.leg}: ${ik.reason}`,
       };
     }
@@ -345,7 +346,7 @@ export class GaitPlanner {
     this.lastJointAnglesRad = jointAnglesRad;
     this.lastServoAnglesDeg = servoAnglesDeg;
     this.feet = feet;
-    return { servoAnglesDeg, jointAnglesRad, feet };
+    return { servoAnglesDeg, jointAnglesRad, feet, phaseTag };
   }
 }
 
@@ -430,6 +431,10 @@ function gaitProfileTiming(cfg, mode) {
 
 function makeZeroJoints() {
   return new Array(JOINT_NAMES.length).fill(0);
+}
+
+function allStanceTag() {
+  return ["stance", "stance", "stance", "stance"];
 }
 
 function flattenJoints(angles4x3) {

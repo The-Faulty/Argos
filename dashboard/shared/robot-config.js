@@ -123,7 +123,7 @@ export const LEG_ORIGINS = [
 // relative to each servo's 90° neutral.
 export const DEFAULT_JOINT_LIMITS_RAD = {
   coxa:  [-45.0 * DEG2RAD,  45.0 * DEG2RAD],
-  femur: [-50.0 * DEG2RAD,   0.0 * DEG2RAD],
+  femur: [-90.0 * DEG2RAD,   0.0 * DEG2RAD],
   tibia: [-90.0 * DEG2RAD,  90.0 * DEG2RAD],
 };
 
@@ -190,12 +190,14 @@ export const DEFAULT_SERVO_CHANNEL_MAP = {
 // Joint-space pairs measured at the safe-region boundary:
 //   femur=-50:  tibia ∈ [-90, +5]
 //   femur=-38:  tibia ∈ [-90, +30]
+//   femur=-35:  tibia can still reach -90
 //   femur=-25:  tibia ∈ [-70, +60]
 //   femur=-13:  tibia ∈ [-50, +90]
 //   femur= 0:   tibia ∈ [-25, +90]
-export const COUPLED_TOP_SAMPLES_DEG     = [40.0,  52.0,  65.0,  77.0,  90.0];
-export const COUPLED_BOT_MIN_SAMPLES_DEG = [ 0.0,   0.0,  20.0,  40.0,  65.0];
-export const COUPLED_BOT_MAX_SAMPLES_DEG = [95.0, 120.0, 150.0, 180.0, 180.0];
+//   femur=-90:  tibia=-90
+export const COUPLED_TOP_SAMPLES_DEG     = [ 0.0,  40.0,  52.0,  55.0,  65.0,  77.0,  90.0];
+export const COUPLED_BOT_MIN_SAMPLES_DEG = [ 0.0,   0.0,   0.0,   0.0,  20.0,  40.0,  65.0];
+export const COUPLED_BOT_MAX_SAMPLES_DEG = [ 0.0,  95.0, 120.0, 127.0, 150.0, 180.0, 180.0];
 
 // ─── Servo-space horn limits (mirrors Config.SERVO_LIMITS_DEG) ───────────
 // Bench-measured direct-servo travel with the linkage assembled. Absolute
@@ -204,7 +206,7 @@ export const COUPLED_BOT_MAX_SAMPLES_DEG = [95.0, 120.0, 150.0, 180.0, 180.0];
 export const SERVO_CENTER_DEG = 90.0;
 export const SERVO_LIMITS_DEG = [
   [45.0, 135.0],   // hip (coxa)        — joint ±45
-  [40.0,  90.0],   // top (femur)       — joint -50..0   (probed via limit_finder)
+  [ 0.0,  90.0],   // top (femur)       — joint -90..0   (coupled with tibia)
   [ 0.0, 180.0],   // bottom (tibia)    — joint -90..+90 (probed via limit_finder)
 ];
 

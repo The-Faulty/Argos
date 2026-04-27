@@ -29,6 +29,12 @@ const BACKLASH_COMP_DEG = {
   femur: Number(process.env.ARGOS_BACKLASH_FEMUR_DEG ?? 1.8),
   tibia: Number(process.env.ARGOS_BACKLASH_TIBIA_DEG ?? 2.4),
 };
+// Skip the directional overshoot for legs in swing phase. The lift profile
+// reverses sign mid-swing (peak at u=0.5), so the per-tick servo delta flips
+// direction there and triggers a 1.8°/2.4° kick on femur/tibia at the top of
+// every step — visible on bench as foot drag at swing entry/exit and a tipping
+// moment that destabilizes crawl. Stance legs still get full comp.
+const SKIP_SWING_BACKLASH = (process.env.ARGOS_BACKLASH_SKIP_SWING ?? "1") !== "0";
 
 export class ModeController extends EventEmitter {
   constructor({ serial, persistence, getStances }) {
@@ -73,7 +79,7 @@ export class ModeController extends EventEmitter {
 
     const pose = await this._resolveModePose(mode);
     if (pose) {
-      this._publishServoDeg(pose.servoAnglesDeg, pose.jointAnglesRad);
+      this._publishServoDeg(pose.servoAnglesDeg, pose.jointAnglesRad, pose.phaseTag);
     }
   }
 
@@ -253,11 +259,11 @@ export class ModeController extends EventEmitter {
     const out = this.planner.step();
     if (!out) return;
     if (out.error) this.emit("error", out.error);
-    this._publishServoDeg(out.servoAnglesDeg, out.jointAnglesRad);
+    this._publishServoDeg(out.servoAnglesDeg, out.jointAnglesRad, out.phaseTag);
   }
 
-  _publishServoDeg(servoDeg12, jointAnglesRad12) {
-    const commandedServoDeg = this._applyBacklashCompensation(servoDeg12);
+  _publishServoDeg(servoDeg12, jointAnglesRad12, phaseTag) {
+    const commandedServoDeg = this._applyBacklashCompensation(servoDeg12, phaseTag);
     this.lastJointStatesDeg = commandedServoDeg;
     this.lastJointAnglesRad = jointAnglesRad12;
     try {
@@ -273,7 +279,7 @@ export class ModeController extends EventEmitter {
     });
   }
 
-  _applyBacklashCompensation(desiredServoDeg) {
+  _applyBacklashCompensation(desiredServoDeg, phaseTag) {
     const desired = desiredServoDeg.slice();
     if (!BACKLASH_COMP_MODES.has(this.mode)) {
       this._lastDesiredServoDeg = desired;
@@ -290,6 +296,12 @@ export class ModeController extends EventEmitter {
       if (Math.abs(delta) > BACKLASH_DEADBAND_DEG) {
         this._backlashDir[i] = Math.sign(delta);
       }
+      // Direction tracking still runs for swing legs so the first tick after
+      // touchdown has a correct delta history; only the overshoot output is
+      // suppressed.
+      const legPhase = phaseTag ? phaseTag[Math.floor(i / 3)] : "stance";
+      if (SKIP_SWING_BACKLASH && legPhase === "swing") continue;
+
       const dir = this._backlashDir[i];
       if (dir) out[i] = clampServoDeg(JOINT_NAMES[i], desired[i] + dir * comp);
     }

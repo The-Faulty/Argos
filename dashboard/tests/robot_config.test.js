@@ -72,7 +72,7 @@ test("MODE_OPTIONS covers gait planner's walking modes", () => {
 test("default joint limits match measured leg travel", () => {
   assert.deepEqual(
     DEFAULT_JOINT_LIMITS_RAD.femur.map((rad) => Math.round(rad * RAD2DEG)),
-    [-50, 0],
+    [-90, 0],
   );
   assert.deepEqual(
     DEFAULT_JOINT_LIMITS_RAD.tibia.map((rad) => Math.round(rad * RAD2DEG)),
@@ -81,14 +81,14 @@ test("default joint limits match measured leg travel", () => {
 });
 
 test("servo horn limits match measured safe travel", () => {
-  assert.deepEqual(SERVO_LIMITS_DEG[1], [40.0, 90.0]);
+  assert.deepEqual(SERVO_LIMITS_DEG[1], [0.0, 90.0]);
   assert.deepEqual(SERVO_LIMITS_DEG[2], [0.0, 180.0]);
 });
 
 test("coupled femur/tibia samples match measured safe envelope", () => {
-  assert.deepEqual(COUPLED_TOP_SAMPLES_DEG, [40.0, 52.0, 65.0, 77.0, 90.0]);
-  assert.deepEqual(COUPLED_BOT_MIN_SAMPLES_DEG, [0.0, 0.0, 20.0, 40.0, 65.0]);
-  assert.deepEqual(COUPLED_BOT_MAX_SAMPLES_DEG, [95.0, 120.0, 150.0, 180.0, 180.0]);
+  assert.deepEqual(COUPLED_TOP_SAMPLES_DEG, [0.0, 40.0, 52.0, 55.0, 65.0, 77.0, 90.0]);
+  assert.deepEqual(COUPLED_BOT_MIN_SAMPLES_DEG, [0.0, 0.0, 0.0, 0.0, 20.0, 40.0, 65.0]);
+  assert.deepEqual(COUPLED_BOT_MAX_SAMPLES_DEG, [0.0, 95.0, 120.0, 127.0, 150.0, 180.0, 180.0]);
 });
 
 test("walking and rotate defaults are tuned for controlled motion", () => {
