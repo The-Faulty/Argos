@@ -118,19 +118,6 @@ const COMMAND_VALIDATORS = {
       if (!isKnownJointName(key)) throw new Error(`Unknown joint: ${key}`);
     }
   },
-
-  set_joint_limits(cmd) {
-    if (typeof cmd.limits !== "object" || cmd.limits === null) {
-      throw new Error("set_joint_limits.limits must be an object");
-    }
-    for (const key of Object.keys(cmd.limits)) {
-      if (!isKnownJointName(key)) throw new Error(`Unknown joint: ${key}`);
-      const v = cmd.limits[key];
-      if (!Number.isFinite(v?.min_deg) || !Number.isFinite(v?.max_deg)) {
-        throw new Error(`set_joint_limits.limits.${key} must have {min_deg, max_deg} numbers`);
-      }
-    }
-  },
 };
 
 export function validateCommand(command) {

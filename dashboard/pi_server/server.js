@@ -30,7 +30,6 @@ import { euler_from_quaternion } from "./quaternion.js";
 import {
   loadServoOverrides,
   saveServoOverrides,
-  saveJointLimits,
   loadStances,
   saveStances,
   upsertStance,
@@ -59,7 +58,6 @@ const STARTUP_CROUCH_MS = Math.max(0, Number(process.env.ARGOS_STARTUP_CROUCH_MS
 const state = {
   rotateSettings: { ...DEFAULT_ROTATE_SETTINGS },
   servoOverrides: {},
-  jointLimits: {},
   servoSpeed: {},
   servoUpdateRate: { hz: 50 },
   stances: {},
@@ -184,7 +182,15 @@ sensors.on("thermal", (msg) => {
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
-app.use(express.static(STATIC_DIR));
+app.use((_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store");
+  next();
+});
+app.use(express.static(STATIC_DIR, {
+  etag: false,
+  lastModified: false,
+  maxAge: 0,
+}));
 
 app.get("/api/health", (_req, res) => {
   res.json({
@@ -212,19 +218,6 @@ app.post("/api/settings/servo_overrides", async (req, res) => {
     setServoCalOverrides(state.servoOverrides);
     broadcast({ type: "settings:servo_overrides", payload: state.servoOverrides });
     res.json(state.servoOverrides);
-  } catch (err) {
-    res.status(400).json({ error: String(err.message || err) });
-  }
-});
-
-// ─── Settings: joint limits ──────────────────────────────────────────────
-app.get("/api/settings/joint_limits", (_req, res) => res.json(state.jointLimits));
-app.post("/api/settings/joint_limits", async (req, res) => {
-  try {
-    state.jointLimits = await saveJointLimits(req.body);
-    mode.setJointLimits(state.jointLimits);
-    broadcast({ type: "settings:joint_limits", payload: state.jointLimits });
-    res.json(state.jointLimits);
   } catch (err) {
     res.status(400).json({ error: String(err.message || err) });
   }
@@ -475,11 +468,6 @@ async function handleCommand(cmd) {
       setServoCalOverrides(state.servoOverrides);
       broadcast({ type: "settings:servo_overrides", payload: state.servoOverrides });
       break;
-    case "set_joint_limits":
-      state.jointLimits = await saveJointLimits(cmd.limits);
-      mode.setJointLimits(state.jointLimits);
-      broadcast({ type: "settings:joint_limits", payload: state.jointLimits });
-      break;
     case "animation_play":
     case "animation_stop":
       // Animations are TODO; route through stance mode for now.
@@ -538,7 +526,6 @@ wss.on("connection", (ws) => {
     mode: state.mode,
     rotate_settings: state.rotateSettings,
     servo_overrides: state.servoOverrides,
-    joint_limits: state.jointLimits,
     servo_speed: state.servoSpeed,
     servo_update_rate: state.servoUpdateRate,
     stances: state.stances,
@@ -598,11 +585,6 @@ function appendRecorderSample() {
 async function bootstrap() {
   state.servoOverrides = await loadServoOverrides();
   setServoCalOverrides(state.servoOverrides);
-  // Joint limits now come from the measured defaults + coupled femur/tibia
-  // envelope in shared/robot-config.js and firmware/argos_servo.ino. Ignore
-  // any stale hand-edited joint_limits.json so old settings cannot silently
-  // narrow the dashboard sliders or gait planner on boot.
-  state.jointLimits = {};
   state.stances = await loadStances();
   state.rotateSettings = await loadRotateSettings();
   state.servoSpeed = await loadServoSpeed();
@@ -613,7 +595,6 @@ async function bootstrap() {
   serial.on("open", async () => {
     if (state.servoUpdateRate?.hz) mode.setServoUpdateRate(state.servoUpdateRate.hz);
     if (Object.keys(state.servoSpeed).length) mode.setServoSpeedLimit(state.servoSpeed);
-    if (Object.keys(state.jointLimits).length) mode.setJointLimits(state.jointLimits);
     try {
       await mode.runStartupPoseSequence({
         standMs: STARTUP_STAND_MS,

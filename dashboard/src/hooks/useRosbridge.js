@@ -9,7 +9,7 @@
 //   {
 //     connected: { ws: bool, serial: bool, sensors: bool, lastEvent: {...} },
 //     mode: string,
-//     rotate_settings, servo_overrides, joint_limits, stances,
+//     rotate_settings, servo_overrides, stances,
 //     joint_states: {name, position, ...} | null,
 //     imu: {_euler_rad: {roll,pitch,yaw}, ...} | null,
 //     gas: {data: number} | null,
@@ -43,7 +43,6 @@ export function useRosbridge({ url = DEFAULT_URL } = {}) {
     mode: "idle",
     rotate_settings: null,
     servo_overrides: {},
-    joint_limits: {},
     servo_speed: null,
     servo_update_rate: null,
     stances: {},
@@ -143,7 +142,6 @@ function reduce(prev, msg) {
         mode: msg.mode ?? prev.mode,
         rotate_settings: msg.rotate_settings ?? prev.rotate_settings,
         servo_overrides: msg.servo_overrides ?? prev.servo_overrides,
-        joint_limits: msg.joint_limits ?? prev.joint_limits,
         servo_speed: msg.servo_speed ?? prev.servo_speed,
         servo_update_rate: msg.servo_update_rate ?? prev.servo_update_rate,
         stances: msg.stances ?? prev.stances,
@@ -177,8 +175,6 @@ function reduce(prev, msg) {
       return { ...prev, rotate_settings: msg.payload };
     case "settings:servo_overrides":
       return { ...prev, servo_overrides: msg.payload };
-    case "settings:joint_limits":
-      return { ...prev, joint_limits: msg.payload };
     case "settings:servo_speed":
       return { ...prev, servo_speed: msg.payload };
     case "settings:servo_update_rate":

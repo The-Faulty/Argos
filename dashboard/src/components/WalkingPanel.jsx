@@ -45,6 +45,14 @@ export default function WalkingPanel({
   const [swing, setSwing] = useState(swingTimeMs ?? GAIT_TUNABLE_PARAMS.swing_time_ms.default);
   const svgRef = useRef(null);
 
+  useEffect(() => {
+    if (Number.isFinite(stepLength)) setStep(stepLength);
+  }, [stepLength]);
+
+  useEffect(() => {
+    if (Number.isFinite(swingTimeMs)) setSwing(swingTimeMs);
+  }, [swingTimeMs]);
+
   // Refs the heartbeat reads. Both are kept current via the dispatch path
   // (lastTwistRef from stickDispatch, onTwistRef from a ref-mirror effect)
   // so the heartbeat callback always sees the latest closure regardless of

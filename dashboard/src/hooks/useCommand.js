@@ -145,11 +145,6 @@ export function useCommand() {
     [wrap],
   );
 
-  const setJointLimits = useCallback(
-    wrap((limits) => jsonRequest("/api/settings/joint_limits", { body: limits })),
-    [wrap],
-  );
-
   const setRotateSettings = useCallback(
     wrap((settings) => jsonRequest("/api/settings/rotate", { body: settings })),
     [wrap],
@@ -194,7 +189,6 @@ export function useCommand() {
     setGaitParam,
     setStabilizerParams,
     setServoOverrides,
-    setJointLimits,
     setRotateSettings,
     setServoSpeedLimits,
     setServoUpdateRate,
