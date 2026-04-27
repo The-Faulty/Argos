@@ -20,6 +20,7 @@ import {
   JOINT_NAMES,
   JOINT_ROWS,
   LEG_IDS,
+  DEFAULT_JOINT_LIMITS_RAD,
   DEFAULT_ROTATE_SETTINGS,
   ROTATE_SETTINGS_BOUNDS,
   DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
@@ -27,6 +28,18 @@ import {
   DEFAULT_SERVO_UPDATE_RATE_HZ,
   SERVO_UPDATE_RATE_BOUNDS_HZ,
 } from "../shared/robot-config.js";
+
+const RAD2DEG = 180.0 / Math.PI;
+const LEGACY_JOINT_LIMITS_DEG = {
+  coxa: [-45.0, 45.0],
+  femur: [-145.0, 60.0],
+  tibia: [-165.0, -25.0],
+};
+const LEGACY_ROTATE_SETTINGS = {
+  rotate_increment_deg: 15.0,
+  rotate_rate_rad_s: 0.8,
+  rotate_calibration_factor: 1.02,
+};
 
 export const ARGOS_STATE_DIR = path.join(os.homedir(), ".argos");
 
@@ -91,9 +104,25 @@ function validateJointLimits(raw) {
     if (!value || typeof value !== "object") continue;
     if (!Number.isFinite(value.min_deg) || !Number.isFinite(value.max_deg)) continue;
     if (value.min_deg >= value.max_deg) continue;
+    if (isNoOpOrLegacyJointLimit(key, value)) continue;
     out[key] = { min_deg: value.min_deg, max_deg: value.max_deg };
   }
   return out;
+}
+
+function isNoOpOrLegacyJointLimit(jointName, range) {
+  const row = jointName.split("_")[1];
+  const defaults = DEFAULT_JOINT_LIMITS_RAD[row];
+  if (!defaults) return false;
+  const defaultDeg = [defaults[0] * RAD2DEG, defaults[1] * RAD2DEG];
+  if (sameRange(range, defaultDeg)) return true;
+  return sameRange(range, LEGACY_JOINT_LIMITS_DEG[row]);
+}
+
+function sameRange(range, pair) {
+  if (!pair) return false;
+  return Math.abs(range.min_deg - pair[0]) < 1e-6
+    && Math.abs(range.max_deg - pair[1]) < 1e-6;
 }
 
 function validateStances(raw) {
@@ -122,11 +151,20 @@ function validateRotateSettings(raw) {
   const b = ROTATE_SETTINGS_BOUNDS;
   const d = DEFAULT_ROTATE_SETTINGS;
   const src = raw && typeof raw === "object" ? raw : {};
+  if (sameRotateSettings(src, LEGACY_ROTATE_SETTINGS)) {
+    return { ...d };
+  }
   return {
     rotate_increment_deg:      clampBound(b.rotate_increment_deg,      src.rotate_increment_deg,      d.rotate_increment_deg),
     rotate_rate_rad_s:         clampBound(b.rotate_rate_rad_s,         src.rotate_rate_rad_s,         d.rotate_rate_rad_s),
     rotate_calibration_factor: clampBound(b.rotate_calibration_factor, src.rotate_calibration_factor, d.rotate_calibration_factor),
   };
+}
+
+function sameRotateSettings(a, b) {
+  return Math.abs(Number(a.rotate_increment_deg) - b.rotate_increment_deg) < 1e-6
+    && Math.abs(Number(a.rotate_rate_rad_s) - b.rotate_rate_rad_s) < 1e-6
+    && Math.abs(Number(a.rotate_calibration_factor) - b.rotate_calibration_factor) < 1e-6;
 }
 
 // Per-joint-row speed limits in deg/s (coxa/femur/tibia). The bridge node

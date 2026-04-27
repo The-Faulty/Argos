@@ -15,6 +15,8 @@ import {
   applyServoCal,
   inverseServoCal,
   clampServoDeg,
+  servoCommandLimitsDeg,
+  setOverrides,
 } from "../shared/servo_cal.js";
 import { JOINT_NAMES, LEG_IDS, SERVO_CENTER_DEG } from "../shared/robot-config.js";
 
@@ -68,6 +70,20 @@ test("clampServoDeg keeps outputs inside [min_deg, max_deg]", () => {
     assert.equal(clampServoDeg(entry.joint, +999), entry.max_deg);
     const mid = 0.5 * (entry.min_deg + entry.max_deg);
     assert.equal(clampServoDeg(entry.joint, mid), mid);
+  }
+});
+
+test("servo offsets shift the clamp window past nominal joint limits", () => {
+  try {
+    setOverrides({ FR_femur_joint: { offset_deg: 15.0 } });
+    assert.deepEqual(servoCommandLimitsDeg("FR_femur_joint"), [55.0, 105.0]);
+
+    const jointMaxWithOffset = applyServoCal("FR_femur_joint", 0.0);
+    assert.equal(jointMaxWithOffset, 105.0);
+    assert.equal(clampServoDeg("FR_femur_joint", jointMaxWithOffset), 105.0);
+    assert.equal(clampServoDeg("FR_femur_joint", 999), 105.0);
+  } finally {
+    setOverrides({});
   }
 });
 

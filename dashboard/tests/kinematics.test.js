@@ -25,6 +25,7 @@ import {
   fourLegsInverseKinematics,
   clamp_joint_matrix,
   coupled_bot_limits_joint_deg,
+  coupled_top_limits_joint_deg,
 } from "../shared/kinematics.js";
 import { LEG_IDS, DEFAULT_JOINT_LIMITS_RAD } from "../shared/robot-config.js";
 
@@ -147,5 +148,21 @@ test("coupled femur/tibia limits match measured joint-space points", () => {
   for (const { femur, tibia } of measured) {
     const got = coupled_bot_limits_joint_deg(femur).map((deg) => Math.round(deg));
     assert.deepEqual(got, tibia, `femur ${femur} deg`);
+  }
+});
+
+test("coupled femur limits update from current tibia angle", () => {
+  const cases = [
+    { tibia: -90, femur: [-50, -38] },
+    { tibia: -70, femur: [-50, -25] },
+    { tibia: 5, femur: [-50, 0] },
+    { tibia: 30, femur: [-38, 0] },
+    { tibia: 60, femur: [-25, 0] },
+    { tibia: 90, femur: [-13, 0] },
+  ];
+
+  for (const { tibia, femur } of cases) {
+    const got = coupled_top_limits_joint_deg(tibia).map((deg) => Math.round(deg));
+    assert.deepEqual(got, femur, `tibia ${tibia} deg`);
   }
 });

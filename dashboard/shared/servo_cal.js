@@ -15,8 +15,8 @@
 //                 the firmware's LEG_CONFIGS owns the actual channel map
 //   direction   — kept at +1; user override `invert: true` flips per joint
 //   offset_deg  — added after applyServoCal, bench-calibrated
-//   min_deg     — hardware-safe lower horn bound
-//   max_deg     — hardware-safe upper horn bound
+//   min_deg     — nominal lower command bound before direction/offset
+//   max_deg     — nominal upper command bound before direction/offset
 
 import {
   JOINT_NAMES,
@@ -78,7 +78,7 @@ const RAD2DEG = 180.0 / Math.PI;
 const DEG2RAD = Math.PI / 180.0;
 
 /**
- * Joint-space radians → servo-horn degrees, respecting direction + offset.
+ * Joint-space radians → servo-command degrees, respecting direction + offset.
  * Matches firmware: servo_deg = CENTER + direction * joint_deg + offset.
  * Does NOT clamp to min/max — use `clampServoDeg` for that.
  */
@@ -95,19 +95,37 @@ export function inverseServoCal(jointName, servoDeg) {
   return (servoDeg - SERVO_CENTER_DEG - cal.offset_deg) / cal.direction * DEG2RAD;
 }
 
-/** Clamp a servo horn command into the calibration's min_deg..max_deg window. */
-export function clampServoDeg(jointName, servoDeg) {
+/**
+ * Return the active command window after direction/offset calibration.
+ *
+ * The default min/max values describe the nominal, pre-calibration joint-safe
+ * command range. Offsets intentionally shift that range so calibration can
+ * move a centered/limited joint beyond the nominal joint limit while keeping
+ * commands pinned to the physical 0..180 servo domain.
+ */
+export function servoCommandLimitsDeg(jointName) {
   const cal = findCalByJoint(jointName);
-  if (!cal) return servoDeg;
-  return Math.min(cal.max_deg, Math.max(cal.min_deg, servoDeg));
+  if (!cal) return [0.0, 180.0];
+  const a = SERVO_CENTER_DEG + cal.direction * (cal.min_deg - SERVO_CENTER_DEG) + cal.offset_deg;
+  const b = SERVO_CENTER_DEG + cal.direction * (cal.max_deg - SERVO_CENTER_DEG) + cal.offset_deg;
+  const lo = Math.max(0.0, Math.min(a, b));
+  const hi = Math.min(180.0, Math.max(a, b));
+  return [lo, hi];
+}
+
+/** Clamp a servo command into the active calibrated command window. */
+export function clampServoDeg(jointName, servoDeg) {
+  const [lo, hi] = servoCommandLimitsDeg(jointName);
+  return Math.min(hi, Math.max(lo, servoDeg));
 }
 
 /**
  * Apply a user-editable overrides table on top of the defaults. The dashboard
  * persists overrides in ~/.argos/servo_overrides.json and broadcasts them as
  * `/dashboard/servo_overrides` (JSON string). Overrides can flip `direction`
- * or shift `offset_deg` per-joint — the clamp window is handled via the
- * separate joint_limits table (see persistence.js / dashboard_bridge_node).
+ * or shift `offset_deg` per-joint. The active servo command window shifts
+ * with those overrides; the separate joint_limits table still controls IK and
+ * requested joint angles before calibration is applied.
  */
 export function applyOverrides(baseTable, overrides = {}) {
   return baseTable.map((entry) => {

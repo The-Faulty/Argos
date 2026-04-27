@@ -12,6 +12,9 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  COUPLED_BOT_MAX_SAMPLES_DEG,
+  COUPLED_BOT_MIN_SAMPLES_DEG,
+  COUPLED_TOP_SAMPLES_DEG,
   DEFAULT_JOINT_LIMITS_RAD,
   DEFAULT_ROTATE_SETTINGS,
   DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
@@ -22,6 +25,7 @@ import {
   LEG_IDS,
   ROTATE_SETTINGS_BOUNDS,
   SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC,
+  SERVO_CENTER_DEG,
   SERVO_UPDATE_RATE_BOUNDS_HZ,
   STABILIZER_PARAM_BOUNDS,
 } from "../../shared/robot-config.js";
@@ -159,9 +163,9 @@ function JointLimitsSection({ value, onSave }) {
 
   return (
     <Section title="Joint limits (per leg)">
-      <p className="muted">Override the radian limits from Config.py. Values in degrees; enter decimals for tight tuning.</p>
+      <p className="muted">Measured defaults in degrees; enter decimals for tight tuning.</p>
       <button type="button" className="ghost-btn" onClick={resetAll}>
-        Reset limits to firmware defaults
+        Reset limits to measured defaults
       </button>
       <div className="settings-grid-legs">
         {LEG_IDS.map((leg) => (
@@ -190,6 +194,19 @@ function JointLimitsSection({ value, onSave }) {
           </div>
         ))}
       </div>
+      <h4>Coupled femur/tibia envelope</h4>
+      <table className="settings-table">
+        <thead><tr><th>Femur°</th><th>Tibia min°</th><th>Tibia max°</th></tr></thead>
+        <tbody>
+          {COUPLED_TOP_SAMPLES_DEG.map((topServoDeg, i) => (
+            <tr key={topServoDeg}>
+              <th scope="row">{fmtDeg(topServoDeg - SERVO_CENTER_DEG)}</th>
+              <td>{fmtDeg(COUPLED_BOT_MIN_SAMPLES_DEG[i] - SERVO_CENTER_DEG)}</td>
+              <td>{fmtDeg(COUPLED_BOT_MAX_SAMPLES_DEG[i] - SERVO_CENTER_DEG)}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </Section>
   );
 }
@@ -206,6 +223,10 @@ function computeInitial(value) {
     out[n] = value?.[n] ? { ...value[n] } : defaultDegFor(n);
   }
   return out;
+}
+
+function fmtDeg(value) {
+  return Number(value).toFixed(0);
 }
 
 // ─── Section: rotate tuneables ──────────────────────────────────────────

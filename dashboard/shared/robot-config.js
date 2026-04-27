@@ -245,14 +245,14 @@ export const SERVO_UPDATE_RATE_BOUNDS_HZ  = { min: 40.0, max: 200.0 };
 // Bounds/defaults for the "rotate by N degrees" buttons. Persisted on the Pi
 // side in ~/.argos/rotate_settings.json; surfaced in the Settings drawer.
 export const DEFAULT_ROTATE_SETTINGS = {
-  rotate_increment_deg: 15.0,
-  rotate_rate_rad_s: 0.8,
-  rotate_calibration_factor: 1.02,
+  rotate_increment_deg: 20.0,
+  rotate_rate_rad_s: 1.4,
+  rotate_calibration_factor: 1.12,
 };
 export const ROTATE_SETTINGS_BOUNDS = {
   rotate_increment_deg:       { min: 5,    max: 45 },
-  rotate_rate_rad_s:          { min: 0.2,  max: 2.0 },
-  rotate_calibration_factor:  { min: 0.80, max: 1.20 },
+  rotate_rate_rad_s:          { min: 0.2,  max: 2.5 },
+  rotate_calibration_factor:  { min: 0.80, max: 1.50 },
 };
 
 // ─── Stabilizer param bounds (dashboard Settings drawer) ──────────────────
@@ -325,7 +325,7 @@ export const GAIT_TUNABLE_PARAMS = {
 // any |stick| below it sends zero so a slightly off-center stick doesn't
 // dribble commands.
 export const JOYSTICK_SCALE = {
-  MAX_LIN_VEL: 0.40, // m/s at full deflection
-  MAX_ANG_VEL: 1.0,  // rad/s; reserved for yaw stick
+  MAX_LIN_VEL: 0.50, // m/s at full deflection
+  MAX_ANG_VEL: 1.4,  // rad/s; reserved for yaw stick
   DEADZONE: 0.08,    // normalized fraction
 };

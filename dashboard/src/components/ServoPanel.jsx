@@ -2,8 +2,8 @@
 //
 // Operates in servo-space (horn degrees), not joint-space radians. Servo
 // cal direction is applied server-side when the bridge re-maps back to
-// joint angles. We DO clamp to the bench-measured SERVO_LIMITS_DEG per
-// row here so a user can't drag into a hard stop.
+// joint angles. We clamp to the active calibration window, which shifts with
+// offsets but remains pinned to the physical 0..180 command domain.
 //
 // Coupled bell-crank clamps live on the Pi — dragging the bottom slider
 // toward an invalid angle for the current top-slider position will snap
@@ -14,14 +14,11 @@ import {
   JOINT_ROWS,
   LEG_LABELS,
   SERVO_CENTER_DEG,
-  SERVO_LIMITS_DEG,
   JOINT_NAMES,
   LEG_IDS,
 } from "../../shared/robot-config.js";
-import { applyServoCal, clampServoDeg } from "../../shared/servo_cal.js";
+import { applyServoCal, clampServoDeg, servoCommandLimitsDeg } from "../../shared/servo_cal.js";
 import { leg_angle_map } from "./LegDetail.jsx";
-
-const ROW_INDEX = { coxa: 0, femur: 1, tibia: 2 };
 
 export default function ServoPanel({ activeLeg, jointState, onSendServoAngles, enabled }) {
   const cur = useMemo(() => readFullServoDeg(jointState), [jointState]);
@@ -43,7 +40,7 @@ export default function ServoPanel({ activeLeg, jointState, onSendServoAngles, e
 
       {JOINT_ROWS.map((row) => {
         const jointName = `${activeLeg}_${row}_joint`;
-        const [lo, hi] = SERVO_LIMITS_DEG[ROW_INDEX[row]];
+        const [lo, hi] = servoCommandLimitsDeg(jointName);
         const deg = cur[jointName] ?? SERVO_CENTER_DEG;
         return (
           <label key={row} className="slider">

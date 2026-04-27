@@ -23,6 +23,8 @@ export {
   coupled_bot_limits_joint_deg,
   coupled_bot_limits_joint_rad,
   coupled_bot_limits_servo_deg,
+  coupled_top_limits_joint_deg,
+  coupled_top_limits_joint_rad,
 } from "./argos_kinematics.js";
 
 // Andy-servo rendering pipeline (LegDetail + RobotOverview consume these)

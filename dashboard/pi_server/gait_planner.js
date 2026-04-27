@@ -53,9 +53,11 @@ const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 // The current stance has roughly 70 mm of safe body-x travel per foot. Use
 // most of that window so trot reads as a deliberate step instead of a tiny
 // shuffle; clampFootInReach remains the final guardrail at the hard edges.
-// Lateral reach is much tighter, so y stays deliberately conservative.
-const MAX_STRIDE_X = 0.040;
-const MAX_STRIDE_Y = 0.005;
+// Lateral reach is tighter than x, but turns need visible side-to-side sweep.
+// Keep y below the coxa reach edge while giving rotate/crawl enough motion
+// to bite instead of rocking in place.
+const MAX_STRIDE_X = 0.045;
+const MAX_STRIDE_Y = 0.012;
 
 // Default contact phase patterns (4 columns = phases, rows = legs FR/FL/RR/RL).
 // 1 = stance (foot down), 0 = swing (foot in air).
@@ -337,23 +339,17 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    // Swing-foot vertical lift. With the stock femur/tibia envelope the
-    // reachable z window at the neutral stance is only a few millimeters;
-    // larger lifts make mid-swing IK fail and the controller reuses the last
-    // good pose, which feels like the joystick walks a few steps then stops.
-    // Keep the default conservative so a held joystick keeps producing fresh
-    // gait poses. Larger lift should only be enabled after widening limits.
-    z_clearance: 0.002,
+    // Swing-foot vertical lift. The measured femur/tibia envelope now gives
+    // enough room for an obvious step without tripping IK at the neutral
+    // stance. Keep this below ~10 mm unless the foot reach window is retuned.
+    z_clearance: 0.008,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
     imu_filter_alpha: STABILIZER_PARAM_BOUNDS.imu_filter_alpha.default,
-    // Off by default for the same reason z_clearance is small: even a 3°
-    // body tilt yields ~3 mm vertical foot displacement at the lateral
-    // hip-to-foot offset, which is enough to exit the z reach window every
-    // tick. Re-enable from the Settings drawer once the joint envelope is
-    // widened (e.g. recalibrated SERVO_LIMITS_DEG) or the gains are tuned
-    // small enough that corrections stay under ~1 mm of foot displacement.
+    // Off by default: body tilt correction spends the same vertical reach
+    // budget used by swing lift, so enable only after checking the robot can
+    // walk without IK edge hits at the chosen stance height.
     use_imu_stabilization: false,
   };
 }

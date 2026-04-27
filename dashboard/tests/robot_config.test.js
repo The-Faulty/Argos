@@ -12,8 +12,10 @@ import {
   COUPLED_BOT_MIN_SAMPLES_DEG,
   COUPLED_TOP_SAMPLES_DEG,
   DEFAULT_JOINT_LIMITS_RAD,
+  DEFAULT_ROTATE_SETTINGS,
   JOINT_NAMES,
   JOINT_ROWS,
+  JOYSTICK_SCALE,
   LEG_IDS,
   MODE_OPTIONS,
   SERVO_LIMITS_DEG,
@@ -85,4 +87,14 @@ test("coupled femur/tibia samples match measured safe envelope", () => {
   assert.deepEqual(COUPLED_TOP_SAMPLES_DEG, [40.0, 52.0, 65.0, 77.0, 90.0]);
   assert.deepEqual(COUPLED_BOT_MIN_SAMPLES_DEG, [0.0, 0.0, 20.0, 40.0, 65.0]);
   assert.deepEqual(COUPLED_BOT_MAX_SAMPLES_DEG, [95.0, 120.0, 150.0, 180.0, 180.0]);
+});
+
+test("walking and rotate defaults are intentionally assertive", () => {
+  assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.50);
+  assert.equal(JOYSTICK_SCALE.MAX_ANG_VEL, 1.4);
+  assert.deepEqual(DEFAULT_ROTATE_SETTINGS, {
+    rotate_increment_deg: 20.0,
+    rotate_rate_rad_s: 1.4,
+    rotate_calibration_factor: 1.12,
+  });
 });

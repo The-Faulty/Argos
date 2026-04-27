@@ -176,6 +176,58 @@ export function coupled_bot_limits_joint_rad(topJointRad, marginDeg = 0.0) {
   return [lo * DEG2RAD, hi * DEG2RAD];
 }
 
+export function coupled_top_limits_joint_deg(botJointDeg, marginDeg = 0.0) {
+  const m = Math.max(0.0, marginDeg);
+  const botServoDeg = SERVO_CENTER_DEG + botJointDeg;
+  const [topLoHard, topHiHard] = SERVO_LIMITS_DEG[1];
+  const [botLoHard, botHiHard] = SERVO_LIMITS_DEG[2];
+  const botMinSamples = COUPLED_BOT_MIN_SAMPLES_DEG.map(
+    (v) => Math.min(botHiHard, Math.max(botLoHard, v + m))
+  );
+  const botMaxSamples = COUPLED_BOT_MAX_SAMPLES_DEG.map(
+    (v) => Math.min(botHiHard, Math.max(botLoHard, v - m))
+  );
+
+  const lowerTop = _firstTopWhereAtLeast(botServoDeg, COUPLED_TOP_SAMPLES_DEG, botMaxSamples);
+  const upperTop = _lastTopWhereAtMost(botServoDeg, COUPLED_TOP_SAMPLES_DEG, botMinSamples);
+  if (lowerTop === null || upperTop === null || lowerTop > upperTop) {
+    const clampedTop = Math.min(topHiHard, Math.max(topLoHard, SERVO_CENTER_DEG));
+    return [clampedTop - SERVO_CENTER_DEG, clampedTop - SERVO_CENTER_DEG];
+  }
+  return [lowerTop - SERVO_CENTER_DEG, upperTop - SERVO_CENTER_DEG];
+}
+
+export function coupled_top_limits_joint_rad(botJointRad, marginDeg = 0.0) {
+  const [lo, hi] = coupled_top_limits_joint_deg(botJointRad * RAD2DEG, marginDeg);
+  return [lo * DEG2RAD, hi * DEG2RAD];
+}
+
+function _firstTopWhereAtLeast(y, xs, ys) {
+  if (y <= ys[0]) return xs[0];
+  if (y > ys[ys.length - 1]) return null;
+  for (let i = 1; i < xs.length; i++) {
+    if (y <= ys[i]) {
+      if (ys[i] === ys[i - 1]) return xs[i - 1];
+      const t = (y - ys[i - 1]) / (ys[i] - ys[i - 1]);
+      return xs[i - 1] + t * (xs[i] - xs[i - 1]);
+    }
+  }
+  return xs[xs.length - 1];
+}
+
+function _lastTopWhereAtMost(y, xs, ys) {
+  if (y < ys[0]) return null;
+  if (y >= ys[ys.length - 1]) return xs[xs.length - 1];
+  for (let i = 1; i < xs.length; i++) {
+    if (y < ys[i]) {
+      if (ys[i] === ys[i - 1]) return xs[i - 1];
+      const t = (y - ys[i - 1]) / (ys[i] - ys[i - 1]);
+      return xs[i - 1] + t * (xs[i] - xs[i - 1]);
+    }
+  }
+  return xs[xs.length - 1];
+}
+
 // ─── Joint limit clamping (Config.py::clamp_joint_matrix) ─────────────────
 
 /**

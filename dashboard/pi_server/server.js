@@ -329,13 +329,16 @@ app.post("/api/params/stabilizer", async (req, res) => {
 });
 
 // ─── Rotate by N degrees ─────────────────────────────────────────────────
-app.post("/api/rotate", (req, res) => {
+app.post("/api/rotate", async (req, res) => {
   try {
     const cmd = validateCommand({
       type: "rotate_degrees",
       direction: req.body?.direction,
       degrees: Number(req.body?.degrees ?? state.rotateSettings.rotate_increment_deg),
     });
+    if (state.mode !== "trot") {
+      await mode.setMode("trot");
+    }
     const { rotate_rate_rad_s, rotate_calibration_factor } = state.rotateSettings;
     const sign = cmd.direction === "left" ? +1 : -1;
     const durationMs = Math.max(
@@ -448,6 +451,9 @@ async function handleCommand(cmd) {
       mode.updateStabilizerParams(cmd.params);
       break;
     case "rotate_degrees": {
+      if (state.mode !== "trot") {
+        await mode.setMode("trot");
+      }
       const { rotate_rate_rad_s, rotate_calibration_factor } = state.rotateSettings;
       const sign = cmd.direction === "left" ? +1 : -1;
       const durationMs = Math.max(
