@@ -255,22 +255,13 @@ export const MODE_OPTIONS = [
 ];
 
 // ─── Servo speed + PWM rate defaults (ported from andy-servo-control) ────
-// Defaults are deliberately conservative — slower than the SG90's hardware
-// max so mode transitions (idle → stand → trot) ease in instead of snapping
-// and so the operator's first impression is "controlled and smooth" rather
-// than the previous twitchy 180–300 °/s. Per-tick gait deltas at 50 Hz are
-// well under these caps (femur swings ~2°/tick at moderate joystick), so
-// gait motion isn't rate-limited; the caps only engage on big setpoint
-// jumps like mode transitions, which is exactly when smoothness matters.
-//
-// The Settings drawer's "Servo speed" sliders override these per-row, so
-// the operator can crank them back up to match the old aggressive behavior
-// if a slower demo isn't what they want. Bounds below allow up to 600 °/s
-// for that case.
+// Defaults are high enough for walking. The previous conservative values made
+// the swing phase finish before the tibia could physically climb to the target
+// height, so all four feet appeared to skim at nearly the same level.
 export const DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = {
-  coxa:  60.0,
-  femur: 80.0,
-  tibia: 100.0,
+  coxa:  120.0,
+  femur: 180.0,
+  tibia: 240.0,
 };
 export const SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC = { min: 30.0, max: 600.0 };
 
@@ -328,13 +319,10 @@ export const GAIT_TUNABLE_PARAMS = {
     name: "swing_time_ms",
     label: "Swing time per foot",
     min: 40,
-    // 300 ms swing × 0.6 m/s twist = 0.18 m step per cycle, just under the
-    // sagittal IK limit at neutral z. Was 120; bumped to 180 so the default
-    // gait reads as a deliberate walk instead of a quick scuttle. The
-    // WalkingPanel "Step duration" slider exposes this live so the operator
-    // can dial it tighter for demos.
+    // Keep the foot in swing long enough for the real servos to climb through
+    // linkage backlash and reach visible clearance.
     max: 300,
-    default: 180,
+    default: 220,
     units: "ms",
   },
   rotate_rate_max: {

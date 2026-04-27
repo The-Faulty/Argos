@@ -40,12 +40,14 @@ import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 // The actual root cause turned out to be TX-induced RX starvation: the old
 // chained-Serial.print() sendStateMessage() in firmware/argos_servo.ino was
 // making ~160 driver hand-offs per state burst, starving the RX driver task
-// long enough for the FIFO to overflow. Single-buffer Serial.write() (one
-// hand-off) + halved telemetry rate fixed it; 50 Hz is back on the table.
-// Roll back to 30 if "unknown command type" errors return after re-flashing.
-const TICK_HZ = 50.0;
+// long enough for the FIFO to overflow. The Pi still sends four leg frames per
+// gait tick, and field logs showed truncated `set_leg_servo_angles` frames at
+// 50 Hz. Keep auto gait at a serial-friendly rate; the firmware's own PWM
+// refresh still smooths the movement between these setpoints.
+const TICK_HZ = 25.0;
 const TICK_DT = 1.0 / TICK_HZ;
 const REACH_BLEND_STEPS = 12;
+const SWING_LIFT_PROFILE_EXP = 0.65;
 
 const DEG2RAD = Math.PI / 180.0;
 
@@ -242,7 +244,7 @@ export class GaitPlanner {
         // keeps the operator's "step duration" setting literal.
         const u = phase / swingFraction;
         const eased = smoothStep(u);
-        const lift = this.config.z_clearance * Math.sin(Math.PI * u);
+        const lift = this.config.z_clearance * swingLiftProfile(u);
         phaseTag[legIdx] = "swing";
         return [
           foot[0] + stride[legIdx][0] * (eased - 0.5),
@@ -356,13 +358,12 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    // Swing-foot vertical lift. STAND_FOOT_Z = -0.195 m gives a workable
-    // vertical-reach budget; 0.020 m is the empirical sweet spot per
-    // scripts/probe_foot_reach.mjs — at z_clearance ≥ 0.022 the lifted
-    // reach window starts excluding the gait's neutral foot.x position
-    // (e.g. 0.100 m for FR), which would make the foot fail IK at peak
-    // swing. 0.020 m keeps the lifted window comfortably wider than the
-    // stance window. Re-probe before raising further.
+    // Swing-foot vertical lift. STAND_FOOT_Z = -0.195 m leaves only about
+    // 20 mm of IK-safe lift at the neutral swing midpoint. To make that lift
+    // visible on the real robot without asking for unreachable targets, the
+    // gait uses a broad lift profile (see swingLiftProfile) instead of a
+    // narrow sine spike. The foot stays near peak clearance for more of the
+    // swing, which also helps overcome servo/linkage backlash.
     //
     // If you change this value, also re-probe DEFAULT_FOOT_REACH_X_LIFTED
     // in robot-config.js with `node scripts/probe_foot_reach.mjs --lift-mm
@@ -526,6 +527,11 @@ function smoothStep(t) {
   return u * u * (3.0 - 2.0 * u);
 }
 
+function swingLiftProfile(t) {
+  const s = Math.sin(Math.PI * clampNum(t, 0.0, 1.0));
+  return Math.pow(Math.max(0.0, s), SWING_LIFT_PROFILE_EXP);
+}
+
 function blendFoot(from, to, t) {
   return [
     lerp(from[0], to[0], t),
@@ -543,4 +549,5 @@ export const _internals = {
   gaitProfileTiming,
   makeStanceFeet,
   jointAnglesRadToServoDeg,
+  swingLiftProfile,
 };

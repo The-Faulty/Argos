@@ -31,3 +31,18 @@ test("direct joint commands are clamped to the coupled femur/tibia envelope", as
   }
   assert.equal(serial.lastAngles.length, 12);
 });
+
+test("auto poses apply small directional backlash compensation", async () => {
+  const serial = {
+    setAllServoAnglesDeg(angles) {
+      this.lastAngles = angles;
+    },
+    releaseServos() {},
+  };
+  const mode = new ModeController({ serial, getStances: async () => ({}) });
+
+  await mode.setMode("stand");
+
+  assert.ok(serial.lastAngles[1] < 90 - 28.84, "femur command should overshoot in the downward direction");
+  assert.ok(serial.lastAngles[2] > 90 + 15.80, "tibia command should overshoot in the lifting direction");
+});

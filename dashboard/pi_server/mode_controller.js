@@ -1,6 +1,6 @@
 // Mode controller — single owner of robot mode state.
 //
-// Drives the gait planner's 50 Hz tick when an auto mode is active, and
+// Drives the gait planner's auto tick when an auto mode is active, and
 // passes through direct-mode commands (foot xyz, joint angles, raw servo
 // degrees) straight to the serial bridge. Decoupling lives here so the
 // HTTP/WS server doesn't need to know about gait timing or IK.
@@ -22,6 +22,13 @@ const TICK_MS = 1000 / gaitInternals.TICK_HZ;
 
 const AUTO_MODES = new Set(["crouch", "stand", "extend", "crawl", "trot"]);
 const DIRECT_MODES = new Set(["direct_foot_xyz", "direct_joint_angles", "direct_servo_angles"]);
+const BACKLASH_COMP_MODES = new Set(["crouch", "stand", "extend", "crawl", "trot", "direct_foot_xyz"]);
+const BACKLASH_DEADBAND_DEG = Number(process.env.ARGOS_BACKLASH_DEADBAND_DEG ?? 0.12);
+const BACKLASH_COMP_DEG = {
+  coxa:  Number(process.env.ARGOS_BACKLASH_COXA_DEG ?? 0.4),
+  femur: Number(process.env.ARGOS_BACKLASH_FEMUR_DEG ?? 1.8),
+  tibia: Number(process.env.ARGOS_BACKLASH_TIBIA_DEG ?? 2.4),
+};
 
 export class ModeController extends EventEmitter {
   constructor({ serial, persistence, getStances }) {
@@ -34,6 +41,8 @@ export class ModeController extends EventEmitter {
     this.mode = "idle";
     this.lastJointStatesDeg = new Array(JOINT_NAMES.length).fill(90); // servo degrees
     this.lastJointAnglesRad = new Array(JOINT_NAMES.length).fill(0);
+    this._lastDesiredServoDeg = new Array(JOINT_NAMES.length).fill(90);
+    this._backlashDir = new Array(JOINT_NAMES.length).fill(0);
     this._tickHandle = null;
   }
 
@@ -248,10 +257,11 @@ export class ModeController extends EventEmitter {
   }
 
   _publishServoDeg(servoDeg12, jointAnglesRad12) {
-    this.lastJointStatesDeg = servoDeg12;
+    const commandedServoDeg = this._applyBacklashCompensation(servoDeg12);
+    this.lastJointStatesDeg = commandedServoDeg;
     this.lastJointAnglesRad = jointAnglesRad12;
     try {
-      this.serial.setAllServoAnglesDeg(servoDeg12);
+      this.serial.setAllServoAnglesDeg(commandedServoDeg);
     } catch (err) {
       this.emit("error", err.message || String(err));
       return;
@@ -259,8 +269,32 @@ export class ModeController extends EventEmitter {
     this.emit("joint_states", {
       name: [...JOINT_NAMES],
       position: [...jointAnglesRad12],
-      position_servo_deg: [...servoDeg12],
+      position_servo_deg: [...commandedServoDeg],
     });
+  }
+
+  _applyBacklashCompensation(desiredServoDeg) {
+    const desired = desiredServoDeg.slice();
+    if (!BACKLASH_COMP_MODES.has(this.mode)) {
+      this._lastDesiredServoDeg = desired;
+      return desired;
+    }
+
+    const out = desired.slice();
+    for (let i = 0; i < desired.length; i++) {
+      const row = JOINT_ROWS[i % JOINT_ROWS.length];
+      const comp = BACKLASH_COMP_DEG[row] ?? 0;
+      if (!(comp > 0)) continue;
+
+      const delta = desired[i] - this._lastDesiredServoDeg[i];
+      if (Math.abs(delta) > BACKLASH_DEADBAND_DEG) {
+        this._backlashDir[i] = Math.sign(delta);
+      }
+      const dir = this._backlashDir[i];
+      if (dir) out[i] = clampServoDeg(JOINT_NAMES[i], desired[i] + dir * comp);
+    }
+    this._lastDesiredServoDeg = desired;
+    return out;
   }
 
   async _resolveModePose(mode) {

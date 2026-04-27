@@ -13,6 +13,8 @@ import {
   COUPLED_TOP_SAMPLES_DEG,
   DEFAULT_JOINT_LIMITS_RAD,
   DEFAULT_ROTATE_SETTINGS,
+  DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
+  GAIT_TUNABLE_PARAMS,
   JOINT_NAMES,
   JOINT_ROWS,
   JOYSTICK_SCALE,
@@ -91,13 +93,19 @@ test("coupled femur/tibia samples match measured safe envelope", () => {
 
 test("walking and rotate defaults are tuned for controlled motion", () => {
   // MAX_LIN_VEL = 0.18 m/s saturates the trot stride near full deflection
-  // (with MAX_STRIDE_X = 0.045 m and ~280 ms stance). Was 0.50 — at that
+  // (with MAX_STRIDE_X = 0.045 m and ~427 ms stance). Was 0.50 — at that
   // speed the joystick became binary "off / full speed" past the deadzone
   // because stride hit the cap at <50% deflection. Changing this also
   // requires re-checking that full-stick stride still fits inside
   // DEFAULT_FOOT_REACH_X without invoking the per-leg blend-back.
   assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.18);
   assert.equal(JOYSTICK_SCALE.MAX_ANG_VEL, 1.4);
+  assert.equal(GAIT_TUNABLE_PARAMS.swing_time_ms.default, 220);
+  assert.deepEqual(DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, {
+    coxa: 120.0,
+    femur: 180.0,
+    tibia: 240.0,
+  });
   assert.deepEqual(DEFAULT_ROTATE_SETTINGS, {
     rotate_increment_deg: 20.0,
     rotate_rate_rad_s: 1.4,

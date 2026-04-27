@@ -9,6 +9,7 @@ test("held forward trot keeps producing reachable gait poses", () => {
   planner.setTwist({ x: 0.5, y: 0, yaw: 0 });
 
   const ranges = Array.from({ length: 4 }, () => ({ min: Infinity, max: -Infinity }));
+  const zRanges = Array.from({ length: 4 }, () => ({ min: Infinity, max: -Infinity }));
 
   for (let tick = 0; tick < 120; tick++) {
     const out = planner.step();
@@ -17,13 +18,19 @@ test("held forward trot keeps producing reachable gait poses", () => {
     for (let leg = 0; leg < out.feet.length; leg++) {
       ranges[leg].min = Math.min(ranges[leg].min, out.feet[leg][0]);
       ranges[leg].max = Math.max(ranges[leg].max, out.feet[leg][0]);
+      zRanges[leg].min = Math.min(zRanges[leg].min, out.feet[leg][2]);
+      zRanges[leg].max = Math.max(zRanges[leg].max, out.feet[leg][2]);
     }
   }
 
-  for (const range of ranges) {
+  for (let leg = 0; leg < ranges.length; leg++) {
+    const range = ranges[leg];
     const span = range.max - range.min;
     // Rear legs keep a 3 mm clamp budget at full backward sweep.
     assert.ok(span > 0.054, `expected exaggerated per-leg x travel, got ${span}`);
+
+    const zSpan = zRanges[leg].max - zRanges[leg].min;
+    assert.ok(zSpan > 0.016, `expected visible swing lift, got ${zSpan}`);
   }
 });
 

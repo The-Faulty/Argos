@@ -45,10 +45,8 @@ const DEFAULT_BAUD = Number(process.env.ARGOS_SERIAL_BAUD || 921600);
 // drop bytes at message boundaries. drain() alone leaves frames spaced
 // ~1–2 ms; a few ms of additional pacing closes the gap. Tune up if you
 // still see truncated frames in firmware error logs; tune down for snappier
-// teleop. 0 disables. Bumped from 5→10 ms after IK reach clamps made nearly
-// every 50 Hz tick produce unique servo values (previously ~50% deduped),
-// which doubled the steady-state wire rate and started overflowing the FIFO.
-const DEFAULT_PACING_MS = Number(process.env.ARGOS_SERIAL_PACING_MS ?? 10);
+// teleop. 0 disables.
+const DEFAULT_PACING_MS = Number(process.env.ARGOS_SERIAL_PACING_MS ?? 12);
 // 0 disables the ack-wait. The firmware does ack set_leg_servo_angles (see
 // argos_servo.ino → sendAck(seq, "servo target accepted")), so a non-zero
 // timeout would normally resolve as soon as the ack lands. We still default
