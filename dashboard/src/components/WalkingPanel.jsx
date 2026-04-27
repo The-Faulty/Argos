@@ -7,7 +7,7 @@
 // Rotate L/R posts to /api/rotate and lets the server handle the timed spin
 // (so a browser hiccup mid-rotation doesn't leave the robot spinning).
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { GAIT_TUNABLE_PARAMS, JOYSTICK_SCALE } from "../../shared/robot-config.js";
 
 const JOYSTICK_SIZE = 200;
@@ -36,6 +36,28 @@ export default function WalkingPanel({
   const [stick, setStick] = useState({ dx: 0, dy: 0, active: false });
   const [step, setStep] = useState(stepLength ?? GAIT_TUNABLE_PARAMS.delta_x_mm.default);
   const svgRef = useRef(null);
+  // Heartbeat: the server expires a twist after 500 ms as a safety net
+  // against browser hiccups, but pointermove only fires while the stick is
+  // moving — a held-still deflected stick would expire and stop the robot
+  // mid-walk. Re-emit the latest twist at 10 Hz while pointer is captured.
+  const lastTwistRef = useRef({ x: 0, y: 0, yaw: 0 });
+  const heartbeatRef = useRef(null);
+
+  useEffect(() => () => stopHeartbeat(), []);
+
+  function startHeartbeat() {
+    stopHeartbeat();
+    heartbeatRef.current = setInterval(() => {
+      const t = lastTwistRef.current;
+      onTwist?.(t.x, t.y, t.yaw);
+    }, 100);
+  }
+  function stopHeartbeat() {
+    if (heartbeatRef.current) {
+      clearInterval(heartbeatRef.current);
+      heartbeatRef.current = null;
+    }
+  }
 
   function handleStep(next) {
     setStep(next);
@@ -67,10 +89,13 @@ export default function WalkingPanel({
       : (r - JOYSTICK_SCALE.DEADZONE) / (1 - JOYSTICK_SCALE.DEADZONE) / r;
     const linX = nxRaw * k * JOYSTICK_SCALE.MAX_LIN_VEL;
     const linY = nyRaw * k * JOYSTICK_SCALE.MAX_LIN_VEL;
+    lastTwistRef.current = { x: linX, y: linY, yaw: 0 };
     onTwist?.(linX, linY, 0);
   }
 
   function stickEnd(event) {
+    stopHeartbeat();
+    lastTwistRef.current = { x: 0, y: 0, yaw: 0 };
     setStick({ dx: 0, dy: 0, active: false });
     onZeroTwist?.();
     try {
@@ -114,6 +139,7 @@ export default function WalkingPanel({
               if (!twistCapable) return;
               svgRef.current.setPointerCapture(e.pointerId);
               stickDispatch(e.clientX, e.clientY);
+              startHeartbeat();
             }}
             onPointerMove={(e) => stick.active && stickDispatch(e.clientX, e.clientY)}
             onPointerUp={stickEnd}
