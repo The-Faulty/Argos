@@ -41,7 +41,7 @@ const DEG2RAD = Math.PI / 180.0;
 
 // Stand / extend pose joints. We bypass IK for these because the abductor's
 // natural lateral offset means foot.y = hip.y can't be reached with coxa = 0,
-// and the femur joint limits ([-40°, +25°]) make the IK reach window only
+// and the femur joint limits ([-50°, 0°]) make the IK reach window only
 // ~75 mm wide at the historical body height. Emitting joints directly puts
 // coxa at exactly 0 (servo 90°) and lets us pick body height by choosing
 // femur/tibia, with no risk of the planner silently holding stale output

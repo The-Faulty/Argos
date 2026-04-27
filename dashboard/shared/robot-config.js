@@ -270,7 +270,7 @@ export const GAIT_TUNABLE_PARAMS = {
     label: "Front/back stance spread",
     min: 60,
     // IK-reachable upper bound at default_z_ref = -189 mm. The femur joint
-    // limit ([-40°, +25°]) makes the per-leg foot.x window only ~75 mm wide
+    // limit ([-50°, 0°]) makes the per-leg foot.x window only ~75 mm wide
     // (see DEFAULT_FOOT_REACH_X). Front feet are at delta_x; rear feet at
     // -delta_x + rear_shift (-0.04 m), so the rear bound is the binding
     // constraint: -delta_x - 0.04 ≥ -0.145 → delta_x ≤ 0.105. Cap matches

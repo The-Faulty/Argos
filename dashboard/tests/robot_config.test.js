@@ -8,11 +8,18 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  COUPLED_BOT_MAX_SAMPLES_DEG,
+  COUPLED_BOT_MIN_SAMPLES_DEG,
+  COUPLED_TOP_SAMPLES_DEG,
+  DEFAULT_JOINT_LIMITS_RAD,
   JOINT_NAMES,
   JOINT_ROWS,
   LEG_IDS,
   MODE_OPTIONS,
+  SERVO_LIMITS_DEG,
 } from "../shared/robot-config.js";
+
+const RAD2DEG = 180 / Math.PI;
 
 test("LEG_IDS has the four expected legs in order", () => {
   assert.deepEqual(LEG_IDS, ["FR", "FL", "RR", "RL"]);
@@ -56,4 +63,26 @@ test("MODE_OPTIONS covers gait planner's walking modes", () => {
   for (const m of ["direct_foot_xyz", "direct_joint_angles", "direct_servo_angles", "animation_playback"]) {
     assert.ok(MODE_OPTIONS.includes(m), `missing mode "${m}"`);
   }
+});
+
+test("default joint limits match measured leg travel", () => {
+  assert.deepEqual(
+    DEFAULT_JOINT_LIMITS_RAD.femur.map((rad) => Math.round(rad * RAD2DEG)),
+    [-50, 0],
+  );
+  assert.deepEqual(
+    DEFAULT_JOINT_LIMITS_RAD.tibia.map((rad) => Math.round(rad * RAD2DEG)),
+    [-90, 90],
+  );
+});
+
+test("servo horn limits match measured safe travel", () => {
+  assert.deepEqual(SERVO_LIMITS_DEG[1], [40.0, 90.0]);
+  assert.deepEqual(SERVO_LIMITS_DEG[2], [0.0, 180.0]);
+});
+
+test("coupled femur/tibia samples match measured safe envelope", () => {
+  assert.deepEqual(COUPLED_TOP_SAMPLES_DEG, [40.0, 52.0, 65.0, 77.0, 90.0]);
+  assert.deepEqual(COUPLED_BOT_MIN_SAMPLES_DEG, [0.0, 0.0, 20.0, 40.0, 65.0]);
+  assert.deepEqual(COUPLED_BOT_MAX_SAMPLES_DEG, [95.0, 120.0, 150.0, 180.0, 180.0]);
 });

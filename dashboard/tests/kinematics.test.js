@@ -24,6 +24,7 @@ import { dirname, resolve } from "node:path";
 import {
   fourLegsInverseKinematics,
   clamp_joint_matrix,
+  coupled_bot_limits_joint_deg,
 } from "../shared/kinematics.js";
 import { LEG_IDS, DEFAULT_JOINT_LIMITS_RAD } from "../shared/robot-config.js";
 
@@ -131,5 +132,20 @@ test("clamp_joint_matrix tightens the coupled envelope", () => {
       `femur ${leg[1]} outside ${femurLimits}`);
     assert.ok(leg[2] >= tibiaLimits[0] - 1e-9 && leg[2] <= tibiaLimits[1] + 1e-9,
       `tibia ${leg[2]} outside ${tibiaLimits}`);
+  }
+});
+
+test("coupled femur/tibia limits match measured joint-space points", () => {
+  const measured = [
+    { femur: -50, tibia: [-90, 5] },
+    { femur: -38, tibia: [-90, 30] },
+    { femur: -25, tibia: [-70, 60] },
+    { femur: -13, tibia: [-50, 90] },
+    { femur: 0, tibia: [-25, 90] },
+  ];
+
+  for (const { femur, tibia } of measured) {
+    const got = coupled_bot_limits_joint_deg(femur).map((deg) => Math.round(deg));
+    assert.deepEqual(got, tibia, `femur ${femur} deg`);
   }
 });

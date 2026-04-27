@@ -16,7 +16,7 @@ import {
   inverseServoCal,
   clampServoDeg,
 } from "../shared/servo_cal.js";
-import { JOINT_NAMES, SERVO_CENTER_DEG } from "../shared/robot-config.js";
+import { JOINT_NAMES, LEG_IDS, SERVO_CENTER_DEG } from "../shared/robot-config.js";
 
 test("SERVO_CAL_PER_JOINT joint order matches JOINT_NAMES", () => {
   const calOrder = SERVO_CAL_PER_JOINT.map((e) => e.joint);
@@ -70,3 +70,22 @@ test("clampServoDeg keeps outputs inside [min_deg, max_deg]", () => {
     assert.equal(clampServoDeg(entry.joint, mid), mid);
   }
 });
+
+test("femur and tibia servo calibration limits match measured travel", () => {
+  for (const leg of LEG_IDS) {
+    assert.deepEqual(
+      pickServoLimits(findCalByJoint(`${leg}_femur_joint`)),
+      [40.0, 90.0],
+      `${leg} femur`,
+    );
+    assert.deepEqual(
+      pickServoLimits(findCalByJoint(`${leg}_tibia_joint`)),
+      [0.0, 180.0],
+      `${leg} tibia`,
+    );
+  }
+});
+
+function pickServoLimits(entry) {
+  return [entry.min_deg, entry.max_deg];
+}
