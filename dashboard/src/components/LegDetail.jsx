@@ -6,7 +6,6 @@
 import { useMemo, useRef } from "react";
 import {
   clamp_joint_matrix,
-  leg_explicit_inverse_kinematics,
 } from "../../shared/argos_kinematics.js";
 import {
   LEGACY_LEG_GEOMETRY,
@@ -15,10 +14,10 @@ import {
   toCanvasPoint,
 } from "../../shared/kinematics.js";
 import {
+  DEFAULT_JOINT_LIMITS_RAD,
   JOINT_NAMES,
   JOINT_ROWS,
   LEG_DRAWING,
-  LEG_GEOMETRY,
   LEG_IDS,
   LEG_LABELS,
   SERVO_CENTER_DEG,
@@ -26,6 +25,7 @@ import {
 import { applyServoCal } from "../../shared/servo_cal.js";
 
 const RAD2DEG = 180.0 / Math.PI;
+const DEG2RAD = Math.PI / 180.0;
 const LEGACY_CALF_FROM_TIBIA_OFFSET_DEG = -150.0;
 
 // Seven segments, drawn in the same colors/widths the legacy view used so
@@ -151,37 +151,12 @@ export default function LegDetail({
     if (mirrorX) px = LEG_DRAWING.stageWidth - px;
     const absMm = fromCanvasPoint({ x: px, y: py }, LEG_DRAWING);
 
-    // Real 3-DOF IK using the actual leg geometry. Sagittal frame (mm) →
-    // body frame (m) is straightforward because the rendered hip is the
-    // FK's origin: x_body = x_sag, z_body = -y_sag (y_sag points down,
-    // body z points up). For lateral y we keep the leg at its current
-    // hip-relative lateral so the abductor doesn't snap mid-drag — that
-    // value is computed from the current coxa via the same hip-abductor
-    // geometry the IK uses (`L1_HIP * cos(theta1)`).
-    const xBody = absMm.x / 1000.0;
-    const zBody = -absMm.y / 1000.0;
-    const legIndex = LEG_IDS.indexOf(activeLeg);
-    if (legIndex < 0) return;
-    const isRight = legIndex === 0 || legIndex === 2; // FR=0, RR=2
-    // Hip-relative lateral from the current coxa. The abductor link of
-    // length L1_HIP places the sagittal-plane origin at this offset from
-    // the hip pivot; the IK negates y for right legs internally so we
-    // match that here.
-    const yMagnitude = LEG_GEOMETRY.L1_HIP * Math.cos(effectiveAngles[0]);
-    const yBody = isRight ? -yMagnitude : yMagnitude;
-
-    const ik = leg_explicit_inverse_kinematics([xBody, yBody, zBody], legIndex);
-    if (ik) {
-      const nextAngles = clampLegAngles(ik);
+    const solved = solveDragAngles(absMm, effectiveAngles);
+    if (solved) {
+      const nextAngles = clampLegAngles(solved);
       onPreviewAngles?.({ leg: activeLeg, angles: nextAngles });
       onFootDrag?.({ x: absMm.x, z: absMm.y, leg: activeLeg, angles: nextAngles });
-      return;
     }
-
-    // IK refused (target outside reach window after coupled clamping).
-    // Forward the raw target so upstream foot-XYZ mode can still try; the
-    // bridge will clamp/decline as needed.
-    onFootDrag?.({ x: absMm.x, z: absMm.y, leg: activeLeg });
   }
 
   return (
@@ -392,6 +367,56 @@ function toLegacyJointPose(angles) {
   };
 }
 
+function solveDragAngles(targetMm, currentAngles) {
+  const coxa = Number(currentAngles?.[0]) || 0;
+  const currentFemurDeg = (Number(currentAngles?.[1]) || 0) * RAD2DEG;
+  const currentTibiaDeg = (Number(currentAngles?.[2]) || 0) * RAD2DEG;
+  const { thighLength: upper, calfLength: lower } = LEGACY_LEG_GEOMETRY;
+  const dist = Math.hypot(targetMm.x, targetMm.y);
+  if (!Number.isFinite(dist) || dist < 1e-6) return null;
+
+  const maxReach = upper + lower - 1e-6;
+  const minReach = Math.abs(upper - lower) + 1e-6;
+  const reach = Math.max(minReach, Math.min(maxReach, dist));
+  const base = Math.atan2(targetMm.y, targetMm.x);
+  const elbow = Math.acos(
+    Math.max(-1, Math.min(1, (upper * upper + reach * reach - lower * lower) / (2 * upper * reach))),
+  );
+  let best = null;
+
+  const consider = (femurRad) => {
+    const knee = {
+      x: upper * Math.cos(femurRad),
+      y: upper * Math.sin(femurRad),
+    };
+    const lowerRad = Math.atan2(targetMm.y - knee.y, targetMm.x - knee.x);
+    const femurDeg = femurRad * RAD2DEG;
+    const tibiaDeg = lowerRad * RAD2DEG - LEGACY_CALF_FROM_TIBIA_OFFSET_DEG;
+    const [angles] = clamp_joint_matrix(
+      [[coxa, femurDeg * DEG2RAD, tibiaDeg * DEG2RAD]],
+      0.0,
+      DEFAULT_JOINT_LIMITS_RAD,
+    );
+    if (!angles) return;
+
+    const pose = buildLegPoseFromJointAngles(toLegacyJointPose(angles));
+    const foot = pose?.geometry?.foot;
+    if (!foot) return;
+
+    const dx = foot.x - targetMm.x;
+    const dy = foot.y - targetMm.y;
+    const femurDelta = angles[1] * RAD2DEG - currentFemurDeg;
+    const tibiaDelta = angles[2] * RAD2DEG - currentTibiaDeg;
+    const score = Math.hypot(dx, dy) + 0.03 * (Math.abs(femurDelta) + Math.abs(tibiaDelta));
+    if (!best || score < best.score) best = { score, angles };
+  };
+
+  consider(base - elbow);
+  consider(base + elbow);
+
+  return best?.angles ?? null;
+}
+
 // ─── Helpers ─────────────────────────────────────────────────────────────
 
 function readLegAnglesRad(jointState, leg) {
@@ -415,12 +440,9 @@ function clampLegAngles(angles) {
   return clamped[0] ?? angles;
 }
 
-// (Drag IK now goes through leg_explicit_inverse_kinematics from
-// argos_kinematics.js — see dispatchFootAt above. The legacy 2-link
-// approximation lived here previously; it ran against the legacy bell-crank
-// constants and produced previews that drifted from what the bridge would
-// actually command, which is precisely the "SVG vs leg disagree" symptom we
-// just fixed.)
+// Drag uses the same 2-link visual frame as the SVG, then sends the resulting
+// [coxa, femur, tibia] joint vector through the same direct-joint path as the
+// sliders. That keeps the sliders, preview, and ESP command in lock-step.
 
 export function leg_angle_map(jointState) {
   // Utility for panels that want all 12 joints keyed by name.

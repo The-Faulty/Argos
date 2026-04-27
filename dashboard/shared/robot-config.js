@@ -344,15 +344,22 @@ export const GAIT_TUNABLE_PARAMS = {
 // below it sends zero so a slightly off-center stick doesn't dribble
 // commands.
 //
-// MAX_LIN_VEL was 0.50, then 0.18 to put the saturation point near full
-// deflection on the analog joystick. Now that the dashboard uses arrow
-// buttons (binary full-deflection input), the value sets the velocity the
-// planner sees on every keypress, which drives stride amplitude via
-// stride = velocity × stance_time. 0.25 m/s × 0.426 s stance ≈ 0.107 m
-// peak-to-peak stride, which exercises the new MAX_STRIDE_X = 0.060
-// (clamps at 0.120 m peak-to-peak) without saturating off the bottom.
+// MAX_LIN_VEL is the velocity the planner sees on a full-deflection arrow
+// hold. The cap is the servo speed budget, not the IK reach window:
+//
+//   tibia cap = 240°/s × 40 ms tick = 9.6°/tick
+//   peak tibia demand at the swing→stance handoff scales with stride
+//   tibia delta at twist 0.24 ≈ 19°/tick (servo realizes ~50% of commanded)
+//   tibia delta at twist 0.25 ≈ 42°/tick (servo realizes ~23%) — the IK
+//     also flips branches because the foot drops faster than the
+//     hint-continuous tibia angle can track, so the commanded trajectory
+//     becomes incoherent and visible motion collapses to ~25 mm.
+//
+// The cliff at twist ≥ 0.245 is sharp. 0.20 sits well below it: visible
+// horizontal swing ≈ 55 mm with the servo realizing ~70% of commanded
+// motion and zero IK branch flips.
 export const JOYSTICK_SCALE = {
-  MAX_LIN_VEL: 0.25, // m/s at full deflection (arrow-button hold)
+  MAX_LIN_VEL: 0.20, // m/s at full deflection (arrow-button hold)
   MAX_ANG_VEL: 1.4,  // rad/s; reserved for yaw stick
   DEADZONE: 0.08,    // normalized fraction (unused for arrow buttons)
 };
