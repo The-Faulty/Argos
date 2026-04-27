@@ -50,14 +50,11 @@ const STAND_JOINTS_RAD  = [0, -28.84 * DEG2RAD,  15.80 * DEG2RAD];
 const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 
 // Stride amplitude clamp (meters, peak displacement either side of base).
-// At default body height z = -0.189 m the per-leg reach window is ~75 mm in
-// x and only ~20 mm in y (probed empirically; the femur joint limit is the
-// binding constraint). Allowing more than these caps means every cycle the
-// foot.x clamp catches a near-edge target — tolerable for x-direction
-// motion, but a y stride that big would push every tick into clamp/refusal,
-// so y is held tight. The per-axis foot clamp in `clampFootInReach` is the
-// final safety net beyond either bound.
-const MAX_STRIDE_X = 0.025;
+// The current stance has roughly 70 mm of safe body-x travel per foot. Use
+// most of that window so trot reads as a deliberate step instead of a tiny
+// shuffle; clampFootInReach remains the final guardrail at the hard edges.
+// Lateral reach is much tighter, so y stays deliberately conservative.
+const MAX_STRIDE_X = 0.040;
 const MAX_STRIDE_Y = 0.005;
 
 // Default contact phase patterns (4 columns = phases, rows = legs FR/FL/RR/RL).
@@ -340,17 +337,13 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    // Swing-foot vertical lift. The reachable z window at default stance
-    // height (-0.189 m) is only ~±2.5 mm with stock femur limits
-    // ([-40°, +25°]); a 4 cm legacy default sent half of every gait tick
-    // outside the workspace and IK refusals froze the gait. 0.015 m is a
-    // visible "real walking" lift that requires the user to widen tibia
-    // (and ideally femur) limits in the Settings drawer to keep IK feasible
-    // across the swing arc — the joint-limits drawer plumbs through to the
-    // planner now, so this is a one-touch unlock. If the operator leaves
-    // limits at default, mid-swing IK refusals will hold the leg one tick
-    // (no crash) but motion will look hitchy.
-    z_clearance: 0.015,
+    // Swing-foot vertical lift. With the stock femur/tibia envelope the
+    // reachable z window at the neutral stance is only a few millimeters;
+    // larger lifts make mid-swing IK fail and the controller reuses the last
+    // good pose, which feels like the joystick walks a few steps then stops.
+    // Keep the default conservative so a held joystick keeps producing fresh
+    // gait poses. Larger lift should only be enabled after widening limits.
+    z_clearance: 0.002,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,

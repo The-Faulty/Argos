@@ -123,7 +123,7 @@ export const LEG_ORIGINS = [
 // relative to each servo's 90° neutral.
 export const DEFAULT_JOINT_LIMITS_RAD = {
   coxa:  [-45.0 * DEG2RAD,  45.0 * DEG2RAD],
-  femur: [-40.0 * DEG2RAD,  25.0 * DEG2RAD],
+  femur: [-90.0 * DEG2RAD,  25.0 * DEG2RAD],
   tibia: [-85.0 * DEG2RAD,  90.0 * DEG2RAD],
 };
 
@@ -316,7 +316,7 @@ export const GAIT_TUNABLE_PARAMS = {
 // any |stick| below it sends zero so a slightly off-center stick doesn't
 // dribble commands.
 export const JOYSTICK_SCALE = {
-  MAX_LIN_VEL: 0.30, // m/s at full deflection
+  MAX_LIN_VEL: 0.40, // m/s at full deflection
   MAX_ANG_VEL: 1.0,  // rad/s; reserved for yaw stick
   DEADZONE: 0.08,    // normalized fraction
 };
