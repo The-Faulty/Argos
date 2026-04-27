@@ -1,25 +1,19 @@
 // Slide-out settings drawer.
 //
-// Five sections:
+// Four sections:
 //   1. Per-joint servo inversion toggles (12 switches) → /api/settings/servo_overrides
-//   2. Servo speed limits (per-row deg/s) + PWM update rate (Hz) → /api/settings/servo_speed, /api/settings/servo_update_rate
-//   3. Rotate tuneables (increment, rate, calibration factor) → /api/settings/rotate
-//   4. Stabilizer params (roll gain, pitch gain, max correction, filter alpha, on/off) → /api/params/stabilizer
-//   5. Body-height slider → /api/params/gait/default_z_ref_mm
+//   2. Rotate tuneables (increment, rate, calibration factor) → /api/settings/rotate
+//   3. Stabilizer params (roll gain, pitch gain, max correction, filter alpha, on/off) → /api/params/stabilizer
+//   4. Body-height slider → /api/params/gait/default_z_ref_mm
 //
 // All edits debounce before POSTing so a slider drag doesn't spam the Pi server.
 
 import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_ROTATE_SETTINGS,
-  DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
-  DEFAULT_SERVO_UPDATE_RATE_HZ,
   GAIT_TUNABLE_PARAMS,
   JOINT_NAMES,
-  JOINT_ROWS,
   ROTATE_SETTINGS_BOUNDS,
-  SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC,
-  SERVO_UPDATE_RATE_BOUNDS_HZ,
   STABILIZER_PARAM_BOUNDS,
 } from "../../shared/robot-config.js";
 
@@ -28,14 +22,10 @@ export default function SettingsDrawer({
   onClose,
   servoOverrides,
   rotateSettings,
-  servoSpeed,
-  servoUpdateRate,
   onSaveServoOverrides,
   onSaveRotateSettings,
   onSaveStabilizerParams,
   onSaveGaitParam,
-  onSaveServoSpeed,
-  onSaveServoUpdateRate,
 }) {
   return (
     <aside className={`settings-drawer${open ? " is-open" : ""}`} aria-hidden={!open}>
@@ -45,12 +35,6 @@ export default function SettingsDrawer({
       </header>
       <div className="settings-drawer__scroll">
         <ServoOverridesSection value={servoOverrides} onSave={onSaveServoOverrides} />
-        <ServoRateSection
-          speed={servoSpeed}
-          updateRate={servoUpdateRate}
-          onSaveSpeed={onSaveServoSpeed}
-          onSaveUpdateRate={onSaveServoUpdateRate}
-        />
         <RotateSettingsSection value={rotateSettings} onSave={onSaveRotateSettings} />
         <StabilizerSection onSave={onSaveStabilizerParams} />
         <BodyHeightSection onSave={(v) => onSaveGaitParam?.("default_z_ref_mm", v)} />
@@ -210,97 +194,6 @@ function StabilizerSection({ onSave }) {
       <RangeField label="IMU filter α" bounds={b.imu_filter_alpha}
                   value={draft.imu_filter_alpha} step={0.01}
                   onChange={(v) => setField("imu_filter_alpha", v)} />
-    </Section>
-  );
-}
-
-// ─── Section: servo speed + PWM update rate ─────────────────────────────
-//
-// Two knobs that together shape how the servos execute commands:
-//   - Per-joint-row speed cap (deg/s): stops the bridge from commanding
-//     travel faster than the bell-crank tolerates. Coxa is light → fine at
-//     180 °/s; tibia carries the calf + IMU + wiring so it ships at 300 °/s.
-//   - PWM / command update rate (Hz): 50 Hz is standard hobby-servo native;
-//     bumping to 100+ smooths motion if the firmware's PCA9685 can keep up.
-// Both POST in real time (no debounce) — these values change rarely and the
-// server persists them, so a stray mid-drag write is harmless.
-function ServoRateSection({ speed, updateRate, onSaveSpeed, onSaveUpdateRate }) {
-  const speedBounds = SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC;
-  const rateBounds = SERVO_UPDATE_RATE_BOUNDS_HZ;
-
-  const [speedDraft, setSpeedDraft] = useState(
-    speed && typeof speed === "object" && Object.keys(speed).length > 0
-      ? { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, ...speed }
-      : { ...DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC },
-  );
-  const [hzDraft, setHzDraft] = useState(
-    Number.isFinite(updateRate?.hz) && updateRate.hz > 0
-      ? updateRate.hz
-      : DEFAULT_SERVO_UPDATE_RATE_HZ,
-  );
-
-  // Pull in server-side updates whenever the persisted values change. The
-  // empty-object sentinel from useRosbridge means "not yet loaded from Pi",
-  // so we don't stomp the draft with defaults in that case.
-  useEffect(() => {
-    if (speed && typeof speed === "object" && Object.keys(speed).length > 0) {
-      setSpeedDraft((prev) => ({ ...prev, ...speed }));
-    }
-  }, [speed]);
-  useEffect(() => {
-    if (Number.isFinite(updateRate?.hz) && updateRate.hz > 0) {
-      setHzDraft(updateRate.hz);
-    }
-  }, [updateRate]);
-
-  function setSpeedFor(row, v) {
-    const next = { ...speedDraft, [row]: v };
-    setSpeedDraft(next);
-    onSaveSpeed?.(next);
-  }
-
-  function setHz(v) {
-    setHzDraft(v);
-    onSaveUpdateRate?.(v);
-  }
-
-  return (
-    <Section title="Servo speed + PWM rate">
-      <p className="muted">
-        Per-joint-row slew cap in deg/s (applied in the bridge before
-        /joint_command/raw). Bottom slider sets how often the Pi re-publishes
-        commands and the firmware refreshes the PCA9685 PWM.
-      </p>
-      <div className="settings-row">
-        {JOINT_ROWS.map((row) => (
-          <label key={row} className="slider">
-            <span>{row} speed (°/s)</span>
-            <input
-              type="range"
-              min={speedBounds.min}
-              max={speedBounds.max}
-              step="10"
-              value={speedDraft[row] ?? DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC[row]}
-              onChange={(e) => setSpeedFor(row, Number(e.target.value))}
-            />
-            <span className="slider__value">
-              {Math.round(speedDraft[row] ?? DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC[row])} °/s
-            </span>
-          </label>
-        ))}
-      </div>
-      <label className="slider">
-        <span>PWM / command update rate (Hz)</span>
-        <input
-          type="range"
-          min={rateBounds.min}
-          max={rateBounds.max}
-          step="5"
-          value={hzDraft}
-          onChange={(e) => setHz(Number(e.target.value))}
-        />
-        <span className="slider__value">{Math.round(hzDraft)} Hz</span>
-      </label>
     </Section>
   );
 }

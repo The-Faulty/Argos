@@ -334,14 +334,10 @@ function AppBody() {
         onClose={() => setSettingsOpen(false)}
         servoOverrides={data.servo_overrides}
         rotateSettings={rotateSettings}
-        servoSpeed={data.servo_speed}
-        servoUpdateRate={data.servo_update_rate}
         onSaveServoOverrides={(v) => cmd.setServoOverrides(v).catch(() => {})}
         onSaveRotateSettings={(v) => cmd.setRotateSettings(v).catch(() => {})}
         onSaveStabilizerParams={(v) => cmd.setStabilizerParams(v).catch(() => {})}
         onSaveGaitParam={(n, v) => cmd.setGaitParam(n, v).catch(() => {})}
-        onSaveServoSpeed={(v) => cmd.setServoSpeedLimits(v).catch(() => {})}
-        onSaveServoUpdateRate={(v) => cmd.setServoUpdateRate(v).catch(() => {})}
       />
 
       {cmd.lastError && (
