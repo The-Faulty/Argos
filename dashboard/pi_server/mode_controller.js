@@ -12,7 +12,6 @@ import {
   JOINT_ROWS,
   LEG_IDS,
   MODE_OPTIONS,
-  DEFAULT_JOINT_LIMITS_RAD,
 } from "../shared/robot-config.js";
 import { fourLegsInverseKinematics } from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
@@ -119,7 +118,7 @@ export class ModeController extends EventEmitter {
     // Clamp x into the per-leg window so the leg tracks the cursor along
     // the boundary instead of refusing the whole frame.
     const clamped = targets.map((t, i) => clampFootInReach(t, LEG_IDS[i]));
-    const ik = fourLegsInverseKinematics(clamped, { limits: DEFAULT_JOINT_LIMITS_RAD });
+    const ik = fourLegsInverseKinematics(clamped, { limits: this.planner.jointLimitsRad });
     if (!ik.ok) {
       this.emit("error", `IK failed for ${ik.leg}: ${ik.reason}`);
       return;
@@ -163,7 +162,13 @@ export class ModeController extends EventEmitter {
   }
 
   // limitsByName = { "FR_coxa_joint": {min_deg, max_deg}, ... }
+  // Forwards per-leg limits to the firmware AND collapses them into a single
+  // joint envelope for the JS-side IK in the gait planner. The IK accepts one
+  // {coxa, femur, tibia} triple applied to all four legs, so we take the
+  // tightest bound across legs (intersection) — going wider would tell the IK
+  // a value is reachable when at least one leg can't actually achieve it.
   setJointLimits(limitsByName) {
+    const DEG2RAD = Math.PI / 180.0;
     const byLeg = {};
     for (const leg of LEG_IDS) byLeg[leg] = {};
     for (const [name, range] of Object.entries(limitsByName)) {
@@ -176,6 +181,19 @@ export class ModeController extends EventEmitter {
       const tibia = byLeg[leg].tibia || [-180, 180];
       this.serial.setLegJointLimits(leg, { femur, tibia });
     }
+    const envelope = {};
+    for (const row of JOINT_ROWS) {
+      let lo = -Infinity, hi = +Infinity, any = false;
+      for (const leg of LEG_IDS) {
+        const r = byLeg[leg][row];
+        if (!r) continue;
+        any = true;
+        lo = Math.max(lo, r[0]);
+        hi = Math.min(hi, r[1]);
+      }
+      if (any && lo <= hi) envelope[row] = [lo * DEG2RAD, hi * DEG2RAD];
+    }
+    this.planner.setJointLimits(envelope);
   }
 
   // Snapshot used by the WS broadcast on each new client.

@@ -90,6 +90,7 @@ export class GaitPlanner {
     this.feet = makeStanceFeet(this.config); // 4×3 in body frame
     this.lastJointAnglesRad = makeZeroJoints();
     this.lastServoAnglesDeg = jointAnglesRadToServoDeg(this.lastJointAnglesRad);
+    this.jointLimitsRad = cloneLimits(DEFAULT_JOINT_LIMITS_RAD);
   }
 
   // ─── External knobs ──────────────────────────────────────────────────
@@ -124,6 +125,21 @@ export class GaitPlanner {
   updateConfig(patch = {}) {
     Object.assign(this.config, patch);
     this.feet = makeStanceFeet(this.config);
+  }
+
+  // Single envelope (coxa/femur/tibia rad triples) applied to every leg's IK.
+  // Drop the warm-start hints because the previous solution may sit outside
+  // the new envelope — without a reset the next solve would walk the hint
+  // back into a window that no longer accepts it and stall on first tick.
+  setJointLimits(limitsRad = {}) {
+    const merged = cloneLimits(this.jointLimitsRad);
+    for (const row of ["coxa", "femur", "tibia"]) {
+      if (Array.isArray(limitsRad[row]) && limitsRad[row].length === 2) {
+        merged[row] = [limitsRad[row][0], limitsRad[row][1]];
+      }
+    }
+    this.jointLimitsRad = merged;
+    resetIkHint();
   }
 
   // Returns { servoAnglesDeg, jointAnglesRad, feet } or null when planner is
@@ -278,7 +294,7 @@ export class GaitPlanner {
   }
 
   _solveAndCache(feet) {
-    const ik = fourLegsInverseKinematics(feet, { limits: DEFAULT_JOINT_LIMITS_RAD });
+    const ik = fourLegsInverseKinematics(feet, { limits: this.jointLimitsRad });
     if (!ik.ok) {
       // Refuse to publish bad IK — return last good output.
       return {
@@ -387,6 +403,14 @@ function jointAnglesRadToServoDeg(jointAnglesRad) {
 
 function clampNum(v, lo, hi) {
   return v < lo ? lo : v > hi ? hi : v;
+}
+
+function cloneLimits(src) {
+  return {
+    coxa:  [src.coxa[0],  src.coxa[1]],
+    femur: [src.femur[0], src.femur[1]],
+    tibia: [src.tibia[0], src.tibia[1]],
+  };
 }
 
 // Clamp a foot target's x into its leg's IK reach window. Y and Z pass
