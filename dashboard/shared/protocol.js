@@ -52,6 +52,15 @@ const COMMAND_VALIDATORS = {
     }
   },
 
+  // Same shape as servo_angles, but bypasses the dashboard-side servo_cal
+  // clamp window. Intended for the limit-finder workflow where you need to
+  // probe past the configured min/max to find the real hardware bound.
+  raw_servo_angles(cmd) {
+    if (!Array.isArray(cmd.angles_deg) || cmd.angles_deg.length !== 12 || !cmd.angles_deg.every(Number.isFinite)) {
+      throw new Error("raw_servo_angles.angles_deg must be 12 numbers");
+    }
+  },
+
   disconnect() {
     /* no fields */
   },

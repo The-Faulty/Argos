@@ -4,9 +4,16 @@ Drives one servo at a time via the dashboard server's /api/command endpoint
 so you can sweep angles by hand, mark min/max where the linkage binds, and
 print a summary you can paste into DEFAULT_JOINT_LIMITS_RAD.
 
+Bypasses both clamps that normally cap the servo command:
+  * dashboard-side servo_cal min/max — uses the `raw_servo_angles` command,
+    which only pins to the physical 0..180 horn domain.
+  * firmware-side joint limits — at startup the script POSTs wide-open
+    limits (±89 deg joint-space) so the firmware accepts the full sweep.
+    Original limits are restored on exit.
+
 Stdlib only — no requests/numpy needed. The dashboard server must be
-running (default http://localhost:8787 on the Pi). Run it from anywhere
-that can reach the Pi:
+running (default http://localhost:8787 on the Pi). Run from anywhere that
+can reach the Pi:
 
     python scripts/limit_finder.py
     python scripts/limit_finder.py --host 192.168.1.42
@@ -64,23 +71,28 @@ class DashboardClient:
     def __init__(self, base_url: str) -> None:
         self.base_url = base_url.rstrip("/")
 
-    def _post(self, path: str, body: dict) -> dict:
-        data = json.dumps(body).encode("utf-8")
+    def _request(self, method: str, path: str, body: dict | None = None) -> dict:
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"Content-Type": "application/json"} if data is not None else {}
         req = urllib.request.Request(
-            f"{self.base_url}{path}",
-            data=data,
-            headers={"Content-Type": "application/json"},
-            method="POST",
+            f"{self.base_url}{path}", data=data, headers=headers, method=method,
         )
         with urllib.request.urlopen(req, timeout=2.0) as resp:
             raw = resp.read().decode("utf-8") or "{}"
             return json.loads(raw)
 
-    def send_servo_angles(self, angles_deg: list[float]) -> None:
-        self._post("/api/command", {"type": "servo_angles", "angles_deg": angles_deg})
+    def send_raw_servo_angles(self, angles_deg: list[float]) -> None:
+        # raw bypasses dashboard's servo_cal clamp; only 0..180 horn limit applies.
+        self._request("POST", "/api/command", {"type": "raw_servo_angles", "angles_deg": angles_deg})
 
     def release(self) -> None:
-        self._post("/api/command", {"type": "disconnect"})
+        self._request("POST", "/api/command", {"type": "disconnect"})
+
+    def get_joint_limits(self) -> dict:
+        return self._request("GET", "/api/settings/joint_limits")
+
+    def set_joint_limits(self, limits: dict) -> dict:
+        return self._request("POST", "/api/settings/joint_limits", limits)
 
 
 def clamp(v: float) -> float:
@@ -150,6 +162,12 @@ def summarize(marks: dict[str, dict[str, float]]) -> None:
     print("    coxa/femur/tibia: [LO * DEG2RAD,  HI * DEG2RAD]")
 
 
+WIDE_LIMITS_DEG = {
+    f"{leg}_{row}_joint": {"min_deg": -89.0, "max_deg": 89.0}
+    for leg in LEG_IDS for row in JOINT_ROWS
+}
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--host", default="localhost", help="dashboard host (default: localhost)")
@@ -161,7 +179,6 @@ def main() -> int:
     angles = [CENTER] * 12
     selected = joint_index(args.start)
     marks: dict[str, dict[str, float]] = {}
-    engaged = True
 
     print("=" * 64)
     print("  Argos Joint Limit Finder")
@@ -170,8 +187,22 @@ def main() -> int:
     print(f"  All 12 servos at 90 deg. Selected: {JOINT_NAMES[selected]}")
     print()
 
+    # Snapshot the saved joint limits so we can restore on exit, then widen
+    # firmware limits to ±89 deg so the firmware accepts the full sweep.
+    saved_limits: dict | None = None
     try:
-        client.send_servo_angles(angles)
+        saved_limits = client.get_joint_limits()
+        client.set_joint_limits(WIDE_LIMITS_DEG)
+        print("  Widened firmware joint limits to ±89 deg (will restore on exit).")
+    except urllib.error.URLError as e:
+        print(f"  ERROR: cannot reach dashboard server: {e}")
+        return 1
+    except Exception as e:
+        print(f"  WARN: could not widen joint limits: {e}")
+        print("        Sweeps may be clamped firmware-side.")
+
+    try:
+        client.send_raw_servo_angles(angles)
     except urllib.error.URLError as e:
         print(f"  ERROR: cannot reach dashboard server: {e}")
         return 1
@@ -183,6 +214,23 @@ def main() -> int:
     print()
     print("  Type 'help' for commands, 'done' to exit.")
 
+    try:
+        exit_code = _run_loop(client, angles, selected, marks)
+    finally:
+        if saved_limits is not None:
+            try:
+                client.set_joint_limits(saved_limits)
+                print("  Restored original firmware joint limits.")
+            except Exception as e:
+                print(f"  WARN: could not restore joint limits: {e}")
+                print(f"        Saved snapshot: {json.dumps(saved_limits)}")
+
+    summarize(marks)
+    return exit_code
+
+
+def _run_loop(client: DashboardClient, angles: list[float], selected: int, marks: dict) -> int:
+    engaged = True
     while True:
         try:
             raw = input(f"  [{JOINT_NAMES[selected]}]> ").strip()
@@ -214,7 +262,7 @@ def main() -> int:
         if cmd == "center":
             angles = [CENTER] * 12
             try:
-                client.send_servo_angles(angles)
+                client.send_raw_servo_angles(angles)
                 engaged = True
                 print_state(angles, selected)
             except Exception as e:
@@ -232,7 +280,7 @@ def main() -> int:
 
         if cmd == "lock":
             try:
-                client.send_servo_angles(angles)
+                client.send_raw_servo_angles(angles)
                 engaged = True
                 print("  Re-engaged at:")
                 print_state(angles, selected)
@@ -270,13 +318,12 @@ def main() -> int:
 
         if engaged:
             try:
-                client.send_servo_angles(angles)
+                client.send_raw_servo_angles(angles)
             except Exception as e:
                 print(f"  send failed: {e}")
                 continue
         print_state(angles, selected)
 
-    summarize(marks)
     return 0
 
 

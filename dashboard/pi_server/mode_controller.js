@@ -151,6 +151,21 @@ export class ModeController extends EventEmitter {
     this._publishServoDeg(clamped, this.lastJointAnglesRad);
   }
 
+  // dashboard `raw_servo_angles` — same as setServoAnglesDeg but skips the
+  // servo_cal min/max clamp so the limit-finder script can probe past the
+  // configured bench range. Still pinned to the physical 0..180 deg horn
+  // domain. Firmware-side joint limits still apply; widen them via
+  // setJointLimits before running this.
+  async setRawServoAnglesDeg(anglesDeg) {
+    if (this.mode !== "direct_servo_angles") await this.setMode("direct_servo_angles");
+    if (!Array.isArray(anglesDeg) || anglesDeg.length !== 12) {
+      this.emit("error", "raw_servo_angles requires 12 numbers");
+      return;
+    }
+    const pinned = anglesDeg.map((deg) => Math.min(180, Math.max(0, deg)));
+    this._publishServoDeg(pinned, this.lastJointAnglesRad);
+  }
+
   setServoSpeedLimit(speedByRow) {
     // speedByRow = { coxa, femur, tibia } in deg/s
     for (const legId of LEG_IDS) {

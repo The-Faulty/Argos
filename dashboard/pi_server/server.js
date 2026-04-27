@@ -430,6 +430,9 @@ async function handleCommand(cmd) {
     case "servo_angles":
       await mode.setServoAnglesDeg(cmd.angles_deg);
       break;
+    case "raw_servo_angles":
+      await mode.setRawServoAnglesDeg(cmd.angles_deg);
+      break;
     case "disconnect":
       serial.releaseServos();
       state.twist.active = false;
