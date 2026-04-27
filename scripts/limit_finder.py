@@ -77,9 +77,17 @@ class DashboardClient:
         req = urllib.request.Request(
             f"{self.base_url}{path}", data=data, headers=headers, method=method,
         )
-        with urllib.request.urlopen(req, timeout=2.0) as resp:
-            raw = resp.read().decode("utf-8") or "{}"
-            return json.loads(raw)
+        try:
+            with urllib.request.urlopen(req, timeout=2.0) as resp:
+                raw = resp.read().decode("utf-8") or "{}"
+                return json.loads(raw)
+        except urllib.error.HTTPError as e:
+            # Surface the server's error body — 400s usually carry "error: ...".
+            try:
+                detail = e.read().decode("utf-8") or ""
+            except Exception:
+                detail = ""
+            raise RuntimeError(f"{method} {path} → HTTP {e.code}: {detail or e.reason}") from e
 
     def send_raw_servo_angles(self, angles_deg: list[float]) -> None:
         # raw bypasses dashboard's servo_cal clamp; only 0..180 horn limit applies.

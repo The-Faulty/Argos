@@ -123,18 +123,19 @@ export const LEG_ORIGINS = [
 // relative to each servo's 90° neutral.
 export const DEFAULT_JOINT_LIMITS_RAD = {
   coxa:  [-45.0 * DEG2RAD,  45.0 * DEG2RAD],
-  femur: [-90.0 * DEG2RAD,  25.0 * DEG2RAD],
-  tibia: [-85.0 * DEG2RAD,  90.0 * DEG2RAD],
+  femur: [-50.0 * DEG2RAD,   0.0 * DEG2RAD],
+  tibia: [-90.0 * DEG2RAD,  90.0 * DEG2RAD],
 };
 
 // ─── Per-leg foot reach window (meters, body frame x) ─────────────────────
 // Empirical IK-success window for foot.x at default stance y (±0.1106 m) and
-// default body height z (-0.189 m). The femur joint limits ([-40°, +25°])
-// are the binding constraint, not the linkage geometry, so each window is
-// only ~75 mm wide. Bounds are pulled in 2 mm from the measured edge of
-// feasibility (probed at 0.5 mm resolution against fourLegsInverseKinematics)
-// so the IK doesn't sit on the cusp where a sub-millimeter IMU-tilt or
-// rounding nudge flips reachable→unreachable.
+// default body height z (-0.189 m). The femur joint limits ([-50°, 0°]) are
+// the binding constraint, not the linkage geometry. Bounds are pulled in
+// 2 mm from the measured edge of feasibility (probed at 0.5 mm resolution
+// against fourLegsInverseKinematics) so the IK doesn't sit on the cusp
+// where a sub-millimeter IMU-tilt or rounding nudge flips reachable→
+// unreachable. Re-probe with scripts/limit_finder.py if walking gets erratic
+// after a major joint-limit revision.
 //
 // The gait planner and setFootTargets both clamp foot targets against this
 // before solving IK so out-of-reach inputs (max twist, joystick edges,
@@ -160,9 +161,17 @@ export const DEFAULT_SERVO_CHANNEL_MAP = {
 // Piecewise samples tying the top-servo angle to the allowed bottom-servo
 // window. Consumers interpolate the same way Config.coupled_bot_limits_*
 // does (np.interp over COUPLED_TOP_SAMPLES_DEG as the x-axis).
-export const COUPLED_TOP_SAMPLES_DEG     = [50.0, 70.0, 90.0, 102.0, 115.0];
-export const COUPLED_BOT_MIN_SAMPLES_DEG = [10.0, 10.0, 40.0, 65.0,  85.0];
-export const COUPLED_BOT_MAX_SAMPLES_DEG = [95.0, 125.0, 180.0, 180.0, 180.0];
+//
+// Probed via scripts/limit_finder.py. Stored in servo-deg space (90 = neutral).
+// Joint-space pairs measured at the safe-region boundary:
+//   femur=-50:  tibia ∈ [-90, +5]
+//   femur=-38:  tibia ∈ [-90, +30]
+//   femur=-25:  tibia ∈ [-70, +60]
+//   femur=-13:  tibia ∈ [-50, +90]
+//   femur= 0:   tibia ∈ [-25, +90]
+export const COUPLED_TOP_SAMPLES_DEG     = [40.0,  52.0,  65.0,  77.0,  90.0];
+export const COUPLED_BOT_MIN_SAMPLES_DEG = [ 0.0,   0.0,  20.0,  40.0,  65.0];
+export const COUPLED_BOT_MAX_SAMPLES_DEG = [95.0, 120.0, 150.0, 180.0, 180.0];
 
 // ─── Servo-space horn limits (mirrors Config.SERVO_LIMITS_DEG) ───────────
 // Bench-measured direct-servo travel with the linkage assembled. Absolute
@@ -170,9 +179,9 @@ export const COUPLED_BOT_MAX_SAMPLES_DEG = [95.0, 125.0, 180.0, 180.0, 180.0];
 // (hip / top / bottom = coxa / femur / tibia).
 export const SERVO_CENTER_DEG = 90.0;
 export const SERVO_LIMITS_DEG = [
-  [45.0, 135.0],   // hip (coxa)
-  [50.0, 115.0],   // top (femur)
-  [5.0,  180.0],   // bottom/bell-crank (tibia)
+  [45.0, 135.0],   // hip (coxa)        — joint ±45
+  [40.0,  90.0],   // top (femur)       — joint -50..0   (probed via limit_finder)
+  [ 0.0, 180.0],   // bottom (tibia)    — joint -90..+90 (probed via limit_finder)
 ];
 
 // ─── Default stance (meters, body frame) ─────────────────────────────────
