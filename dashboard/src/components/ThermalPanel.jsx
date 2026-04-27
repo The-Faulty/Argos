@@ -78,12 +78,13 @@ export default function ThermalPanel({ thermal }) {
     ctx.drawImage(tmp, 0, 0, canvas.width, canvas.height);
   }, [normalized]);
 
-  const thermalError = health?.errors?.thermal;
+  const thermalError = health?.errors?.thermal || health?.error;
   const thermalOffline = health && health.thermal_running === false;
+  const sidecarOffline = health?.ok === false && Boolean(health?.error);
   const status = normalized
     ? "live"
     : thermalError
-      ? "sensor error"
+      ? sidecarOffline ? "sidecar offline" : "sensor error"
       : thermalOffline
         ? "thermal offline"
         : "no data";
@@ -103,7 +104,13 @@ export default function ThermalPanel({ thermal }) {
         />
         {!normalized && (
           <div className="thermal-panel__empty">
-            <strong>{thermalOffline ? "MLX90640 not streaming" : "Waiting for thermal frame"}</strong>
+            <strong>
+              {sidecarOffline
+                ? "Sensor sidecar is not reachable"
+                : thermalOffline
+                  ? "MLX90640 not streaming"
+                  : "Waiting for thermal frame"}
+            </strong>
             {thermalError && <span>{thermalError}</span>}
           </div>
         )}

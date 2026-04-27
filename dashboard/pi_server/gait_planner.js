@@ -29,7 +29,12 @@ import {
 import { fourLegsInverseKinematics, resetIkHint } from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 
-const TICK_HZ = 50.0;
+// Dropped from 50 Hz to 30 Hz: each gait tick emits 4× set_leg_servo_angles
+// (~480 B) at 921600 baud. The ESP32's 32 B UART RX FIFO drains slowly when
+// the firmware is mid-I²C-write to the PCA9685, so 50 Hz bursts reproducibly
+// truncated frames ("unknown command type" with corrupted bodies). 30 Hz
+// gives the firmware ~33 ms between bursts to drain — empirically enough.
+const TICK_HZ = 30.0;
 const TICK_DT = 1.0 / TICK_HZ;
 
 const DEG2RAD = Math.PI / 180.0;
@@ -185,6 +190,19 @@ export class GaitPlanner {
     const phases = CONTACT_PHASES[mode];
     const phaseDur = gaitPhaseTimes(this.config, mode);
     const cycleMs = phaseDur.stance_ms * 3 + phaseDur.swing_ms;
+
+    // Zero twist → freeze the gait clock and emit the neutral footprint.
+    // Without this, gaitTickMs keeps advancing and swing legs still lift to
+    // z_clearance even with no commanded motion, so the robot trotted in
+    // place after the joystick was released. The mode stays trot/crawl so
+    // the next non-zero stick push resumes immediately.
+    if (this.twist.x === 0 && this.twist.y === 0 && this.twist.yaw === 0) {
+      this.gaitTickMs = 0;
+      const baseFeet = makeStanceFeet(this.config);
+      this._applyImuTilt(baseFeet);
+      const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i]));
+      return this._solveAndCache(clamped);
+    }
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
 
     const phaseDurMs = cycleMs / 4;
@@ -322,15 +340,17 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    // Swing-foot vertical lift. Probed against fourLegsInverseKinematics:
-    // with the femur joint limited to [-40°, +25°], the reachable z window
-    // at base stance is only ±2.5 mm around -0.189 m. A 4 cm lift (the
-    // legacy default) sent ~half of every gait tick outside the workspace,
-    // which is why "joystick does nothing" was the dominant complaint.
-    // Keep the lift well inside that window so swing trajectories stay
-    // IK-feasible across the whole cycle; the foot still clears the ground
-    // enough on a smooth surface to avoid scuffing.
-    z_clearance: 0.002,
+    // Swing-foot vertical lift. The reachable z window at default stance
+    // height (-0.189 m) is only ~±2.5 mm with stock femur limits
+    // ([-40°, +25°]); a 4 cm legacy default sent half of every gait tick
+    // outside the workspace and IK refusals froze the gait. 0.015 m is a
+    // visible "real walking" lift that requires the user to widen tibia
+    // (and ideally femur) limits in the Settings drawer to keep IK feasible
+    // across the swing arc — the joint-limits drawer plumbs through to the
+    // planner now, so this is a one-touch unlock. If the operator leaves
+    // limits at default, mid-swing IK refusals will hold the leg one tick
+    // (no crash) but motion will look hitchy.
+    z_clearance: 0.015,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
