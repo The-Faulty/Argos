@@ -8,10 +8,10 @@ import { fourLegsInverseKinematics } from "../dashboard/shared/argos_kinematics.
 import { LEG_IDS } from "../dashboard/shared/robot-config.js";
 
 // Same constants as gait_planner.js makeStanceFeet().
-const STAND_FRONT_FOOT_X =  0.1135;
-const STAND_REAR_FOOT_X  = -0.1100;
+const STAND_FRONT_FOOT_X =  0.1120;
+const STAND_REAR_FOOT_X  = -0.1110;
 const STAND_FOOT_Y       =  0.0733;
-const STAND_FOOT_Z       = -0.1900;
+const STAND_FOOT_Z       = -0.1950;
 
 const stanceFeet = LEG_IDS.map((id) => {
   const isFront = id === "FR" || id === "FL";
@@ -44,7 +44,7 @@ for (let i = 0; i < LEG_IDS.length; i++) {
 
 console.log("");
 console.log("# STAND_JOINTS_RAD (used by stand/extend mode, no IK):");
-console.log("#   coxa=0.000°  femur=-28.080°  tibia=28.980°");
+console.log("#   coxa=0.000°  femur=-25.990°  tibia=19.610°");
 console.log("");
 console.log("# If the IK coxa above is non-zero, switching from stand → trot");
 console.log("# will jump every leg's coxa from 0 to that value.");

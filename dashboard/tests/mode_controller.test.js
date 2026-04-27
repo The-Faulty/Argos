@@ -43,8 +43,8 @@ test("auto poses apply small directional backlash compensation", async () => {
 
   await mode.setMode("stand");
 
-  assert.ok(serial.lastAngles[1] < 90 - 28.08, "femur command should overshoot in the downward direction");
-  assert.ok(serial.lastAngles[2] > 90 + 28.98, "tibia command should overshoot in the lifting direction");
+  assert.ok(serial.lastAngles[1] < 90 - 25.99, "femur command should overshoot in the downward direction");
+  assert.ok(serial.lastAngles[2] > 90 + 19.61, "tibia command should overshoot in the lifting direction");
 });
 
 test("backlash compensation is suppressed for swing-phase legs in trot", async () => {

@@ -28,13 +28,13 @@ import {
 // Probe at the gait's actual neutral so the resulting reach window matches
 // where clampFootInReach actually needs to clamp.
 const GAIT_STANCE = {
-  FR: [ 0.1135, -0.0733, -0.1900],
-  FL: [ 0.1135,  0.0733, -0.1900],
-  RR: [-0.1100, -0.0733, -0.1900],
-  RL: [-0.1100,  0.0733, -0.1900],
+  FR: [ 0.1120, -0.0733, -0.1950],
+  FL: [ 0.1120,  0.0733, -0.1950],
+  RR: [-0.1110, -0.0733, -0.1950],
+  RL: [-0.1110,  0.0733, -0.1950],
 };
 
-const STANCE_Z = -0.1900;                // matches gait_planner STAND_FOOT_Z
+const STANCE_Z = -0.1950;                // matches gait_planner STAND_FOOT_Z
 const DEFAULT_LIFT_M = 0.018;            // matches gait_planner z_clearance
 
 const args = parseArgs(process.argv.slice(2));

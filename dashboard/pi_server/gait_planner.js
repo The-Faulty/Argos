@@ -59,27 +59,36 @@ const DEG2RAD = Math.PI / 180.0;
 // STAND_REAR_FOOT_X / STAND_FOOT_Y / STAND_FOOT_Z below — otherwise switching
 // from stand → trot snaps every leg to a different pose.
 //
-// Re-derive with `node scripts/probe_neutral_pose.mjs` after any stance
-// change. Current values: front foot at (0.1135, ±0.0733, -0.190), rear at
-// (-0.110, ±0.0733, -0.190).
-const STAND_JOINTS_RAD  = [0, -28.08 * DEG2RAD,  28.98 * DEG2RAD];
+// CRITICAL: the IK has two valid bell-crank branches at this footprint
+// (tibia ≈ +20° vs tibia ≈ +29° at z=-0.195, both yield the same foot XYZ).
+// The physical linkage is calibrated to the +20° branch — earlier we tried
+// the +29° branch by mistake and the robot walked backward. Stay on the
+// +20° branch. Re-derive with `node scripts/probe_neutral_pose.mjs` after
+// any stance change and verify tibia < 22°.
+//
+// Current values: front foot at (0.112, ±0.0733, -0.195), rear at
+// (-0.111, ±0.0733, -0.195) — re-centered on the IK reach window so the
+// stride budget is symmetric and no clampFootInReach pin is ever hit.
+const STAND_JOINTS_RAD  = [0, -25.99 * DEG2RAD,  19.61 * DEG2RAD];
 const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 
 // Stride amplitude clamp (meters, peak displacement either side of base).
-// At the current body height (STAND_FOOT_Z = -0.190 m) and re-centered
-// neutral feet (front 0.1135, rear -0.110), each leg's stance reach
-// window (DEFAULT_FOOT_REACH_X) is ~115 mm wide. base.x sits at the
-// window center, so the per-side stride budget is the window half-width
-// (~57 mm) minus a 2 mm safety margin = 0.055 m. At this value the
-// stance-phase foot reaches both edges of the reach window without
-// triggering clampFootInReach — no pin, no swing→stance handoff jerk.
+// At the current body height (STAND_FOOT_Z = -0.195 m) and re-centered
+// neutral feet (front 0.112, rear -0.111), each leg's stance reach
+// window (DEFAULT_FOOT_REACH_X) is 72 mm wide. base.x sits at the window
+// center, so the per-side stride budget is the window half-width (36 mm)
+// minus a 2 mm safety margin = 0.034 m. At this value the stance-phase
+// foot reaches both edges of the reach window without triggering
+// clampFootInReach — no pin, no swing→stance handoff jerk.
 //
-// To raise this further you'd need a wider stance window, which means
-// raising body height further (lower |STAND_FOOT_Z|), which in turn
-// shrinks the lifted reach window. The current configuration is tuned
-// at the boundary where stance window is widest while keeping the
-// lifted window wide enough to contain the swing trajectory.
-const MAX_STRIDE_X = 0.055;
+// Going past 0.034 pins the trailing stance foot at the reach edge. The
+// historical config used MAX_STRIDE_X = 0.045 with base.x = 0.100, which
+// pinned the backward edge by 21 mm and produced the visible jerk on
+// FR at the swing→stance handoff. The wider stride windows that come
+// from raising body height all push IK onto the alternate bell-crank
+// branch (tibia +29° instead of +20°), which is mechanically incorrect
+// — see STAND_JOINTS_RAD comment.
+const MAX_STRIDE_X = 0.034;
 const MAX_STRIDE_Y = 0.025;
 
 // Gait profiles. Each leg gets one swing window per cycle; the rest is
@@ -362,13 +371,14 @@ function makeDefaultConfig() {
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
     // Swing-foot vertical lift. At the current body height (STAND_FOOT_Z =
-    // -0.190 m), the absolute IK-feasible swing peak is z ≈ -0.172 m, so
-    // z_clearance is bounded above by ~0.018 m — beyond that the lifted
-    // reach window collapses (the foot can only reach far-forward x at
-    // peak swing height). The gait uses a broad lift profile
-    // (swingLiftProfile) instead of a narrow sine spike so the foot stays
-    // near peak clearance for more of the swing, which helps overcome
-    // servo/linkage backlash.
+    // -0.195 m), the IK ceiling is ~0.023 m before the lifted reach
+    // window collapses, but the per-tick servo budget is the practical
+    // binding constraint: the swing-start tick demands a tibia angle
+    // change proportional to z_clearance, and at 360°/s tibia cap →
+    // 14.4°/tick budget, anything above ~0.018 m starts producing a
+    // throttled spike that the servo can't fully track. Visible lift is
+    // basically flat above ~0.018 m. Existing trot/crawl reach tests
+    // require zSpan > 0.016 m so 0.018 leaves comfortable margin.
     //
     // If you change this value, also re-probe DEFAULT_FOOT_REACH_X_LIFTED
     // in robot-config.js with `node scripts/probe_foot_reach.mjs --z-mm
@@ -386,20 +396,22 @@ function makeDefaultConfig() {
   };
 }
 
-// Foot positions corresponding to STAND_JOINTS_RAD = [0, -28.08°, 28.98°]
+// Foot positions corresponding to STAND_JOINTS_RAD = [0, -25.99°, +19.61°]
 // computed by forward-kinematic-ing the linkage (coxa pinned to 0). These
-// are positioned at the per-leg stance reach window centers at body height
-// -0.190 m, so MAX_STRIDE_X can use the full half-width without triggering
-// clampFootInReach. Lateral y stays at 0.0733 — coxa=0 can't reach the old
-// 0.1106 m without splaying ~11°.
+// sit at the per-leg stance reach window centers at body height -0.195 m,
+// so MAX_STRIDE_X can use the full symmetric half-width (36 mm) without
+// triggering clampFootInReach. Lateral y stays at 0.0733 — coxa=0 can't
+// reach the old 0.1106 m without splaying ~11°.
 //
-// The body sits 5 mm higher than the historical -0.195 m to widen the
-// stance reach window from 72 mm to 115 mm; the cost is 5 mm less
-// available z_clearance (the lifted window collapses earlier).
-const STAND_FRONT_FOOT_X =  0.1135;
-const STAND_REAR_FOOT_X  = -0.1100;
+// Body height stays at the historical -0.195 m: this is the only z that
+// keeps IK on the +20° tibia branch (the validated bell-crank
+// configuration) when the stance is re-centered. Raising the body to
+// z=-0.194 or higher shifts IK onto the +29° branch even at base.x=0.100
+// — see STAND_JOINTS_RAD comment for why that's mechanically wrong.
+const STAND_FRONT_FOOT_X =  0.1120;
+const STAND_REAR_FOOT_X  = -0.1110;
 const STAND_FOOT_Y       =  0.0733;
-const STAND_FOOT_Z       = -0.1900;
+const STAND_FOOT_Z       = -0.1950;
 
 function makeStanceFeet(cfg, zShift = 0) {
   // delta_x_mm is interpreted as a fore/aft offset on top of the STAND
