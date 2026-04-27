@@ -25,7 +25,9 @@
       "Bash(node \"C:/Users/chaas/Documents/GA_Tech/Spring_2026/ECE4014/Argos/scripts/probe_foot_reach.mjs\")",
       "Bash(npm run *)",
       "Bash(npm --prefix C:/Users/chaas/Documents/GA_Tech/Spring_2026/ECE4014/Argos/dashboard test)",
-      "Bash(npm --prefix C:/Users/chaas/Documents/GA_Tech/Spring_2026/ECE4014/Argos/dashboard run build)"
+      "Bash(npm --prefix C:/Users/chaas/Documents/GA_Tech/Spring_2026/ECE4014/Argos/dashboard run build)",
+      "Bash(node scripts/probe_foot_reach.mjs)",
+      "Bash(node scripts/probe_foot_reach.mjs --lift-mm 23)"
     ]
   }
 }

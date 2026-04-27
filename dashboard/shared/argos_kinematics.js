@@ -507,16 +507,7 @@ export function buildLegPoseFromJointAngles(jointAnglesRad, opts = {}) {
   // these names directly — renaming them here breaks the consumer
   // contract, so don't.
   if (state === null) {
-    geometry = {
-      O:       { x: 0, y: 0 },
-      knee:    { x: 0, y: 0 },
-      horn:    { x: 0, y: 0 },
-      bcLeft:  { x: 0, y: 0 },
-      bcRight: { x: 0, y: 0 },
-      rod2:    { x: 0, y: 0 },
-      foot:    { x: 0, y: 0 },
-      valid: false,
-    };
+    geometry = _fallbackSagittalGeometry(femur, tibia, params);
   } else {
     // The sagittal FK puts the leg origin at (0,0) with +x forward-swing
     // and +y distance-down-the-leg (right-handed, z=up implied). state
@@ -542,6 +533,35 @@ export function buildLegPoseFromJointAngles(jointAnglesRad, opts = {}) {
     servoAnglesDeg: _servoDegForLeg(legId, [coxa, femur, tibia]),
     reachable: geometry.valid,
   };
+}
+
+function _fallbackSagittalGeometry(thetaTop, thetaBot, params = LEG_PARAMS) {
+  const { L1, L2, rh, rbr, rbl, dko, abc } = params;
+  const O = { x: 0, y: 0 };
+  const knee = { x: L1 * Math.sin(thetaTop), y: L1 * Math.cos(thetaTop) };
+  const horn = { x: rh * Math.sin(thetaBot), y: rh * Math.cos(thetaBot) };
+
+  // Some newly measured envelope-edge poses are mechanically safe but the
+  // simplified bell-crank circle solve has no exact closure. Keep the SVG
+  // usable by drawing the main two links from joint angles and placing the
+  // bell-crank/rod points in a plausible neighborhood instead of collapsing
+  // every point onto the hip.
+  const lowerAngle = thetaBot - 6 * DEG2RAD;
+  const foot = {
+    x: knee.x + L2 * Math.sin(lowerAngle),
+    y: knee.y + L2 * Math.cos(lowerAngle),
+  };
+
+  const phiR = thetaBot + 0.35 * abc;
+  const phiL = phiR + abc;
+  const bcRight = { x: rbr * Math.sin(phiR), y: rbr * Math.cos(phiR) };
+  const bcLeft = { x: rbl * Math.sin(phiL), y: rbl * Math.cos(phiL) };
+  const rod2 = {
+    x: knee.x - dko * Math.sin(thetaTop),
+    y: knee.y - dko * Math.cos(thetaTop),
+  };
+
+  return { O, knee, horn, bcLeft, bcRight, rod2, foot, valid: false };
 }
 
 // Convert (coxa, femur, tibia) joint-space rad → (coxa, femur, tibia)

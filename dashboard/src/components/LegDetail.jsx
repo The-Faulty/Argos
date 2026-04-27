@@ -49,10 +49,14 @@ import { applyServoCal } from "../../shared/servo_cal.js";
 
 const RAD2DEG = 180.0 / Math.PI;
 
-// Real-FK output is in meters; the canvas helpers + LEG_DRAWING.scale=1.4
-// expect millimeters (so a neutral leg ends up roughly 178 px tall, matching
-// the legacy view's pixel size). Multiply once at the FK→canvas boundary.
+// Real-FK output is in meters; the canvas helpers expect millimeters.
+// Multiply once at the FK→canvas boundary.
 const M_TO_MM = 1000.0;
+const LEG_DETAIL_DRAWING = {
+  ...LEG_DRAWING,
+  scale: 1.25,
+  offset: { x: 210, y: 70 },
+};
 
 function scalePoint(p) {
   return { x: p.x * M_TO_MM, y: p.y * M_TO_MM };
@@ -124,12 +128,12 @@ export default function LegDetail({
     }
   }, [effectiveAngles, activeLeg]);
 
-  // Pre-map every geometry point to canvas pixels once per render. We scale
-  // m → mm at the boundary so toCanvasPoint (which applies LEG_DRAWING.scale
-  // = 1.4 px/mm) ends up with the same pixel footprint as the legacy view.
+  // Pre-map every geometry point to canvas pixels once per render. The real
+  // FK leg is taller than the old legacy preview, so this panel uses a
+  // slightly different transform to keep the hip, rods, and foot in frame.
   const points = useMemo(() => {
     if (!pose?.geometry) return null;
-    const p = (pt) => toCanvasPoint(scalePoint(pt), LEG_DRAWING);
+    const p = (pt) => toCanvasPoint(scalePoint(pt), LEG_DETAIL_DRAWING);
     return {
       O:       p(pose.geometry.O),
       knee:    p(pose.geometry.knee),
@@ -156,7 +160,7 @@ export default function LegDetail({
   // kinematic frame (+x forward).
   const mirrorX = activeLeg === "FR" || activeLeg === "RR";
   const mirrorTransform = mirrorX
-    ? `translate(${LEG_DRAWING.stageWidth} 0) scale(-1 1)`
+    ? `translate(${LEG_DETAIL_DRAWING.stageWidth} 0) scale(-1 1)`
     : undefined;
 
   function onPointerDown(event) {
@@ -185,16 +189,16 @@ export default function LegDetail({
     const svg = svgRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
-    let px = ((event.clientX - rect.left) / rect.width) * LEG_DRAWING.stageWidth;
-    const py = ((event.clientY - rect.top) / rect.height) * LEG_DRAWING.stageHeight;
+    let px = ((event.clientX - rect.left) / rect.width) * LEG_DETAIL_DRAWING.stageWidth;
+    const py = ((event.clientY - rect.top) / rect.height) * LEG_DETAIL_DRAWING.stageHeight;
     // Un-flip the pointer for mirrored legs so the IK target lands in the
     // leg's un-mirrored kinematic frame. Without this, dragging visually
     // right on a mirrored FR/RR would send the foot to the wrong X value.
-    if (mirrorX) px = LEG_DRAWING.stageWidth - px;
+    if (mirrorX) px = LEG_DETAIL_DRAWING.stageWidth - px;
     // fromCanvasPoint returns sagittal-frame millimeters in the real-FK
     // convention (+x forward, +y down-along-leg). The hip is at the origin
     // so absMm is already hip-relative.
-    const absMm = fromCanvasPoint({ x: px, y: py }, LEG_DRAWING);
+    const absMm = fromCanvasPoint({ x: px, y: py }, LEG_DETAIL_DRAWING);
 
     // Real 3-DOF IK using the actual leg geometry. Sagittal frame (mm) →
     // body frame (m) is straightforward because the rendered hip is the
@@ -239,7 +243,7 @@ export default function LegDetail({
       <svg
         ref={svgRef}
         className="leg-detail__svg"
-        viewBox={`0 0 ${LEG_DRAWING.stageWidth} ${LEG_DRAWING.stageHeight}`}
+        viewBox={`0 0 ${LEG_DETAIL_DRAWING.stageWidth} ${LEG_DETAIL_DRAWING.stageHeight}`}
         role="img"
         aria-label={`Sagittal view of leg ${activeLeg}`}
         onPointerDown={onPointerDown}
@@ -279,13 +283,13 @@ export default function LegDetail({
             <FootChip
               pose={pose}
               point={{
-                x: mirrorX ? LEG_DRAWING.stageWidth - points.foot.x : points.foot.x,
+                x: mirrorX ? LEG_DETAIL_DRAWING.stageWidth - points.foot.x : points.foot.x,
                 y: points.foot.y,
               }}
             />
           </>
         ) : (
-          <text x={LEG_DRAWING.stageWidth / 2} y={LEG_DRAWING.stageHeight / 2}
+          <text x={LEG_DETAIL_DRAWING.stageWidth / 2} y={LEG_DETAIL_DRAWING.stageHeight / 2}
                 textAnchor="middle" className="leg-detail__err">
             Unreachable pose
           </text>
@@ -303,16 +307,16 @@ function StageGrid() {
   // Light horizontal baseline + vertical body-line so the pose has some
   // visual context. Ratios match andy-servo's feel without copying any of
   // their dashed-line gymnastics wholesale.
-  const mid = LEG_DRAWING.stageHeight * 0.75;
+  const mid = LEG_DETAIL_DRAWING.stageHeight * 0.75;
   return (
     <g>
       <line
-        x1={10} x2={LEG_DRAWING.stageWidth - 10} y1={mid} y2={mid}
+        x1={10} x2={LEG_DETAIL_DRAWING.stageWidth - 10} y1={mid} y2={mid}
         stroke="rgba(0,0,0,0.08)" strokeDasharray="4 4"
       />
       <line
-        x1={LEG_DRAWING.offset.x} x2={LEG_DRAWING.offset.x} y1={10}
-        y2={LEG_DRAWING.stageHeight - 10}
+        x1={LEG_DETAIL_DRAWING.offset.x} x2={LEG_DETAIL_DRAWING.offset.x} y1={10}
+        y2={LEG_DETAIL_DRAWING.stageHeight - 10}
         stroke="rgba(0,0,0,0.05)" strokeDasharray="4 4"
       />
     </g>
@@ -339,7 +343,7 @@ function FootChip({ pose, point }) {
   const { x = 0, y = 0 } = pose.foot ?? {};
   const chipW = 110;
   const chipH = 30;
-  const chipX = Math.min(LEG_DRAWING.stageWidth - chipW - 4, point.x + 12);
+  const chipX = Math.min(LEG_DETAIL_DRAWING.stageWidth - chipW - 4, point.x + 12);
   const chipY = Math.max(4, point.y - chipH - 8);
   return (
     <g transform={`translate(${chipX}, ${chipY})`}>

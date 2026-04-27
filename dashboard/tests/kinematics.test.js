@@ -27,6 +27,7 @@ import {
   coupled_bot_limits_joint_deg,
   coupled_top_limits_joint_deg,
 } from "../shared/kinematics.js";
+import { buildLegPoseFromJointAngles } from "../shared/argos_kinematics.js";
 import { LEG_IDS, DEFAULT_JOINT_LIMITS_RAD } from "../shared/robot-config.js";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -167,4 +168,13 @@ test("coupled femur limits update from current tibia angle", () => {
     const got = coupled_top_limits_joint_deg(tibia).map((deg) => Math.round(deg));
     assert.deepEqual(got, femur, `tibia ${tibia} deg`);
   }
+});
+
+test("leg pose preview does not collapse at expanded measured limits", () => {
+  const DEG2RAD = Math.PI / 180;
+  const pose = buildLegPoseFromJointAngles([0, -90 * DEG2RAD, -90 * DEG2RAD], { legId: "FR" });
+
+  assert.equal(pose.reachable, false);
+  assert.ok(Math.abs(pose.geometry.knee.x) > 0.10, "fallback knee should stay away from hip");
+  assert.ok(Math.abs(pose.geometry.foot.x) > 0.10, "fallback foot should stay away from hip");
 });
