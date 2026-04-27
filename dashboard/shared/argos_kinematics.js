@@ -322,6 +322,14 @@ function _sagittalIK(xSag, ySag, params, opts = {}) {
 // Per-leg warm-start cache (see Kinematics.py _ik_hint).
 const _ikHint = {};
 
+/** Clear the per-leg IK warm-start hint cache. Call on mode change /
+ * gait reset / robot startup so a stale hint from one regime doesn't trap
+ * the next regime in a local minimum (the ±12° sweep around the cached
+ * hint can otherwise miss the new feasible solution). */
+export function resetIkHint() {
+  for (const k of Object.keys(_ikHint)) delete _ikHint[k];
+}
+
 /**
  * Full 3-DOF IK for one leg. Returns [coxa, femur, tibia] rad or null.
  * rBodyFoot is [x, y, z] in meters, expressed RELATIVE TO THE HIP ORIGIN

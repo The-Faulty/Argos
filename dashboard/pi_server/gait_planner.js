@@ -26,7 +26,7 @@ import {
   STABILIZER_PARAM_BOUNDS,
   GAIT_TUNABLE_PARAMS,
 } from "../shared/robot-config.js";
-import { fourLegsInverseKinematics } from "../shared/argos_kinematics.js";
+import { fourLegsInverseKinematics, resetIkHint } from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 
 const TICK_HZ = 50.0;
@@ -100,6 +100,10 @@ export class GaitPlanner {
     this.tickCount = 0;
     this.gaitTickMs = 0;
     this.feet = makeStanceFeet(this.config);
+    // Drop the IK warm-start hints — each gait/stance has a different
+    // feasible neighborhood, and a stale hint from the prior mode can
+    // trap a leg in a local minimum on the first solve of the new one.
+    resetIkHint();
   }
 
   setTwist({ x = 0, y = 0, yaw = 0 } = {}) {

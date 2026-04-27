@@ -45,7 +45,7 @@ export default function GasPanel({ gas }) {
              onPointerDown={() => setAudioUnlocked(true)}>
       <header>
         <h3>Gas</h3>
-        <span className="muted">/gas (ppm)</span>
+        <span className="muted">/gas (raw ADC, 0–4095)</span>
       </header>
       <div className="gas-panel__value">
         {Number.isFinite(value) ? value.toFixed(0) : "—"}
@@ -55,7 +55,7 @@ export default function GasPanel({ gas }) {
         <span>Alert threshold</span>
         <input
           type="range"
-          min={0} max={2000} step={10}
+          min={0} max={4095} step={10}
           value={threshold}
           onChange={(e) => setThreshold(Number(e.target.value))}
         />

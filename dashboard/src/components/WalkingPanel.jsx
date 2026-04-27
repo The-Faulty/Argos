@@ -8,7 +8,7 @@
 // (so a browser hiccup mid-rotation doesn't leave the robot spinning).
 
 import { useRef, useState } from "react";
-import { GAIT_TUNABLE_PARAMS } from "../../shared/robot-config.js";
+import { GAIT_TUNABLE_PARAMS, JOYSTICK_SCALE } from "../../shared/robot-config.js";
 
 const JOYSTICK_SIZE = 200;
 const JOYSTICK_RADIUS = JOYSTICK_SIZE / 2 - 16;
@@ -54,9 +54,19 @@ export default function WalkingPanel({
       dy = (dy / mag) * JOYSTICK_RADIUS;
     }
     setStick({ dx, dy, active: true });
-    // Map: up is forward (positive x), left is +y (body left).
-    const linX = -dy / JOYSTICK_RADIUS;
-    const linY = -dx / JOYSTICK_RADIUS;
+    // Map: up is forward (positive x), left is +y (body left). Joystick is
+    // normalized to [-1, 1]; apply a radial deadzone, then scale to the
+    // planner's SI units. Without scaling, max deflection (1.0) was being
+    // treated by the planner as 1 m/s and clamped to 0.6 — so any push past
+    // ~half-stick was indistinguishable from full-tilt.
+    const nxRaw = -dy / JOYSTICK_RADIUS;
+    const nyRaw = -dx / JOYSTICK_RADIUS;
+    const r = Math.hypot(nxRaw, nyRaw);
+    const k = r < JOYSTICK_SCALE.DEADZONE
+      ? 0
+      : (r - JOYSTICK_SCALE.DEADZONE) / (1 - JOYSTICK_SCALE.DEADZONE) / r;
+    const linX = nxRaw * k * JOYSTICK_SCALE.MAX_LIN_VEL;
+    const linY = nyRaw * k * JOYSTICK_SCALE.MAX_LIN_VEL;
     onTwist?.(linX, linY, 0);
   }
 

@@ -635,10 +635,16 @@ function shutdown(signal) {
     serial.releaseServos();
   } catch { /* serial might be closed */ }
   if (recorder.isActive) recorder.stop().catch(() => {});
-  serial.disconnect();
-  sensors.disconnect();
   mode.stop();
-  setTimeout(() => process.exit(0), 200);
+  // Hold the port open for ~200 ms so the release_servos frame queued above
+  // has time to flush through the pump (port.drain() + pacingMs). Closing
+  // serial synchronously here would race the pump and leave the servos
+  // engaged after the process exits.
+  setTimeout(() => {
+    serial.disconnect();
+    sensors.disconnect();
+    process.exit(0);
+  }, 200);
 }
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));

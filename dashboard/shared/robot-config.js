@@ -307,3 +307,16 @@ export const GAIT_TUNABLE_PARAMS = {
     units: "mm",
   },
 };
+
+// ─── Joystick → SI mapping ────────────────────────────────────────────────
+// Joystick UI emits unit-vector deflection in [-1, 1]. The planner clamps
+// twist at ±0.6 m/s (gait_planner.setTwist) and ±rotate_rate_max rad/s, so
+// MAX_LIN_VEL must stay ≤ 0.6. Lower for safer demo runs; raise toward the
+// planner cap once stride sizing is happy. DEADZONE is a radial fraction —
+// any |stick| below it sends zero so a slightly off-center stick doesn't
+// dribble commands.
+export const JOYSTICK_SCALE = {
+  MAX_LIN_VEL: 0.30, // m/s at full deflection
+  MAX_ANG_VEL: 1.0,  // rad/s; reserved for yaw stick
+  DEADZONE: 0.08,    // normalized fraction
+};

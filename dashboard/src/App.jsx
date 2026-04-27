@@ -224,14 +224,20 @@ function AppBody() {
           <WalkingPanel
             mode={mode}
             rotateIncrement={rotateSettings.rotate_increment_deg}
-            onTwist={(x, y, yaw) => {
+            onTwist={async (x, y, yaw) => {
               // Same auto-switch pattern as the foot drag and joint sliders:
               // if the operator grabs the joystick from idle/crouch/stand, the
               // planner is silently dropping the twist (only crawl/trot consume
               // it). Flip to trot on first non-zero input so walking "just
               // works" without requiring the user to tap a chip first.
+              //
+              // Await the mode flip before sending the twist — the two are
+              // independent HTTP requests, and if sendTwist arrived first the
+              // planner was still in the old mode and dropped the very first
+              // joystick push. Once mode is already trot/crawl the conditional
+              // is false, so this adds no mid-walk latency.
               if (mode !== "trot" && mode !== "crawl" && (x !== 0 || y !== 0 || yaw !== 0)) {
-                cmd.setMode("trot").catch(() => {});
+                try { await cmd.setMode("trot"); } catch { /* fall through */ }
               }
               cmd.sendTwist(x, y, yaw).catch(() => {});
             }}

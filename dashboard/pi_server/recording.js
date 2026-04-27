@@ -124,11 +124,19 @@ export class TelemetryRecorder {
   }
 
   _write(chunk) {
+    // Always resolve — a single failed write must not poison the chain. If we
+    // rejected, the next `.then()` would inherit the rejection (no onRejected
+    // attached) and every subsequent append would propagate as an unhandled
+    // rejection. Log the error and continue so the recorder degrades to
+    // "drops a row" rather than "tears down the process".
     this._writeChain = this._writeChain.then(
       () =>
-        new Promise((resolve, reject) => {
+        new Promise((resolve) => {
           if (!this.stream) return resolve();
-          this.stream.write(chunk, (err) => (err ? reject(err) : resolve()));
+          this.stream.write(chunk, (err) => {
+            if (err) console.warn("[recording] write failed:", err.message || err);
+            resolve();
+          });
         }),
     );
     return this._writeChain;

@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import json
+import math
 import os
 import threading
 import time
@@ -82,6 +83,11 @@ class RealSenseWorker:
         LOG(f"RealSense started @ {CAM_W}x{CAM_H}@{CAM_FPS} imu={has_imu}")
         last_accel = (0.0, 0.0, 0.0)
         last_gyro  = (0.0, 0.0, 0.0)
+        # Gyro-z integrated yaw. No magnetometer / fusion, so this drifts
+        # slowly — fine for a short demo, replace with Madgwick/Mahony if a
+        # longer run starts to look obviously skewed.
+        yaw_rad: float = 0.0
+        prev_imu_ts: Optional[float] = None
 
         while self.running:
             try:
@@ -110,12 +116,24 @@ class RealSenseWorker:
                 if gyro:
                     motion = gyro.as_motion_frame().get_motion_data()
                     last_gyro = (motion.x, motion.y, motion.z)
+                now_ts = time.time()
+                if prev_imu_ts is not None:
+                    # Clamp dt against frame stalls (camera hiccups, USB
+                    # disconnect retries) so a single ~second-long gap
+                    # doesn't lurch yaw by hundreds of degrees.
+                    dt = max(0.0, min(0.1, now_ts - prev_imu_ts))
+                    yaw_rad += last_gyro[2] * dt
+                    if yaw_rad > math.pi:
+                        yaw_rad -= 2.0 * math.pi
+                    elif yaw_rad < -math.pi:
+                        yaw_rad += 2.0 * math.pi
+                prev_imu_ts = now_ts
                 imu_msg = {
                     "type": "imu",
-                    "ts": time.time(),
+                    "ts": now_ts,
                     "accel": list(last_accel),
                     "gyro": list(last_gyro),
-                    "quaternion": _quaternion_from_accel(last_accel),
+                    "quaternion": _quaternion_from_accel(last_accel, yaw_rad),
                 }
                 with self.lock:
                     self.latest_imu = imu_msg
@@ -143,18 +161,21 @@ class RealSenseWorker:
             if q in self.imu_subscriber_queues: self.imu_subscriber_queues.remove(q)
 
 
-def _quaternion_from_accel(accel: tuple[float, float, float]) -> list[float]:
-    """Cheap accel-only orientation estimate. Replace with a fusion filter
-    if drift becomes a problem (Madgwick / Mahony)."""
-    import math
+def _quaternion_from_accel(
+    accel: tuple[float, float, float], yaw: float = 0.0
+) -> list[float]:
+    """Roll/pitch from accel + caller-supplied yaw (gyro-integrated upstream).
+    No magnetometer fusion — yaw drifts slowly. Swap in Madgwick/Mahony if
+    that becomes a problem."""
     ax, ay, az = accel
     norm = math.sqrt(ax * ax + ay * ay + az * az)
     if norm < 1e-6:
-        return [0.0, 0.0, 0.0, 1.0]
+        # Pure-yaw quaternion when accel is unusable (free-fall / unplugged).
+        return [0.0, 0.0, math.sin(yaw * 0.5), math.cos(yaw * 0.5)]
     ax, ay, az = ax / norm, ay / norm, az / norm
     roll = math.atan2(ay, az)
     pitch = math.atan2(-ax, math.sqrt(ay * ay + az * az))
-    cy, sy = math.cos(0), math.sin(0)
+    cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
     cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
     cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
     qw = cr * cp * cy + sr * sp * sy
