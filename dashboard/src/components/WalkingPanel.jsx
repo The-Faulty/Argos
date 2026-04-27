@@ -1,22 +1,28 @@
-// Walking controls: stance-spread + cycle-time sliders, XY twist joystick,
+// Walking controls: stance-spread + cycle-time sliders, arrow-button D-pad,
 // Rotate L/R buttons.
 //
-// The XY joystick uses an effect-driven 10 Hz heartbeat: while the pointer is
-// captured, a setInterval re-emits the last twist value. Without the
-// heartbeat, only pointermove fires events — a held-still deflected stick
-// would expire on the server (500 ms watchdog) and the robot would stop
-// mid-walk. The heartbeat is bound to a `pointerActive` state so React's
-// useEffect lifecycle handles start/stop cleanly across re-renders, strict-
-// mode double-mounts, and edge cases.
+// The arrow buttons are hold-to-walk: pointerdown sets the direction,
+// pointerup/cancel clears it. Multiple buttons can be held at once for
+// diagonals (forward + left → forward-left), normalized so diagonal speed
+// matches cardinal speed. Keyboard ArrowUp/Down/Left/Right and W/A/S/D
+// mirror the buttons (gated off when an input is focused).
 //
-// Rotate L/R posts to /api/rotate and lets the server handle the timed spin
-// (so a browser hiccup mid-rotation doesn't leave the robot spinning).
+// While any direction is held, an effect-driven 100 ms heartbeat re-emits
+// the last twist value. Without the heartbeat, only the initial keydown /
+// pointerdown would fire — a held-still arrow would expire on the server
+// (500 ms watchdog) and the robot would stop mid-walk.
+//
+// Rotate L/R posts to /api/rotate and lets the server handle the timed
+// spin (so a browser hiccup mid-rotation doesn't leave the robot spinning).
 
 import { useEffect, useRef, useState } from "react";
 import { GAIT_TUNABLE_PARAMS, JOYSTICK_SCALE } from "../../shared/robot-config.js";
 
-const JOYSTICK_SIZE = 200;
-const JOYSTICK_RADIUS = JOYSTICK_SIZE / 2 - 16;
+const KEY_TO_DIR = {
+  ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right",
+  w: "up", a: "left", s: "down", d: "right",
+  W: "up", A: "left", S: "down", D: "right",
+};
 
 export default function WalkingPanel({
   onTwist,
@@ -28,9 +34,10 @@ export default function WalkingPanel({
   swingTimeMs,
   mode,
 }) {
-  // Joystick is enabled in any auto/idle pose — App.jsx auto-switches to trot
-  // on first non-zero input. Direct modes (foot/joint/servo) keep it disabled
-  // because flipping out of them would clobber the operator's manual pose.
+  // Arrow buttons are enabled in any auto/idle pose — App.jsx auto-switches
+  // to trot on first non-zero input. Direct modes (foot/joint/servo) keep
+  // them disabled because flipping out of them would clobber the operator's
+  // manual pose.
   const twistCapable =
     mode === "trot" ||
     mode === "crawl" ||
@@ -39,11 +46,10 @@ export default function WalkingPanel({
     mode === "extend" ||
     mode === "idle";
 
-  const [stickPos, setStickPos] = useState({ dx: 0, dy: 0 });
-  const [pointerActive, setPointerActive] = useState(false);
+  const [active, setActive] = useState({ up: false, down: false, left: false, right: false });
+  const [walking, setWalking] = useState(false);
   const [step, setStep] = useState(stepLength ?? GAIT_TUNABLE_PARAMS.delta_x_mm.default);
   const [swing, setSwing] = useState(swingTimeMs ?? GAIT_TUNABLE_PARAMS.swing_time_ms.default);
-  const svgRef = useRef(null);
 
   useEffect(() => {
     if (Number.isFinite(stepLength)) setStep(stepLength);
@@ -53,29 +59,67 @@ export default function WalkingPanel({
     if (Number.isFinite(swingTimeMs)) setSwing(swingTimeMs);
   }, [swingTimeMs]);
 
-  // Refs the heartbeat reads. Both are kept current via the dispatch path
-  // (lastTwistRef from stickDispatch, onTwistRef from a ref-mirror effect)
-  // so the heartbeat callback always sees the latest closure regardless of
-  // when it last re-rendered.
+  // Refs the heartbeat reads. activeRef shadows `active` so setDir can
+  // compute the next twist synchronously without waiting on a re-render —
+  // a held arrow that fires keydown twice within one render cycle would
+  // otherwise see stale state. onTwistRef/onZeroTwistRef mirror the props
+  // so the heartbeat callback always sees the latest closure.
+  const activeRef = useRef(active);
   const lastTwistRef = useRef({ x: 0, y: 0, yaw: 0 });
   const onTwistRef = useRef(onTwist);
+  const onZeroTwistRef = useRef(onZeroTwist);
   useEffect(() => { onTwistRef.current = onTwist; }, [onTwist]);
+  useEffect(() => { onZeroTwistRef.current = onZeroTwist; }, [onZeroTwist]);
 
-  // Heartbeat. Bound to pointerActive so React handles the start/stop —
-  // previously this was an imperative startHeartbeat/stopHeartbeat pair
-  // gated on refs, which made it harder to reason about when the interval
-  // would actually run. The empty-deps [pointerActive] re-runs ONLY when
-  // capture state flips, so a parent re-render mid-drag doesn't cycle the
-  // heartbeat and lose ticks.
+  // Heartbeat. Bound to `walking` so React handles start/stop — empty deps
+  // [walking] re-runs ONLY when at least one direction transitions on/off,
+  // so a parent re-render mid-walk doesn't cycle the heartbeat and lose ticks.
   useEffect(() => {
-    if (!pointerActive) return;
+    if (!walking) return;
     const id = setInterval(() => {
       const t = lastTwistRef.current;
       const fn = onTwistRef.current;
       if (typeof fn === "function") fn(t.x, t.y, t.yaw);
     }, 100);
     return () => clearInterval(id);
-  }, [pointerActive]);
+  }, [walking]);
+
+  // Keyboard listeners. Skip when an input/textarea/contenteditable is
+  // focused so typing in the SettingsDrawer doesn't drive the robot. Both
+  // Arrow keys and WASD are bound; preventDefault stops Arrow keys from
+  // scrolling the page.
+  useEffect(() => {
+    function onKeyDown(e) {
+      if (e.repeat) return;
+      const dir = KEY_TO_DIR[e.key];
+      if (!dir) return;
+      const el = document.activeElement;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || el?.isContentEditable) return;
+      e.preventDefault();
+      if (twistCapable) setDir(dir, true);
+    }
+    function onKeyUp(e) {
+      const dir = KEY_TO_DIR[e.key];
+      if (!dir) return;
+      e.preventDefault();
+      setDir(dir, false);
+    }
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [twistCapable]);
+
+  // If we lose twistCapable mid-walk (e.g. user switched to direct mode),
+  // release everything so the planner doesn't hold a stale twist.
+  useEffect(() => {
+    if (!twistCapable && walking) clearAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [twistCapable]);
 
   function handleStep(next) {
     setStep(next);
@@ -86,45 +130,63 @@ export default function WalkingPanel({
     onGaitParam?.("swing_time_ms", next);
   }
 
-  function stickDispatch(clientX, clientY) {
-    const rect = svgRef.current.getBoundingClientRect();
-    const cx = rect.left + rect.width / 2;
-    const cy = rect.top + rect.height / 2;
-    let dx = clientX - cx;
-    let dy = clientY - cy;
-    const mag = Math.hypot(dx, dy);
-    if (mag > JOYSTICK_RADIUS) {
-      dx = (dx / mag) * JOYSTICK_RADIUS;
-      dy = (dy / mag) * JOYSTICK_RADIUS;
-    }
-    setStickPos({ dx, dy });
-    // Map: up is forward (positive x), left is +y (body left). Joystick is
-    // normalized to [-1, 1]; apply a radial deadzone, then scale to the
-    // planner's SI units. Without scaling, max deflection (1.0) was being
-    // treated by the planner as 1 m/s and clamped to 0.6 — so any push past
-    // ~half-stick was indistinguishable from full-tilt.
-    const nxRaw = -dy / JOYSTICK_RADIUS;
-    const nyRaw = -dx / JOYSTICK_RADIUS;
-    const r = Math.hypot(nxRaw, nyRaw);
-    const k = r < JOYSTICK_SCALE.DEADZONE
-      ? 0
-      : (r - JOYSTICK_SCALE.DEADZONE) / (1 - JOYSTICK_SCALE.DEADZONE) / r;
-    const linX = nxRaw * k * JOYSTICK_SCALE.MAX_LIN_VEL;
-    const linY = nyRaw * k * JOYSTICK_SCALE.MAX_LIN_VEL;
-    lastTwistRef.current = { x: linX, y: linY, yaw: 0 };
-    onTwist?.(linX, linY, 0);
+  function twistFromActive(a) {
+    // Up=forward (+x), left=+y in body frame — same convention the joystick
+    // used. Diagonals are normalized so two-key holds aren't √2× faster than
+    // single-key holds.
+    const x = (a.up ? 1 : 0) - (a.down ? 1 : 0);
+    const y = (a.left ? 1 : 0) - (a.right ? 1 : 0);
+    if (x === 0 && y === 0) return { x: 0, y: 0 };
+    const mag = Math.hypot(x, y);
+    return {
+      x: (x / mag) * JOYSTICK_SCALE.MAX_LIN_VEL,
+      y: (y / mag) * JOYSTICK_SCALE.MAX_LIN_VEL,
+    };
   }
 
-  function stickEnd(event) {
-    setPointerActive(false);
-    setStickPos({ dx: 0, dy: 0 });
-    lastTwistRef.current = { x: 0, y: 0, yaw: 0 };
-    onZeroTwist?.();
-    try {
-      svgRef.current?.releasePointerCapture(event.pointerId);
-    } catch {
-      /* already released */
+  function setDir(dir, on) {
+    if (activeRef.current[dir] === on) return;
+    const next = { ...activeRef.current, [dir]: on };
+    activeRef.current = next;
+    setActive(next);
+
+    const t = twistFromActive(next);
+    lastTwistRef.current = { x: t.x, y: t.y, yaw: 0 };
+    const anyActive = next.up || next.down || next.left || next.right;
+    if (anyActive) {
+      onTwistRef.current?.(t.x, t.y, 0);
+      setWalking(true);
+    } else {
+      onZeroTwistRef.current?.();
+      setWalking(false);
     }
+  }
+
+  function clearAll() {
+    activeRef.current = { up: false, down: false, left: false, right: false };
+    setActive(activeRef.current);
+    lastTwistRef.current = { x: 0, y: 0, yaw: 0 };
+    onZeroTwistRef.current?.();
+    setWalking(false);
+  }
+
+  function arrowProps(dir, label, glyph) {
+    return {
+      type: "button",
+      className: `arrow-btn${active[dir] ? " arrow-btn--active" : ""}`,
+      disabled: !twistCapable,
+      onPointerDown: (e) => {
+        if (!twistCapable) return;
+        try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* */ }
+        setDir(dir, true);
+      },
+      onPointerUp: () => setDir(dir, false),
+      onPointerCancel: () => setDir(dir, false),
+      onContextMenu: (e) => e.preventDefault(),
+      "aria-label": label,
+      "aria-pressed": active[dir],
+      children: glyph,
+    };
   }
 
   return (
@@ -175,42 +237,16 @@ export default function WalkingPanel({
       </div>
 
       <div className="walking-panel__row walking-panel__row--split">
-        <div className="walking-panel__joy">
-          <svg
-            ref={svgRef}
-            width={JOYSTICK_SIZE}
-            height={JOYSTICK_SIZE}
-            viewBox={`0 0 ${JOYSTICK_SIZE} ${JOYSTICK_SIZE}`}
-            style={{ touchAction: "none", cursor: twistCapable ? "grab" : "not-allowed" }}
-            onPointerDown={(e) => {
-              if (!twistCapable) return;
-              svgRef.current.setPointerCapture(e.pointerId);
-              stickDispatch(e.clientX, e.clientY);
-              setPointerActive(true);
-            }}
-            onPointerMove={(e) => {
-              // Gate on the pointerActive state so stale moves after release
-              // don't dispatch. Reading from state here (not a ref) is fine
-              // because pointermove only fires while the pointer is captured,
-              // and capture follows pointerActive within one render.
-              if (pointerActive) stickDispatch(e.clientX, e.clientY);
-            }}
-            onPointerUp={stickEnd}
-            onPointerCancel={stickEnd}
-            aria-label="Twist joystick"
-          >
-            <circle
-              cx={JOYSTICK_SIZE / 2} cy={JOYSTICK_SIZE / 2}
-              r={JOYSTICK_RADIUS + 10}
-              fill="rgba(17,17,17,0.06)"
-              stroke="#111"
-            />
-            <circle
-              cx={JOYSTICK_SIZE / 2 + stickPos.dx} cy={JOYSTICK_SIZE / 2 + stickPos.dy}
-              r={20}
-              fill={pointerActive ? "#2563eb" : "#111"}
-            />
-          </svg>
+        <div className="walking-panel__arrows">
+          <div className="walking-panel__arrows-row">
+            <button {...arrowProps("up", "Walk forward", "↑")} />
+          </div>
+          <div className="walking-panel__arrows-row">
+            <button {...arrowProps("left", "Strafe left", "←")} />
+            <button {...arrowProps("down", "Walk backward", "↓")} />
+            <button {...arrowProps("right", "Strafe right", "→")} />
+          </div>
+          <p className="muted">Hold ↑ ↓ ← → or W A S D</p>
         </div>
 
         <div className="walking-panel__rotate">

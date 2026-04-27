@@ -590,11 +590,32 @@ label.checkbox input { accent-color: var(--accent); }
   gap: 10px;
   align-items: start;
 }
-.walking-panel__joy svg {
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 999px;
+.walking-panel__arrows {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
+.walking-panel__arrows-row { display: flex; gap: 6px; }
+.arrow-btn {
+  width: 56px;
+  height: 56px;
+  padding: 0;
+  font-size: 1.4rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: manipulation;
+}
+.arrow-btn--active {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+}
+.arrow-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .walking-panel__rotate { display: flex; flex-direction: column; gap: 8px; }
 .walking-panel__rotate-row { display: flex; gap: 8px; }
 .rotate-btn {

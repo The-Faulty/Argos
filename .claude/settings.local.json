@@ -23,7 +23,9 @@
       "Bash(python -m py_compile pi_sensors/sensor_server.py)",
       "Bash(node -e ' *)",
       "Bash(node \"C:/Users/chaas/Documents/GA_Tech/Spring_2026/ECE4014/Argos/scripts/probe_foot_reach.mjs\")",
-      "Bash(npm run *)"
+      "Bash(npm run *)",
+      "Bash(npm --prefix C:/Users/chaas/Documents/GA_Tech/Spring_2026/ECE4014/Argos/dashboard test)",
+      "Bash(npm --prefix C:/Users/chaas/Documents/GA_Tech/Spring_2026/ECE4014/Argos/dashboard run build)"
     ]
   }
 }
