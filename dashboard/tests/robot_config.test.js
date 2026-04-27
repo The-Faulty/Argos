@@ -92,18 +92,19 @@ test("coupled femur/tibia samples match measured safe envelope", () => {
 });
 
 test("walking and rotate defaults are tuned for controlled motion", () => {
-  // MAX_LIN_VEL is bounded above by the servo speed budget, not the IK
-  // reach window. At >= 0.245 m/s, the swing→stance handoff demands a
-  // tibia angular velocity that the IK can't track on the same kinematic
-  // branch — it flips branches and visible motion collapses. 0.20 sits
-  // safely below the cliff.
-  assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.20);
+  // MAX_LIN_VEL and swing_time_ms are co-tuned so the per-tick tibia
+  // demand stays inside the 240°/s × 40 ms = 9.6° servo budget. The cliff
+  // above ~0.24 m/s (where the swing→stance handoff demands a tibia angle
+  // change the IK can't track without flipping branches) is well clear at
+  // 0.16. The 300 ms swing spreads the per-swing demand across ~7 ticks
+  // so the commanded arc actually realizes on the hardware.
+  assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.16);
   assert.equal(JOYSTICK_SCALE.MAX_ANG_VEL, 1.4);
-  assert.equal(GAIT_TUNABLE_PARAMS.swing_time_ms.default, 220);
+  assert.equal(GAIT_TUNABLE_PARAMS.swing_time_ms.default, 300);
   assert.deepEqual(DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, {
     coxa: 120.0,
     femur: 180.0,
-    tibia: 240.0,
+    tibia: 360.0,
   });
   assert.deepEqual(DEFAULT_ROTATE_SETTINGS, {
     rotate_increment_deg: 20.0,

@@ -249,13 +249,17 @@ export const MODE_OPTIONS = [
 ];
 
 // ─── Servo speed + PWM rate defaults (ported from andy-servo-control) ────
-// Defaults are high enough for walking. The previous conservative values made
-// the swing phase finish before the tibia could physically climb to the target
-// height, so all four feet appeared to skim at nearly the same level.
+// Tibia raised to 360°/s (was 240) so the per-tick cap (40 ms × 360 = 14.4°)
+// covers the ~14.6°/tick peak demand at the swing→stance handoff. Below
+// that, the limiter throttles the foot's landing arc to ~65% of commanded
+// and the visible step shrinks. Femur stays at 180 (peak demand 6°/tick is
+// well inside cap) and coxa at 120 (only active during yaw/strafe). The
+// upper bound on each row is SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC.max
+// (600); going past 360 risks servo stall under load.
 export const DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC = {
   coxa:  120.0,
   femur: 180.0,
-  tibia: 240.0,
+  tibia: 360.0,
 };
 export const SERVO_SPEED_LIMIT_BOUNDS_DEG_PER_SEC = { min: 30.0, max: 600.0 };
 
@@ -313,10 +317,13 @@ export const GAIT_TUNABLE_PARAMS = {
     name: "swing_time_ms",
     label: "Swing time per foot",
     min: 40,
-    // Keep the foot in swing long enough for the real servos to climb through
-    // linkage backlash and reach visible clearance.
-    max: 300,
-    default: 220,
+    // Capped at 500 ms so the operator can slow the gait further if servos
+    // aren't keeping up. Default 300 ms spreads the per-swing tibia demand
+    // across ~7 ticks at 25 Hz instead of ~5, which keeps the peak servo
+    // delta inside the 240°/s × 40 ms tick budget and lets each step
+    // visibly complete its commanded arc on the real robot.
+    max: 500,
+    default: 300,
     units: "ms",
   },
   rotate_rate_max: {
@@ -345,21 +352,18 @@ export const GAIT_TUNABLE_PARAMS = {
 // commands.
 //
 // MAX_LIN_VEL is the velocity the planner sees on a full-deflection arrow
-// hold. The cap is the servo speed budget, not the IK reach window:
+// hold. The ceiling is the servo speed budget (240°/s × 40 ms = 9.6°/tick
+// for tibia) and the IK branch-flip cliff above ~0.24 m/s, where the foot
+// drops faster than the hint-continuous tibia angle can track and the IK
+// falls back to the global sweep on the wrong branch.
 //
-//   tibia cap = 240°/s × 40 ms tick = 9.6°/tick
-//   peak tibia demand at the swing→stance handoff scales with stride
-//   tibia delta at twist 0.24 ≈ 19°/tick (servo realizes ~50% of commanded)
-//   tibia delta at twist 0.25 ≈ 42°/tick (servo realizes ~23%) — the IK
-//     also flips branches because the foot drops faster than the
-//     hint-continuous tibia angle can track, so the commanded trajectory
-//     becomes incoherent and visible motion collapses to ~25 mm.
-//
-// The cliff at twist ≥ 0.245 is sharp. 0.20 sits well below it: visible
-// horizontal swing ≈ 55 mm with the servo realizing ~70% of commanded
-// motion and zero IK branch flips.
+// 0.16 paired with the 300 ms swing default delivers ~61 mm of visible
+// horizontal swing arc — bigger steps than the older 0.20 / 220 ms combo
+// because the longer swing spreads the per-tick servo demand thinner so
+// each tick stays inside the 9.6° cap and the commanded arc actually gets
+// realized on the hardware.
 export const JOYSTICK_SCALE = {
-  MAX_LIN_VEL: 0.20, // m/s at full deflection (arrow-button hold)
+  MAX_LIN_VEL: 0.16, // m/s at full deflection (arrow-button hold)
   MAX_ANG_VEL: 1.4,  // rad/s; reserved for yaw stick
   DEADZONE: 0.08,    // normalized fraction (unused for arrow buttons)
 };
