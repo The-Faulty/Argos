@@ -100,7 +100,7 @@ test("walking and rotate defaults are tuned for controlled motion", () => {
   // so the commanded arc actually realizes on the hardware.
   assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.16);
   assert.equal(JOYSTICK_SCALE.MAX_ANG_VEL, 1.4);
-  assert.equal(GAIT_TUNABLE_PARAMS.swing_time_ms.default, 300);
+  assert.equal(GAIT_TUNABLE_PARAMS.swing_time_ms.default, 380);
   assert.deepEqual(DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, {
     coxa: 120.0,
     femur: 180.0,

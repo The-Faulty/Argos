@@ -35,7 +35,7 @@ const GAIT_STANCE = {
 };
 
 const STANCE_Z = -0.1950;                // matches gait_planner STAND_FOOT_Z
-const DEFAULT_LIFT_M = 0.018;            // matches gait_planner z_clearance
+const DEFAULT_LIFT_M = 0.022;            // matches gait_planner z_clearance
 
 const args = parseArgs(process.argv.slice(2));
 const liftM = args.liftMm != null ? args.liftMm / 1000 : DEFAULT_LIFT_M;

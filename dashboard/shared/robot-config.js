@@ -148,7 +148,7 @@ export const DEFAULT_FOOT_REACH_X = {
 
 // ─── Per-leg lifted-foot reach window ─────────────────────────────────────
 // Same probe as DEFAULT_FOOT_REACH_X but at swing-peak z (stance_z +
-// z_clearance = -0.195 + 0.018 = -0.177 m). Used to clamp swing-phase foot
+// z_clearance = -0.195 + 0.022 = -0.173 m). Used to clamp swing-phase foot
 // targets only — at the lifted z the femur has different reach geometry
 // (the linkage extends differently), so the reachable x window shifts and
 // is significantly wider. Without this, swing-phase clamping was using the
@@ -158,10 +158,10 @@ export const DEFAULT_FOOT_REACH_X = {
 // Re-probe with `node scripts/probe_foot_reach.mjs --z-mm <stance_z_mm>
 // --lift-mm <z_clearance_mm>` after any z_clearance / body-height change.
 export const DEFAULT_FOOT_REACH_X_LIFTED = {
-  FR: [ 0.026,  0.206],
-  FL: [ 0.026,  0.206],
-  RR: [-0.198, -0.018],
-  RL: [-0.198, -0.018],
+  FR: [ 0.019,  0.209],
+  FL: [ 0.019,  0.209],
+  RR: [-0.205, -0.014],
+  RL: [-0.205, -0.014],
 };
 
 // ─── Servo channel map (mirrors firmware s_servo_cal) ────────────────────
@@ -317,13 +317,15 @@ export const GAIT_TUNABLE_PARAMS = {
     name: "swing_time_ms",
     label: "Swing time per foot",
     min: 40,
-    // Capped at 500 ms so the operator can slow the gait further if servos
-    // aren't keeping up. Default 300 ms spreads the per-swing tibia demand
-    // across ~7 ticks at 25 Hz instead of ~5, which keeps the peak servo
-    // delta inside the 240°/s × 40 ms tick budget and lets each step
-    // visibly complete its commanded arc on the real robot.
+    // Default 380 ms spreads the per-swing tibia demand across ~9.5 ticks
+    // at 25 Hz so the peak servo delta at the swing-end descent stays
+    // inside the 360°/s × 40 ms = 14.4° budget. Empirically this lands on
+    // the lift profile's gentlest tick alignment — 320, 360, and 420 all
+    // produce slightly more peak demand than 380 even though the
+    // "average" demand is similar. Capped at 500 ms so the operator can
+    // slow the gait further if servos are still missing setpoints.
     max: 500,
-    default: 300,
+    default: 380,
     units: "ms",
   },
   rotate_rate_max: {

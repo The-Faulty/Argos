@@ -47,7 +47,15 @@ import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 const TICK_HZ = 25.0;
 const TICK_DT = 1.0 / TICK_HZ;
 const REACH_BLEND_STEPS = 12;
-const SWING_LIFT_PROFILE_EXP = 0.65;
+// Lift profile exponent on sin(πu). 0.65 was a "broad plateau" choice but
+// the steep slopes near u=0 and u=1 demanded tibia angle changes >25°/tick
+// at the swing-start lift-off, which the servo couldn't track (cap is 14.4°
+// at 360°/s × 40 ms tick), so the visible peak got throttled to ~12 mm even
+// at z_clearance = 22 mm. Exponent 2 (sin² profile) has zero slope at u=0
+// and u=1 and concentrates the lift near u=0.5 — peak duration is shorter
+// but per-tick demand stays inside the servo budget, so the foot actually
+// reaches the commanded peak height.
+const SWING_LIFT_PROFILE_EXP = 2.0;
 
 const DEG2RAD = Math.PI / 180.0;
 
@@ -75,20 +83,15 @@ const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 // Stride amplitude clamp (meters, peak displacement either side of base).
 // At the current body height (STAND_FOOT_Z = -0.195 m) and re-centered
 // neutral feet (front 0.112, rear -0.111), each leg's stance reach
-// window (DEFAULT_FOOT_REACH_X) is 72 mm wide. base.x sits at the window
-// center, so the per-side stride budget is the window half-width (36 mm)
-// minus a 2 mm safety margin = 0.034 m. At this value the stance-phase
-// foot reaches both edges of the reach window without triggering
-// clampFootInReach — no pin, no swing→stance handoff jerk.
-//
-// Going past 0.034 pins the trailing stance foot at the reach edge. The
-// historical config used MAX_STRIDE_X = 0.045 with base.x = 0.100, which
-// pinned the backward edge by 21 mm and produced the visible jerk on
-// FR at the swing→stance handoff. The wider stride windows that come
-// from raising body height all push IK onto the alternate bell-crank
-// branch (tibia +29° instead of +20°), which is mechanically incorrect
-// — see STAND_JOINTS_RAD comment.
-const MAX_STRIDE_X = 0.034;
+// window (DEFAULT_FOOT_REACH_X) is 72 mm wide and the per-side no-pin
+// budget is 36 mm. 0.040 trades a 4 mm symmetric pin at both stance
+// edges for a visibly bigger swing arc (80 mm peak-to-peak vs 68 mm),
+// which is what the operator was asking for. The pin produces a small
+// jerk at the swing→stance handoff but is well below the 21 mm pin the
+// historical config (base 0.100, MAX_STRIDE_X 0.045) had — and that
+// config walked, just unevenly. Stays on the validated bell-crank
+// branch (tibia ~+20°) — see STAND_JOINTS_RAD comment.
+const MAX_STRIDE_X = 0.040;
 const MAX_STRIDE_Y = 0.025;
 
 // Gait profiles. Each leg gets one swing window per cycle; the rest is
@@ -266,12 +269,19 @@ export class GaitPlanner {
 
       // Stance: continuous slide from +stride/2 (just touched down) to
       // -stride/2 (about to lift) over the true stance duration.
+      // Push-down: foot dips below stance Z at mid-stance (u=0.5) — in
+      // body frame the foot goes deeper, which means the body rises (the
+      // leg pushes against the ground). Without this the gait just slides
+      // the foot back instead of propelling the body forward. Capped at
+      // 0.003 m because the IK floor at the current stance is ~z=-0.198;
+      // 5 mm of push hits IK refuse at body-frame z=-0.200.
       const u = (phase - swingFraction) / (1.0 - swingFraction);
+      const push = this.config.stance_push_down * Math.sin(Math.PI * u);
       phaseTag[legIdx] = "stance";
       return [
         foot[0] + stride[legIdx][0] * (0.5 - u),
         foot[1] + stride[legIdx][1] * (0.5 - u),
-        foot[2],
+        foot[2] - push,
       ];
     });
     this._applyImuTilt(feet);
@@ -372,19 +382,25 @@ function makeDefaultConfig() {
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
     // Swing-foot vertical lift. At the current body height (STAND_FOOT_Z =
     // -0.195 m), the IK ceiling is ~0.023 m before the lifted reach
-    // window collapses, but the per-tick servo budget is the practical
-    // binding constraint: the swing-start tick demands a tibia angle
-    // change proportional to z_clearance, and at 360°/s tibia cap →
-    // 14.4°/tick budget, anything above ~0.018 m starts producing a
-    // throttled spike that the servo can't fully track. Visible lift is
-    // basically flat above ~0.018 m. Existing trot/crawl reach tests
-    // require zSpan > 0.016 m so 0.018 leaves comfortable margin.
+    // window collapses. With the sin² lift profile the per-tick servo
+    // demand stays inside the 14.4°/tick tibia cap (= 360°/s × 40 ms),
+    // so the foot actually reaches the commanded peak — under the older
+    // sin^0.65 profile the steep slope at u=0 spiked tibia demand to
+    // 28°/tick at swing-start and the visible peak got throttled to
+    // ~12 mm even when commanded 22 mm.
     //
     // If you change this value, also re-probe DEFAULT_FOOT_REACH_X_LIFTED
     // in robot-config.js with `node scripts/probe_foot_reach.mjs --z-mm
     // <stance_z_mm> --lift-mm <new_z_clearance_mm>` and update both
     // numbers together.
-    z_clearance: 0.018,
+    z_clearance: 0.022,
+    // Stance push-down (m). At u=0.5 of stance the foot dips below
+    // stance_z by this amount, which in body frame means the body rises
+    // — the leg is pushing into the ground. This is what propels the
+    // body forward; without it the gait just slides the foot back.
+    // Bounded above by IK floor at current stance (~3-4 mm before IK
+    // refuses at body-frame z=-0.199).
+    stance_push_down: 0.003,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
