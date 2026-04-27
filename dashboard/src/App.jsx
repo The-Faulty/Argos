@@ -28,7 +28,7 @@ import FootXYZPanel from "./components/FootXYZPanel.jsx";
 import GasPanel from "./components/GasPanel.jsx";
 import ImuPanel from "./components/ImuPanel.jsx";
 import JointPanel from "./components/JointPanel.jsx";
-import LegDetail from "./components/LegDetail.jsx";
+import LegDetail, { leg_angle_map } from "./components/LegDetail.jsx";
 import ModeSelector from "./components/ModeSelector.jsx";
 import RobotOverview from "./components/RobotOverview.jsx";
 import ServoPanel from "./components/ServoPanel.jsx";
@@ -44,6 +44,7 @@ import { useRosbridge } from "./hooks/useRosbridge.js";
 import {
   DEFAULT_ROTATE_SETTINGS,
   DEFAULT_STANCE,
+  JOINT_NAMES,
   LEG_IDS,
   LEG_ORIGINS,
 } from "../shared/robot-config.js";
@@ -113,13 +114,27 @@ function AppBody() {
   );
 
   const sendFootForActiveLegDrag = useCallback(
-    ({ x, z, leg }) => {
+    ({ x, z, leg, angles }) => {
       // Called from LegDetail's SVG drag. Andy-servo parity: dragging the
-      // foot always moves the leg, even if the user hasn't flipped to the
-      // direct-foot panel yet. Auto-enter direct_foot_xyz on first drag
-      // so the bridge actually consumes the command. Subsequent drags in
-      // the same mode skip this (cheap early-return in setMode for the
-      // already-active mode).
+      // foot always moves the leg, even if the user hasn't flipped to a
+      // direct panel yet. LegDetail's SVG is driven by the bell-crank angle
+      // solve, so use those solved joint angles as the command path. Sending
+      // the SVG's local display millimeters as body-frame foot targets puts z
+      // near the hip instead of near the stance depth and IK refuses it.
+      if (Array.isArray(angles) && angles.length === 3) {
+        if (mode !== "direct_joint_angles") {
+          cmd.setMode("direct_joint_angles").catch(() => {});
+        }
+        const next = readFullJointArray(data.joint_states);
+        const legIndex = LEG_IDS.indexOf(leg);
+        if (legIndex >= 0) {
+          for (let i = 0; i < 3; i++) next[legIndex * 3 + i] = angles[i];
+          cmd.sendJointAngles(next).catch(() => {});
+        }
+        return;
+      }
+
+      // Fallback for older drag payloads that only include an x/z target.
       if (mode !== "direct_foot_xyz") {
         cmd.setMode("direct_foot_xyz").catch(() => {});
       }
@@ -147,7 +162,7 @@ function AppBody() {
       });
       cmd.sendFootTargets(safe).catch(() => {});
     },
-    [cmd, mode],
+    [cmd, data.joint_states, mode],
   );
 
   return (
@@ -172,46 +187,52 @@ function AppBody() {
 
       <main className="app__main">
         <section className="app__focus">
-          <LegDetail
-            activeLeg={activeLeg}
-            jointState={data.joint_states}
-            mode={mode}
-            previewAngles={previewAngles}
-            onPreviewAngles={setPreviewAngles}
-            onFootDrag={sendFootForActiveLegDrag}
-          />
+          <div className="app__leg-workspace">
+            <LegDetail
+              activeLeg={activeLeg}
+              jointState={data.joint_states}
+              mode={mode}
+              previewAngles={previewAngles}
+              onPreviewAngles={setPreviewAngles}
+              onFootDrag={sendFootForActiveLegDrag}
+            />
 
-          {/* Always-on joint sliders for the active leg. On first drag the
-              dispatcher auto-switches to direct_joint_angles so the bridge
-              consumes the command; no user mode-flip required. */}
-          <JointPanel
-            activeLeg={activeLeg}
-            jointState={data.joint_states}
-            previewAngles={previewAngles}
-            onPreviewAngles={setPreviewAngles}
-            onSendAngles={sendJointAnglesForActiveLeg}
-          />
-
-          {/* Mode-specific extras (shown only when the user has explicitly
-              entered that direct mode from the chip strip). */}
-          <div className="app__focus-panel">
-            {isDirectFoot && (
-              <FootXYZPanel
-                activeLeg={activeLeg}
-                enabled={connected}
-                onSendFootTargets={(matrix) => cmd.sendFootTargets(matrix).catch(() => {})}
-              />
-            )}
-            {isDirectServo && (
-              <ServoPanel
+            <div className="app__leg-controls">
+              {/* Always-on joint sliders for the active leg. On first drag the
+                  dispatcher auto-switches to direct_joint_angles so the bridge
+                  consumes the command; no user mode-flip required. */}
+              <JointPanel
                 activeLeg={activeLeg}
                 jointState={data.joint_states}
-                enabled={connected}
-                onSendServoAngles={(angles_deg) =>
-                  cmd.sendServoAngles(angles_deg).catch(() => {})
-                }
+                previewAngles={previewAngles}
+                onPreviewAngles={setPreviewAngles}
+                onSendAngles={sendJointAnglesForActiveLeg}
               />
-            )}
+
+              {/* Mode-specific extras (shown only when the user has explicitly
+                  entered that direct mode from the chip strip). */}
+              {(isDirectFoot || isDirectServo) && (
+                <div className="app__focus-panel">
+                  {isDirectFoot && (
+                    <FootXYZPanel
+                      activeLeg={activeLeg}
+                      enabled={connected}
+                      onSendFootTargets={(matrix) => cmd.sendFootTargets(matrix).catch(() => {})}
+                    />
+                  )}
+                  {isDirectServo && (
+                    <ServoPanel
+                      activeLeg={activeLeg}
+                      jointState={data.joint_states}
+                      enabled={connected}
+                      onSendServoAngles={(angles_deg) =>
+                        cmd.sendServoAngles(angles_deg).catch(() => {})
+                      }
+                    />
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         </section>
 
@@ -245,12 +266,16 @@ function AppBody() {
             onRotate={(dir, deg) => cmd.rotate(dir, deg).catch(() => {})}
             onGaitParam={(name, value) => cmd.setGaitParam(name, value).catch(() => {})}
           />
+          <StancePresets
+            stances={data.stances}
+            enabled={connected}
+            onSave={(name) => cmd.saveStance(name).catch(() => {})}
+            onPlay={(name) => cmd.playStance(name).catch(() => {})}
+          />
         </aside>
       </main>
 
-      {/* Footer row: read-only telemetry + playback controls. Kept out of
-          the sidebar so RobotOverview + WalkingPanel breathe, and grouped
-          into 4 columns: sensors / camera+thermal / playback / recording. */}
+      {/* Footer row: read-only telemetry, media, playback, and recording. */}
       <section className="app__footer">
         <div className="app__footer-col">
           <ImuPanel imu={data.imu} />
@@ -261,12 +286,6 @@ function AppBody() {
           <ThermalPanel thermal={data.thermal} />
         </div>
         <div className="app__footer-col">
-          <StancePresets
-            stances={data.stances}
-            enabled={connected}
-            onSave={(name) => cmd.saveStance(name).catch(() => {})}
-            onPlay={(name) => cmd.playStance(name).catch(() => {})}
-          />
           <AnimationPlayer
             enabled={connected}
             onPlay={(name) =>
@@ -310,6 +329,14 @@ function AppBody() {
       )}
     </div>
   );
+}
+
+function readFullJointArray(jointState) {
+  const bag = leg_angle_map(jointState);
+  return JOINT_NAMES.map((name) => {
+    const rad = bag[name];
+    return Number.isFinite(rad) ? rad : 0;
+  });
 }
 
 function TopBar({ connected, wsConnected, serialConnected, sensorsConnected, mode, gaitMode, onOpenSettings, onDisconnect }) {

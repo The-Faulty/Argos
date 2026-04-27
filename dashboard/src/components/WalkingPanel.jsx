@@ -42,14 +42,16 @@ export default function WalkingPanel({
   // mid-walk. Re-emit the latest twist at 10 Hz while pointer is captured.
   const lastTwistRef = useRef({ x: 0, y: 0, yaw: 0 });
   const heartbeatRef = useRef(null);
+  const onTwistRef = useRef(onTwist);
 
+  useEffect(() => { onTwistRef.current = onTwist; }, [onTwist]);
   useEffect(() => () => stopHeartbeat(), []);
 
   function startHeartbeat() {
     stopHeartbeat();
     heartbeatRef.current = setInterval(() => {
       const t = lastTwistRef.current;
-      onTwist?.(t.x, t.y, t.yaw);
+      onTwistRef.current?.(t.x, t.y, t.yaw);
     }, 100);
   }
   function stopHeartbeat() {

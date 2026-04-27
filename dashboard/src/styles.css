@@ -204,14 +204,15 @@ button[disabled] {
 
 .app__main {
   display: grid;
-  grid-template-columns: minmax(420px, 1fr) 420px;
+  grid-template-columns: minmax(720px, 1fr) minmax(360px, 420px);
   gap: 20px;
   padding: 20px 24px;
   max-width: 1600px;
   margin: 0 auto;
   width: 100%;
+  align-items: start;
 }
-@media (max-width: 1100px) {
+@media (max-width: 1180px) {
   .app__main { grid-template-columns: 1fr; }
 }
 
@@ -221,11 +222,26 @@ button[disabled] {
   gap: 16px;
   min-width: 0;
 }
+.app__leg-workspace {
+  display: grid;
+  grid-template-columns: minmax(420px, 1.15fr) minmax(340px, 0.85fr);
+  gap: 16px;
+  align-items: start;
+}
+.app__leg-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
 .app__focus-panel {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+@media (max-width: 1450px) {
+  .app__leg-workspace { grid-template-columns: 1fr; }
 }
 
 .app__sidebar {
@@ -237,12 +253,13 @@ button[disabled] {
 
 .app__footer {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: minmax(220px, 0.8fr) minmax(340px, 1.25fr) minmax(280px, 1fr) minmax(240px, 0.85fr);
   gap: 20px;
   padding: 0 24px 24px;
   max-width: 1600px;
   margin: 0 auto;
   width: 100%;
+  align-items: start;
 }
 .app__footer-col {
   display: flex;
@@ -255,6 +272,20 @@ button[disabled] {
 }
 @media (max-width: 700px) {
   .app__footer { grid-template-columns: 1fr; }
+  .app__main { padding: 14px; }
+  .mode-selector { padding: 10px 14px; }
+  .app__topbar {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+  .app__brand { flex-wrap: wrap; }
+  label.slider {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+  label.slider .slider__value { text-align: left; }
 }
 
 /* ─── CameraPanel + ThermalPanel ──────────────────────────────────── */
@@ -519,7 +550,7 @@ section h3 {
 
 label.slider {
   display: grid;
-  grid-template-columns: 160px 1fr 60px;
+  grid-template-columns: minmax(128px, 0.85fr) minmax(130px, 1fr) minmax(80px, auto);
   align-items: center;
   gap: 10px;
   margin: 8px 0;
@@ -537,6 +568,7 @@ label.slider .slider__value {
   font-variant-numeric: tabular-nums;
   font-size: 0.82rem;
   color: var(--text);
+  white-space: nowrap;
 }
 label.slider.is-near-limit .slider__value {
   color: var(--danger);
@@ -554,7 +586,7 @@ label.checkbox input { accent-color: var(--accent); }
 .walking-panel__row { margin: 10px 0; }
 .walking-panel__row--split {
   display: grid;
-  grid-template-columns: 220px 1fr;
+  grid-template-columns: minmax(180px, 220px) minmax(0, 1fr);
   gap: 10px;
   align-items: start;
 }

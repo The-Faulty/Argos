@@ -25,6 +25,7 @@ import {
   fromCanvasPoint,
   LEGACY_LEG_GEOMETRY,
   LEGACY_NEUTRAL_CALIBRATION,
+  clamp_joint_matrix,
   segmentPath,
   solveGeometryLegacy,
   solveServoForJointAngles,
@@ -206,10 +207,13 @@ export default function LegDetail({
       const tibiaRad = servoSolution?.thetaServo != null
         ? servoSolution.thetaServo - LEGACY_NEUTRAL_CALIBRATION.thetaServo
         : effectiveAngles[2];
+      const nextAngles = clampLegAngles([effectiveAngles[0], ik.thighRad, tibiaRad]);
       onPreviewAngles?.({
         leg: activeLeg,
-        angles: [effectiveAngles[0], ik.thighRad, tibiaRad],
+        angles: nextAngles,
       });
+      onFootDrag?.({ x: localMm.x, z: localMm.y, leg: activeLeg, angles: nextAngles });
+      return;
     }
 
     // andy-servo's frame labels the vertical axis y; the dashboard thinks
@@ -433,6 +437,11 @@ function readLegAnglesRad(jointState, leg) {
     }
   });
   return out;
+}
+
+function clampLegAngles(angles) {
+  const clamped = clamp_joint_matrix([angles]);
+  return clamped[0] ?? angles;
 }
 
 // ─── 2-link sagittal IK (local drag preview) ─────────────────────────────

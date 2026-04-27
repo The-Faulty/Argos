@@ -26,7 +26,11 @@ import {
   STABILIZER_PARAM_BOUNDS,
   GAIT_TUNABLE_PARAMS,
 } from "../shared/robot-config.js";
-import { fourLegsInverseKinematics, resetIkHint } from "../shared/argos_kinematics.js";
+import {
+  fourLegsInverseKinematics,
+  leg_explicit_inverse_kinematics,
+  resetIkHint,
+} from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 
 // Dropped from 50 Hz to 30 Hz: each gait tick emits 4× set_leg_servo_angles
@@ -36,6 +40,7 @@ import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
 // gives the firmware ~33 ms between bursts to drain — empirically enough.
 const TICK_HZ = 30.0;
 const TICK_DT = 1.0 / TICK_HZ;
+const REACH_BLEND_STEPS = 12;
 
 const DEG2RAD = Math.PI / 180.0;
 
@@ -56,8 +61,8 @@ const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 // Lateral reach is tighter than x, but turns need visible side-to-side sweep.
 // Keep y below the coxa reach edge while giving rotate/crawl enough motion
 // to bite instead of rocking in place.
-const MAX_STRIDE_X = 0.045;
-const MAX_STRIDE_Y = 0.012;
+const MAX_STRIDE_X = 0.060;
+const MAX_STRIDE_Y = 0.025;
 
 // Default contact phase patterns (4 columns = phases, rows = legs FR/FL/RR/RL).
 // 1 = stance (foot down), 0 = swing (foot in air).
@@ -199,7 +204,7 @@ export class GaitPlanner {
       this.gaitTickMs = 0;
       const baseFeet = makeStanceFeet(this.config);
       this._applyImuTilt(baseFeet);
-      const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i]));
+      const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i], this.jointLimitsRad));
       return this._solveAndCache(clamped);
     }
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
@@ -256,7 +261,7 @@ export class GaitPlanner {
     // their reach window every tick. Snap each foot's x into its per-leg
     // window so swing/stance trajectories degrade to held-at-boundary motion
     // instead of an IK refusal that holds the whole-body last-good pose.
-    const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i]));
+    const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i], this.jointLimitsRad));
     return this._solveAndCache(clamped);
   }
 
@@ -339,10 +344,10 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    // Swing-foot vertical lift. The measured femur/tibia envelope now gives
-    // enough room for an obvious step without tripping IK at the neutral
-    // stance. Keep this below ~10 mm unless the foot reach window is retuned.
-    z_clearance: 0.008,
+    // Swing-foot vertical lift. STAND_FOOT_Z = -0.195 m leaves about 59 mm
+    // before the leg straightens, so 18 mm produces a visible step while
+    // staying inside the measured IK envelope.
+    z_clearance: 0.018,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
@@ -434,16 +439,65 @@ function cloneLimits(src) {
   };
 }
 
-// Clamp a foot target's x into its leg's IK reach window. Y and Z pass
-// through unchanged — only the body-x dimension is the consistent failure
-// mode at default stance height. Used by both the gait trajectory and the
-// dashboard's direct foot-drag handler so out-of-reach inputs become
-// "snap to boundary" instead of "silent IK refusal".
-export function clampFootInReach(foot, legId) {
+// Clamp a foot target into the leg's reachable envelope. Start with the
+// measured body-x window, then, if the larger swing/yaw request still lands
+// on an unreachable x/y/z corner, blend that one foot back toward its neutral
+// stance point until IK accepts it. That keeps the gait moving instead of
+// holding the last-good whole-body servo frame.
+export function clampFootInReach(foot, legId, limits = DEFAULT_JOINT_LIMITS_RAD) {
   const range = DEFAULT_FOOT_REACH_X[legId];
   if (!range) return foot;
-  return [clampNum(foot[0], range[0], range[1]), foot[1], foot[2]];
+  const candidate = [clampNum(foot[0], range[0], range[1]), foot[1], foot[2]];
+  if (isFootReachable(candidate, legId, limits)) return candidate;
+
+  const home = neutralFootForLeg(legId);
+  if (!isFootReachable(home, legId, limits)) return home;
+
+  let lo = 0.0;
+  let hi = 1.0;
+  let best = home;
+  for (let i = 0; i < REACH_BLEND_STEPS; i++) {
+    const mid = 0.5 * (lo + hi);
+    const blended = blendFoot(candidate, home, mid);
+    if (isFootReachable(blended, legId, limits)) {
+      best = blended;
+      hi = mid;
+    } else {
+      lo = mid;
+    }
+  }
+  return best;
 }
+
+function neutralFootForLeg(legId) {
+  const idx = LEG_IDS.indexOf(legId);
+  return idx >= 0 ? DEFAULT_NEUTRAL_FEET[idx] : [0, 0, DEFAULT_Z_REF];
+}
+
+function isFootReachable(foot, legId, limits) {
+  const idx = LEG_IDS.indexOf(legId);
+  if (idx < 0) return false;
+  const rLeg = [
+    foot[0] - LEG_ORIGINS[0][idx],
+    foot[1] - LEG_ORIGINS[1][idx],
+    foot[2] - LEG_ORIGINS[2][idx],
+  ];
+  return leg_explicit_inverse_kinematics(rLeg, idx, { limits }) !== null;
+}
+
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+function blendFoot(from, to, t) {
+  return [
+    lerp(from[0], to[0], t),
+    lerp(from[1], to[1], t),
+    lerp(from[2], to[2], t),
+  ];
+}
+
+const DEFAULT_NEUTRAL_FEET = makeStanceFeet(makeDefaultConfig());
 
 export const _internals = {
   TICK_HZ,

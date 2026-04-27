@@ -144,8 +144,8 @@ export const DEFAULT_JOINT_LIMITS_RAD = {
 export const DEFAULT_FOOT_REACH_X = {
   FR: [ 0.077,  0.147],
   FL: [ 0.077,  0.147],
-  RR: [-0.147, -0.077],
-  RL: [-0.147, -0.077],
+  RR: [-0.150, -0.077],
+  RL: [-0.150, -0.077],
 };
 
 // ─── Servo channel map (mirrors firmware s_servo_cal) ────────────────────
@@ -296,7 +296,7 @@ export const GAIT_TUNABLE_PARAMS = {
     // sagittal IK limit at neutral z. Was 200; longer swings let the operator
     // dial in a real walking stride from the joystick.
     max: 300,
-    default: 70,
+    default: 120,
     units: "ms",
   },
   rotate_rate_max: {

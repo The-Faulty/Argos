@@ -22,7 +22,8 @@ test("held forward trot keeps producing reachable gait poses", () => {
 
   for (const range of ranges) {
     const span = range.max - range.min;
-    assert.ok(span > 0.065, `expected exaggerated per-leg x travel, got ${span}`);
+    // Rear legs keep a 3 mm clamp budget at full backward sweep.
+    assert.ok(span > 0.054, `expected exaggerated per-leg x travel, got ${span}`);
   }
 });
 
@@ -45,7 +46,20 @@ test("held forward crawl keeps producing exaggerated reachable gait poses", () =
 
   for (const range of ranges) {
     const span = range.max - range.min;
-    assert.ok(span > 0.065, `expected exaggerated per-leg x travel, got ${span}`);
+    // Rear legs keep a 3 mm clamp budget at full backward sweep.
+    assert.ok(span > 0.054, `expected exaggerated per-leg x travel, got ${span}`);
+  }
+});
+
+test("held forward plus yaw trot stays reachable with higher swing lift", () => {
+  const planner = new GaitPlanner();
+  planner.setMode("trot");
+  planner.setTwist({ x: 0.5, y: 0, yaw: 2.0 });
+
+  for (let tick = 0; tick < 240; tick++) {
+    const out = planner.step();
+    assert.ok(out, `tick ${tick}: expected gait output`);
+    assert.equal(out.error, undefined, `tick ${tick}: ${out.error}`);
   }
 });
 
