@@ -414,13 +414,14 @@ function sleep(ms) {
 }
 
 function servoAnglesEqual(a, b) {
-  // 0.01° threshold — well below the smallest visible servo step (~0.1°) but
-  // tight enough that genuine gait-cycle deltas always pass and get sent.
-  // Was 0.05°: that wider band was masking dropped frames as "no resend
-  // needed" while the firmware FIFO overflow was eating commands. With the
-  // overflow fixed (firmware single-buffer Serial.write + 200 ms telemetry),
-  // tightening the dedupe makes the wire honest again.
-  const eps = 0.01;
+  // 0.05° threshold matches the SG90's smallest physically distinguishable
+  // step (~0.1° at the horn). 0.01° was too tight — the gait planner's
+  // per-tick deltas hover near that floor at low joystick deflections, so
+  // every 50 Hz tick produced a unique servo command, doubling wire traffic
+  // and surfacing as a visible micro-twitch on the FR leg (the most
+  // closely-watched leg in the operator's UI). Above 0.05° the wire stays
+  // calm at idle and only carries genuine motion deltas.
+  const eps = 0.05;
   return Math.abs(a.hipServoDeg - b.hipServoDeg) < eps
       && Math.abs(a.thighServoDeg - b.thighServoDeg) < eps
       && Math.abs(a.calfServoDeg - b.calfServoDeg) < eps;

@@ -60,13 +60,22 @@ const STAND_JOINTS_RAD  = [0, -28.84 * DEG2RAD,  15.80 * DEG2RAD];
 const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 
 // Stride amplitude clamp (meters, peak displacement either side of base).
-// The current stance has roughly 70 mm of safe body-x travel per foot. Use
-// most of that window so trot reads as a deliberate step instead of a tiny
-// shuffle; clampFootInReach remains the final guardrail at the hard edges.
-// Lateral reach is tighter than x, but turns need visible side-to-side sweep.
-// Keep y below the coxa reach edge while giving rotate/crawl enough motion
-// to bite instead of rocking in place.
-const MAX_STRIDE_X = 0.060;
+// Each leg's stance reach window (DEFAULT_FOOT_REACH_X) is about 72 mm
+// wide; the gait base.x sits ~12 mm forward of the window center for the
+// front legs (0.100 vs window-center 0.112), so the binding constraint is
+// stride/2 ≤ base.x − stance_lo = 0.100 − 0.076 = 0.024 m. 0.045 leaves
+// ~3 mm of margin before clampFootInReach starts pinning the trailing
+// stance foot to the reach edge — and that pinning is exactly what was
+// producing the visible jerk on FR at the swing→stance handoff (last
+// stance tick stuck at 0.076, first swing tick released to 0.070, 6 mm
+// instantaneous jump on every cycle).
+//
+// If you want a longer effective stride, shift STAND_FRONT_FOOT_X /
+// STAND_REAR_FOOT_X to their reach-window centers (0.112 / -0.111) — that
+// re-symmetrizes the stride budget and lets MAX_STRIDE_X go back up to
+// ~0.060 without the discontinuity. Costs a 12 mm shift of the standing
+// pose, so left as a deliberate follow-up rather than rolled in here.
+const MAX_STRIDE_X = 0.045;
 const MAX_STRIDE_Y = 0.025;
 
 // Default contact phase patterns (4 columns = phases, rows = legs FR/FL/RR/RL).

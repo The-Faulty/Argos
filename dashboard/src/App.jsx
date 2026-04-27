@@ -259,6 +259,8 @@ function AppBody() {
           <WalkingPanel
             mode={mode}
             rotateIncrement={rotateSettings.rotate_increment_deg}
+            stepLength={data.gait_params?.delta_x_mm}
+            swingTimeMs={data.gait_params?.swing_time_ms}
             onTwist={async (x, y, yaw) => {
               // Auto-switch to trot on first non-zero input (only crawl/trot
               // consume the twist; from idle/stand/crouch the planner would
