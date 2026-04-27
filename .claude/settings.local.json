@@ -20,7 +20,8 @@
       "Bash(npm test *)",
       "Bash(node --check dashboard/src/App.jsx)",
       "Bash(node --input-type=module -e ' *)",
-      "Bash(python -m py_compile pi_sensors/sensor_server.py)"
+      "Bash(python -m py_compile pi_sensors/sensor_server.py)",
+      "Bash(node -e ' *)"
     ]
   }
 }

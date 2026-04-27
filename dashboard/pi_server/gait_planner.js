@@ -365,20 +365,32 @@ function makeDefaultConfig() {
   };
 }
 
+// Foot positions corresponding to STAND_JOINTS_RAD = [0, -28.84°, 15.80°]
+// computed by forward-kinematic-ing the linkage (coxa pinned to 0). The old
+// default stance had feet at ±0.1106 m laterally, but coxa=0 can't reach
+// that — IK was forced to splay legs out by ~+11° on every solve, which is
+// why trot looked visibly "kicked out" compared to the stand pose. Anchoring
+// to these positions makes IK produce coxa≈0 at neutral, so STAND and a
+// zero-twist TROT look identical.
+const STAND_FRONT_FOOT_X =  0.1000;
+const STAND_REAR_FOOT_X  = -0.1233;
+const STAND_FOOT_Y       =  0.0733;
+const STAND_FOOT_Z       = -0.1950;
+
 function makeStanceFeet(cfg, zShift = 0) {
-  // 4×3 array of foot positions in body frame, FR/FL/RR/RL. Keep the per-leg
-  // front/rear offsets from DEFAULT_STANCE, but let the live-tuneable spread
-  // parameters actually shape the footprint.
-  const deltaX = cfg?.delta_x ?? GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
-  const deltaY = cfg?.delta_y ?? GAIT_TUNABLE_PARAMS.delta_y_mm.default / 1000;
-  const frontShift = DEFAULT_STANCE.FR[0] - GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
-  const rearShift = DEFAULT_STANCE.RR[0] + GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
+  // delta_x_mm is interpreted as a fore/aft offset on top of the STAND
+  // anchors so the gait's footprint depth is still tuneable. delta_y_mm is
+  // a no-op now; widening it would re-introduce the splayed-coxa stance and
+  // narrowing it pushes the IK into the unreachable region near the hip.
+  const dxOffset = (cfg?.delta_x ?? GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000)
+    - GAIT_TUNABLE_PARAMS.delta_x_mm.default / 1000;
+  const dz = (cfg?.default_z_ref ?? DEFAULT_Z_REF) - DEFAULT_Z_REF;
   return LEG_IDS.map((id) => {
     const isFront = id === "FR" || id === "FL";
     const isLeft = id === "FL" || id === "RL";
-    const x = isFront ? deltaX + frontShift : -deltaX + rearShift;
-    const y = isLeft ? deltaY : -deltaY;
-    return [x, y, (cfg?.default_z_ref ?? DEFAULT_Z_REF) + zShift];
+    const x = isFront ? STAND_FRONT_FOOT_X + dxOffset : STAND_REAR_FOOT_X - dxOffset;
+    const y = isLeft ? STAND_FOOT_Y : -STAND_FOOT_Y;
+    return [x, y, STAND_FOOT_Z + dz + zShift];
   });
 }
 

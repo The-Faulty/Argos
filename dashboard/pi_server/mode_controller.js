@@ -12,6 +12,7 @@ import {
   JOINT_ROWS,
   LEG_IDS,
   MODE_OPTIONS,
+  DEFAULT_JOINT_LIMITS_RAD,
 } from "../shared/robot-config.js";
 import { fourLegsInverseKinematics } from "../shared/argos_kinematics.js";
 import { applyServoCal, clampServoDeg } from "../shared/servo_cal.js";
@@ -162,36 +163,48 @@ export class ModeController extends EventEmitter {
   }
 
   // limitsByName = { "FR_coxa_joint": {min_deg, max_deg}, ... }
-  // Forwards per-leg limits to the firmware AND collapses them into a single
-  // joint envelope for the JS-side IK in the gait planner. The IK accepts one
-  // {coxa, femur, tibia} triple applied to all four legs, so we take the
-  // tightest bound across legs (intersection) — going wider would tell the IK
-  // a value is reachable when at least one leg can't actually achieve it.
+  // The dashboard drops entries matching defaults to keep the persisted file
+  // small, so the request body is partial. Fill in defaults for any leg/joint
+  // not in the override set BEFORE deriving firmware sends or the planner
+  // envelope — otherwise unchanged legs would either get [-180, 180] (wiping
+  // firmware safety) or be skipped entirely from the intersection (so a
+  // single-leg edit would silently move the planner envelope across all 4
+  // legs).
   setJointLimits(limitsByName) {
+    const RAD2DEG = 180.0 / Math.PI;
     const DEG2RAD = Math.PI / 180.0;
+    const defaultsDeg = {
+      coxa:  [DEFAULT_JOINT_LIMITS_RAD.coxa[0]  * RAD2DEG, DEFAULT_JOINT_LIMITS_RAD.coxa[1]  * RAD2DEG],
+      femur: [DEFAULT_JOINT_LIMITS_RAD.femur[0] * RAD2DEG, DEFAULT_JOINT_LIMITS_RAD.femur[1] * RAD2DEG],
+      tibia: [DEFAULT_JOINT_LIMITS_RAD.tibia[0] * RAD2DEG, DEFAULT_JOINT_LIMITS_RAD.tibia[1] * RAD2DEG],
+    };
     const byLeg = {};
-    for (const leg of LEG_IDS) byLeg[leg] = {};
-    for (const [name, range] of Object.entries(limitsByName)) {
+    for (const leg of LEG_IDS) {
+      byLeg[leg] = {
+        coxa:  [defaultsDeg.coxa[0],  defaultsDeg.coxa[1]],
+        femur: [defaultsDeg.femur[0], defaultsDeg.femur[1]],
+        tibia: [defaultsDeg.tibia[0], defaultsDeg.tibia[1]],
+      };
+    }
+    for (const [name, range] of Object.entries(limitsByName || {})) {
       const [leg, joint] = name.split("_");
       if (!LEG_IDS.includes(leg) || !JOINT_ROWS.includes(joint)) continue;
       byLeg[leg][joint] = [range.min_deg, range.max_deg];
     }
     for (const leg of LEG_IDS) {
-      const femur = byLeg[leg].femur || [-180, 180];
-      const tibia = byLeg[leg].tibia || [-180, 180];
-      this.serial.setLegJointLimits(leg, { femur, tibia });
+      this.serial.setLegJointLimits(leg, {
+        femur: byLeg[leg].femur,
+        tibia: byLeg[leg].tibia,
+      });
     }
     const envelope = {};
     for (const row of JOINT_ROWS) {
-      let lo = -Infinity, hi = +Infinity, any = false;
+      let lo = -Infinity, hi = +Infinity;
       for (const leg of LEG_IDS) {
-        const r = byLeg[leg][row];
-        if (!r) continue;
-        any = true;
-        lo = Math.max(lo, r[0]);
-        hi = Math.min(hi, r[1]);
+        lo = Math.max(lo, byLeg[leg][row][0]);
+        hi = Math.min(hi, byLeg[leg][row][1]);
       }
-      if (any && lo <= hi) envelope[row] = [lo * DEG2RAD, hi * DEG2RAD];
+      if (lo <= hi) envelope[row] = [lo * DEG2RAD, hi * DEG2RAD];
     }
     this.planner.setJointLimits(envelope);
   }
