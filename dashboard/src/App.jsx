@@ -332,9 +332,7 @@ function AppBody() {
       <SettingsDrawer
         open={settingsOpen}
         onClose={() => setSettingsOpen(false)}
-        servoOverrides={data.servo_overrides}
         rotateSettings={rotateSettings}
-        onSaveServoOverrides={(v) => cmd.setServoOverrides(v).catch(() => {})}
         onSaveRotateSettings={(v) => cmd.setRotateSettings(v).catch(() => {})}
         onSaveStabilizerParams={(v) => cmd.setStabilizerParams(v).catch(() => {})}
         onSaveGaitParam={(n, v) => cmd.setGaitParam(n, v).catch(() => {})}

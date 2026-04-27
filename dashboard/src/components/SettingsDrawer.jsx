@@ -1,10 +1,9 @@
 // Slide-out settings drawer.
 //
-// Four sections:
-//   1. Per-joint servo inversion toggles (12 switches) → /api/settings/servo_overrides
-//   2. Rotate tuneables (increment, rate, calibration factor) → /api/settings/rotate
-//   3. Stabilizer params (roll gain, pitch gain, max correction, filter alpha, on/off) → /api/params/stabilizer
-//   4. Body-height slider → /api/params/gait/default_z_ref_mm
+// Three sections:
+//   1. Rotate tuneables (increment, rate, calibration factor) → /api/settings/rotate
+//   2. Stabilizer params (roll gain, pitch gain, max correction, filter alpha, on/off) → /api/params/stabilizer
+//   3. Body-height slider → /api/params/gait/default_z_ref_mm
 //
 // All edits debounce before POSTing so a slider drag doesn't spam the Pi server.
 
@@ -12,7 +11,6 @@ import { useEffect, useRef, useState } from "react";
 import {
   DEFAULT_ROTATE_SETTINGS,
   GAIT_TUNABLE_PARAMS,
-  JOINT_NAMES,
   ROTATE_SETTINGS_BOUNDS,
   STABILIZER_PARAM_BOUNDS,
 } from "../../shared/robot-config.js";
@@ -20,9 +18,7 @@ import {
 export default function SettingsDrawer({
   open,
   onClose,
-  servoOverrides,
   rotateSettings,
-  onSaveServoOverrides,
   onSaveRotateSettings,
   onSaveStabilizerParams,
   onSaveGaitParam,
@@ -34,75 +30,11 @@ export default function SettingsDrawer({
         <button type="button" onClick={onClose} aria-label="Close">✕</button>
       </header>
       <div className="settings-drawer__scroll">
-        <ServoOverridesSection value={servoOverrides} onSave={onSaveServoOverrides} />
         <RotateSettingsSection value={rotateSettings} onSave={onSaveRotateSettings} />
         <StabilizerSection onSave={onSaveStabilizerParams} />
         <BodyHeightSection onSave={(v) => onSaveGaitParam?.("default_z_ref_mm", v)} />
       </div>
     </aside>
-  );
-}
-
-// ─── Section: per-joint invert toggles ──────────────────────────────────
-
-function ServoOverridesSection({ value, onSave }) {
-  const [draft, setDraft] = useState(value || {});
-  useEffect(() => setDraft(value || {}), [value]);
-
-  function toggle(jointName) {
-    const cur = draft[jointName] || {};
-    const next = { ...draft };
-    const newInvert = !cur.invert;
-    if (!newInvert && !cur.offset_deg) {
-      delete next[jointName];
-    } else {
-      next[jointName] = { ...cur, invert: newInvert, offset_deg: cur.offset_deg || 0 };
-    }
-    setDraft(next);
-    onSave?.(next);
-  }
-
-  function setOffset(jointName, offset_deg) {
-    const cur = draft[jointName] || {};
-    const next = { ...draft };
-    if (!offset_deg && !cur.invert) {
-      delete next[jointName];
-    } else {
-      next[jointName] = { ...cur, offset_deg };
-    }
-    setDraft(next);
-    onSave?.(next);
-  }
-
-  return (
-    <Section title="Servo overrides">
-      <p className="muted">Flip direction + fine-tune offset_deg per joint. Firmware defaults apply when a row is blank.</p>
-      <table className="settings-table">
-        <thead>
-          <tr><th>Joint</th><th>Invert</th><th>Offset (°)</th></tr>
-        </thead>
-        <tbody>
-          {JOINT_NAMES.map((n) => {
-            const cur = draft[n] || {};
-            return (
-              <tr key={n}>
-                <th scope="row">{n}</th>
-                <td>
-                  <input type="checkbox" checked={!!cur.invert} onChange={() => toggle(n)} />
-                </td>
-                <td>
-                  <input
-                    type="number" step="0.5" value={cur.offset_deg || 0}
-                    onChange={(e) => setOffset(n, Number(e.target.value) || 0)}
-                    style={{ width: 70 }}
-                  />
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </Section>
   );
 }
 
