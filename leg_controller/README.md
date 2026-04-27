@@ -2,7 +2,7 @@
 
 Argos is a quadruped robot dog control stack for a 4-leg, 12-servo platform. This repository contains the browser dashboard, shared kinematics and gait logic, desktop serial bridge code, and the microcontroller firmware that drives a PCA9685 servo controller from an Adafruit ESP32 Feather.
 
-The project is built around a custom leg linkage: each leg has hip yaw, thigh, and calf motion, with the calf driven through a servo horn, short link, bell crank, and long link. The software can command legs by foot position, joint angle, raw servo angle, full-body poses, procedural walking, and uploaded keyframe animations.
+The project is built around a custom leg linkage: each leg has hip yaw, thigh, and calf motion, with the calf driven through a servo horn, short link, bell crank, and long link. The dashboard and desktop bridge calculate foot targets, joint targets, gait poses, and animation keyframes into servo angles before anything is sent to the ESP32.
 
 ## Capabilities
 
@@ -11,10 +11,10 @@ The project is built around a custom leg linkage: each leg has hip yaw, thigh, a
 - PCA9685 servo output at I2C address `0x40` and `150 Hz` servo refresh.
 - Four legs, three servo channels per leg: hip yaw, thigh, calf.
 - Per-leg servo channel mapping, joint limits, speed limits, and neutral trim.
-- Foot-space inverse kinematics for the linked thigh/calf mechanism.
-- Direct control modes for foot XY, joint angles, and servo angles.
-- Shared gait helpers plus firmware built-in walk/crouch commands.
-- Full-body animation clips with per-leg foot keyframes.
+- Host-side foot-space inverse kinematics for the linked thigh/calf mechanism.
+- Direct dashboard controls for foot XY, joint angles, and servo angles, all serialized to servo-angle commands.
+- Host-side gait helpers that stream servo-angle full-body poses.
+- Full-body animation clips uploaded with resolved per-servo keyframes.
 - JSON-over-serial protocol and HTTP/WebSocket bridge API.
 - Panic servo release command that disables PCA9685 outputs.
 
@@ -50,17 +50,17 @@ There are three main layers:
 
 3. ESP32 Feather firmware
    - Receives newline-delimited JSON commands over USB serial.
-   - Solves or applies leg targets.
+   - Applies servo-angle commands only.
    - Smoothly interpolates servo moves.
-   - Drives the PCA9685 over the Feather board-defined `SDA`/`SCL` pins.
+   - Drives the PCA9685 over explicit I2C pins: `SDA = GPIO 23`, `SCL = GPIO 22`.
 
-The Feather is the real-time servo controller. The host can stream full-body poses or send higher-level commands, while the firmware remains responsible for servo smoothing, safety release, telemetry, and low-level PWM writes.
+The Feather is the real-time servo controller. Kinematics, gait generation, and animation-to-servo conversion run on the host; the firmware remains responsible for servo smoothing, safety release, telemetry, and low-level PWM writes.
 
 ## Hardware Summary
 
 Core electronics:
 
-- Adafruit ESP32 Feather or Adafruit Feather ESP32 V2.
+- Adafruit ESP32 Feather / HUZZAH32 using the original `SDA = GPIO 23`, `SCL = GPIO 22` I2C pinout.
 - Adafruit-compatible PCA9685 16-channel PWM servo driver.
 - 12 hobby servos: 3 per leg.
 - Separate servo supply, assumed `7.4 V` in the firmware model.
@@ -81,14 +81,14 @@ Servo/PCA9685 assumptions:
 
 Feather wiring:
 
-- Feather `SDA` to PCA9685 `SDA`.
-- Feather `SCL` to PCA9685 `SCL`.
+- Feather `GPIO 23` / `SDA` to PCA9685 `SDA`.
+- Feather `GPIO 22` / `SCL` to PCA9685 `SCL`.
 - Feather `3V` to PCA9685 logic `VCC`.
 - Feather `GND` to PCA9685 `GND`.
 - External servo battery/regulator to PCA9685 `V+`.
 - Servo supply ground must be tied to Feather/PCA9685 logic ground.
 
-The firmware uses Arduino `SDA` and `SCL`, not hardcoded GPIO numbers, so the same sketch can compile for original ESP32 Feather and ESP32 Feather V2. If the selected board exposes `NEOPIXEL_I2C_POWER`, the firmware enables it before starting I2C.
+The firmware first configures Arduino `Wire` with `Wire.setPins(23, 22)` before starting I2C on ESP32 builds. If it cannot find the PCA9685 at `0x40`, it retries on the selected board's default `SDA`/`SCL` pins and prints the active pins on serial startup. If the selected board exposes `NEOPIXEL_I2C_POWER`, the firmware enables it before starting I2C. Note that Adafruit ESP32 Feather V2 uses different GPIO numbers for its labeled I2C pins, so the `23`/`22` setting is for hardware wired to those GPIOs, not just to the V2 silkscreen labels.
 
 ## Servo Channel Map
 
@@ -156,7 +156,7 @@ Linkage sequence:
 6. The long link attaches to the calf `30 mm` from the knee.
 7. The foot is `127 mm` from the knee along the solved calf angle.
 
-The shared JS kinematics and Feather firmware both implement the same geometry. The solver uses circle intersections and a local iterative search. Foot IK is considered successful when the solved foot error is under `10 mm`. Joint-angle calf solving is considered successful when the calf angle error is under `3 deg`.
+The shared JS kinematics module is the source of truth for linkage geometry. The browser and desktop bridge use it to convert foot and joint targets into servo angles before serial transport. The ESP32 firmware does not solve foot IK or joint-angle linkage geometry at runtime.
 
 ## Joint Limits
 
@@ -168,7 +168,7 @@ Default joint limits:
 | Thigh | `-145 deg` | `15 deg` |
 | Calf | `-165 deg` | `-25 deg` |
 
-The dashboard can update joint limits per leg. Limits are normalized if min/max are reversed, then used by IK and direct joint commands.
+The dashboard can update joint limits per leg. Limits are normalized if min/max are reversed, then used by the host-side IK and direct joint controls before servo angles are sent.
 
 ## Calibration Model
 
@@ -176,7 +176,7 @@ Servo model:
 
 - A model servo angle of `90 deg` is neutral.
 - Thigh neutral is fixed at `thetaThigh = 0`.
-- Calf servo neutral is solved from the neutral foot position.
+- Calf servo neutral is solved by the host-side kinematics model from the neutral foot position.
 - Hip yaw maps directly as `servoDeg = 90 + hipYawDeg`.
 - Thigh and calf model servo angles map to linkage angles through the neutral calibration.
 
@@ -185,6 +185,12 @@ Servo trims:
 - Trims are stored per leg and per joint.
 - Runtime trim changes are tracked by the dashboard and serial bridge.
 - Record final trim offsets before ending a calibration session, and retune after rebuilding hardware.
+
+Default startup joint target:
+
+- Hip yaw: `0 deg`.
+- Thigh: `-40 deg`.
+- Calf: `-135 deg`.
 
 Suggested calibration flow:
 
@@ -215,11 +221,12 @@ Default gait behavior:
   - `rear_left`: `0.5`
   - `rear_right`: `0`
 - Cycle time: `1.8 - strideMagnitude * 0.35` seconds.
-- Forward stride scale: `34 mm`.
-- Strafe stride scale: `16 mm`.
-- Foot lift: `16 mm`.
-- Yaw hip bias: `12 deg`, signed by side.
-- Strafe hip yaw contribution: `22 deg`.
+- Forward stride scale: `68 mm`.
+- Strafe stride scale: `32 mm`.
+- Foot lift: `56 mm`.
+- Stance support dip: `10 mm`.
+- Yaw hip bias: `24 deg`, signed by side.
+- Strafe hip yaw contribution: `44 deg`, clamped by joint limits.
 
 Modes:
 
@@ -227,7 +234,7 @@ Modes:
 - `stand`: neutral standing pose.
 - `drive`: gait generator streams full-body poses.
 - `calibration`: direct tuning mode.
-- Firmware also supports direct modes, built-in walk/crouch, and animation playback.
+- Firmware supports direct servo-angle mode and animation playback from uploaded servo-angle keyframes.
 
 ## Animation Clips
 
@@ -250,13 +257,13 @@ Animation clips are full-body foot keyframe tracks:
 }
 ```
 
-The animation helper validates clips, clamps keyframe times to the clip duration, sorts frames, and linearly interpolates foot positions. The firmware stores up to `32` keyframes per uploaded leg track.
+The animation helper validates clips, clamps keyframe times to the clip duration, sorts frames, and resolves foot keyframes into servo angles during upload. The firmware stores up to `32` keyframes per uploaded leg track and interpolates servo angles during playback.
 
 Legacy single-leg clips can be imported and mapped to one selected leg or mirrored pairs from the dashboard.
 
 ## Serial Protocol
 
-The Feather protocol is newline-delimited JSON over USB serial at `460800` baud. Commands include a `type` field and may include a `seq` number. Responses include `ack`, `error`, `state`, `hello_ack`, built-in status, and animation progress messages.
+The Feather protocol is newline-delimited JSON over USB serial at `460800` baud. Commands include a `type` field and may include a `seq` number. Responses include `ack`, `error`, `state`, `hello_ack`, and animation progress messages.
 
 Common commands:
 
@@ -267,26 +274,7 @@ Common commands:
 { "type": "set_mode", "mode": "direct_servo_angles", "seq": 4 }
 ```
 
-Per-leg commands:
-
-```json
-{
-  "type": "set_leg_foot_xy",
-  "legId": "front_left",
-  "x": 0,
-  "y": 0
-}
-```
-
-```json
-{
-  "type": "set_leg_joint_angles",
-  "legId": "front_left",
-  "hipYawDeg": 0,
-  "thighDeg": -45,
-  "calfDeg": -90
-}
-```
+Per-leg servo command:
 
 ```json
 {
@@ -324,9 +312,10 @@ Configuration commands:
 - `set_leg_joint_limits`
 - `set_leg_servo_speed_limit`
 - `set_leg_servo_trim` through the serial bridge
-- `upload_animation` with `begin`, `frame`, `commit`
+- `upload_animation` with `begin`, servo-angle `frame`, `commit`
 - `play_animation`, `pause_animation`, `stop_animation`
-- `run_builtin` with `walk` or `crouch`
+
+The serial bridge may accept dashboard-facing `set_leg_foot_xy` and `set_leg_joint_angles` requests, but it converts them to `set_leg_servo_angles` before writing to serial. The firmware rejects foot, joint, and built-in gait commands that reach it directly.
 
 ## Backend API
 
@@ -440,7 +429,6 @@ Important firmware timing constants:
 
 - Serial baud: `460800`.
 - Telemetry interval: `250 ms`.
-- Built-in status interval: `400 ms`.
 - Animation status interval: `250 ms`.
 - Streaming full-body ack interval: `500 ms`.
 - Minimum interpolated move duration: `0.075 s`.
@@ -487,7 +475,7 @@ Design assumptions to preserve:
 - Servos accept `1000-2000 us` pulses.
 - Servos are safe across the configured `0-180 deg` command range.
 - Linkage geometry is symmetric between legs, with right-side servo outputs mirrored in software.
-- The neutral physical stance corresponds roughly to foot command `{ x: 0, y: 0 }`.
+- The default physical stance starts from joint angles `{ hipYaw: 0, thigh: -40, calf: -135 }`.
 - Servo power is stable under dynamic gait loads.
 
 ## Safety Notes
@@ -506,5 +494,5 @@ Design assumptions to preserve:
 - The gait is open-loop and does not adapt to terrain.
 - No IMU balancing or body attitude correction is implemented.
 - No foot contact sensing is implemented.
-- Linkage dimensions are hardcoded in both JS and firmware; changing hardware geometry requires updating both.
+- Linkage dimensions are hardcoded in the shared JS kinematics model; changing hardware geometry requires updating the host-side model.
 - The dashboard visualization body dimensions are approximate software layout values, not a full CAD model.

@@ -70,9 +70,9 @@ export const DEFAULT_DRIVE_COMMAND = {
 };
 
 export const DEFAULT_LEG_COMMAND = {
-  foot: { x: 0, y: 0 },
-  jointAnglesDeg: { hipYaw: 0, thigh: 0, calf: -90 },
-  servoAnglesDeg: { hipYaw: 90, thigh: 90, calf: 90 },
+  foot: { x: -32.46078351327037, y: -31.490688449955826 },
+  jointAnglesDeg: { hipYaw: 0, thigh: -40, calf: -135 },
+  servoAnglesDeg: { hipYaw: 90, thigh: 50, calf: 72.75 },
 };
 
 // Match the main-era PCA9685 wiring so hip-yaw stays on the dedicated upper channels.

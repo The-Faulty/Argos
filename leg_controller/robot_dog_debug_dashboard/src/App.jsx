@@ -166,22 +166,17 @@ function downloadJson(filename, data) {
   URL.revokeObjectURL(url);
 }
 
+function createDefaultLegPose(jointLimits = DEFAULT_JOINT_LIMITS) {
+  return buildLegPoseFromJointAngles(DEFAULT_LEG_COMMAND.jointAnglesDeg, calibration, { jointLimits });
+}
+
 function createLocalState() {
   const legs = {};
   for (const legId of LEG_IDS) {
+    const defaultPose = createDefaultLegPose(DEFAULT_JOINT_LIMITS);
     legs[legId] = {
-      desired: {
-        geometry: null,
-        foot: { ...DEFAULT_LEG_COMMAND.foot },
-        jointAnglesDeg: { ...DEFAULT_LEG_COMMAND.jointAnglesDeg },
-        servoAnglesDeg: { ...DEFAULT_LEG_COMMAND.servoAnglesDeg },
-      },
-      current: {
-        geometry: null,
-        foot: { ...DEFAULT_LEG_COMMAND.foot },
-        jointAnglesDeg: { ...DEFAULT_LEG_COMMAND.jointAnglesDeg },
-        servoAnglesDeg: { ...DEFAULT_LEG_COMMAND.servoAnglesDeg },
-      },
+      desired: clone(defaultPose),
+      current: clone(defaultPose),
       status: "idle",
       lastError: "",
       servoChannelMap: { ...DEFAULT_SERVO_CHANNEL_MAP[legId] },
@@ -1537,6 +1532,16 @@ export default function App() {
     return nextServoAngles;
   }
 
+  function buildServoCommandFromPose(legId, pose) {
+    return {
+      type: "set_leg_servo_angles",
+      legId,
+      hipYawServoDeg: pose.servoAnglesDeg.hipYaw,
+      thighServoDeg: pose.servoAnglesDeg.thigh,
+      calfServoDeg: pose.servoAnglesDeg.calf,
+    };
+  }
+
   async function flushQueuedFootCommand() {
     if (!liveFootQueuedRef.current) {
       return;
@@ -1547,12 +1552,7 @@ export default function App() {
     lastLiveFootSentAtRef.current = performance.now();
 
     try {
-      await sendCommand({
-        type: "set_leg_foot_xy",
-        legId: queued.legId,
-        x: queued.foot.x,
-        y: queued.foot.y,
-      });
+      await sendCommand(buildServoCommandFromPose(queued.legId, queued.pose));
     } catch (error) {
       setRobotState((current) => ({ ...current, lastError: error.message }));
     }
@@ -1634,7 +1634,7 @@ export default function App() {
 
   function queueLiveFootTarget(legId, foot) {
     const pose = applyDesiredFootLocally(legId, foot);
-    liveFootQueuedRef.current = { legId, foot: pose?.foot ?? foot };
+    liveFootQueuedRef.current = { legId, pose };
     scheduleQueuedFootCommand();
   }
 
@@ -1790,23 +1790,12 @@ export default function App() {
 
   async function sendFoot(legId, foot) {
     const pose = applyDesiredFootLocally(legId, foot);
-    await sendCommand({
-      type: "set_leg_foot_xy",
-      legId,
-      x: pose.foot.x,
-      y: pose.foot.y,
-    });
+    await sendCommand(buildServoCommandFromPose(legId, pose));
   }
 
   async function sendJoint(legId, jointAnglesDeg) {
     const pose = applyDesiredJointLocally(legId, jointAnglesDeg);
-    await sendCommand({
-      type: "set_leg_joint_angles",
-      legId,
-      hipYawDeg: pose.jointAnglesDeg.hipYaw,
-      thighDeg: pose.jointAnglesDeg.thigh,
-      calfDeg: pose.jointAnglesDeg.calf,
-    });
+    await sendCommand(buildServoCommandFromPose(legId, pose));
   }
 
   async function sendServo(legId, servoAnglesDeg) {

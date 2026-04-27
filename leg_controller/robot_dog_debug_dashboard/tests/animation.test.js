@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { convertLegacyLegClip, interpolateFullBodyClip, validateClip } from "../shared/animation.js";
+import { convertLegacyLegClip, createUploadFrames, interpolateFullBodyClip, validateClip } from "../shared/animation.js";
 
 test("legacy clip conversion maps to selected leg", () => {
   const converted = convertLegacyLegClip(
@@ -38,4 +38,23 @@ test("full body interpolation returns per-leg foot targets", () => {
   assert.equal(frame.front_left.x, 10);
   assert.equal(frame.front_left.y, 5);
   assert.equal(frame.front_right.x, 5);
+});
+
+test("upload frames include resolved servo angles for firmware playback", () => {
+  const clip = validateClip({
+    name: "servo-upload",
+    duration: 1,
+    tracks: {
+      front_left: [{ time: 0, foot: { x: 0, y: 0 } }],
+      front_right: [],
+      rear_left: [],
+      rear_right: [],
+    },
+  });
+
+  const frame = createUploadFrames(clip).find((item) => item.stage === "frame" && item.legId === "front_left");
+
+  assert.equal(Number.isFinite(frame.hipYawServoDeg), true);
+  assert.equal(Number.isFinite(frame.thighServoDeg), true);
+  assert.equal(Number.isFinite(frame.calfServoDeg), true);
 });

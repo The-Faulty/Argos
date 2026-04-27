@@ -1,4 +1,7 @@
-import { DEFAULT_FULL_BODY_CLIP, LEG_IDS } from "./robot-config.js";
+import { buildLegPoseFromFoot, createNeutralCalibration } from "./kinematics.js";
+import { DEFAULT_FULL_BODY_CLIP, DEFAULT_JOINT_LIMITS, LEG_IDS } from "./robot-config.js";
+
+const calibration = createNeutralCalibration();
 
 function normalizeTrack(track = [], duration) {
   return [...track]
@@ -97,8 +100,9 @@ export function convertLegacyLegClip(legacyClip, placement = { mode: "selected_l
   });
 }
 
-export function createUploadFrames(clip) {
+export function createUploadFrames(clip, options = {}) {
   const validated = validateClip(clip);
+  const jointLimitsByLeg = options.jointLimitsByLeg ?? {};
   const frames = [
     {
       type: "upload_animation",
@@ -110,14 +114,27 @@ export function createUploadFrames(clip) {
   ];
 
   for (const legId of LEG_IDS) {
+    let startThetaThigh = calibration.thetaThigh;
+    let startThetaServo = calibration.thetaServo;
     for (const keyframe of validated.tracks[legId]) {
+      const pose = buildLegPoseFromFoot(keyframe.foot, calibration, {
+        startThetaThigh,
+        startThetaServo,
+        jointLimits: jointLimitsByLeg[legId] ?? DEFAULT_JOINT_LIMITS,
+      });
+      startThetaThigh = pose.geometry.thetaThigh;
+      startThetaServo = pose.geometry.thetaServo;
+
       frames.push({
         type: "upload_animation",
         stage: "frame",
         legId,
         time: keyframe.time,
         x: keyframe.foot.x,
-        y: keyframe.foot.y
+        y: keyframe.foot.y,
+        hipYawServoDeg: pose.servoAnglesDeg.hipYaw,
+        thighServoDeg: pose.servoAnglesDeg.thigh,
+        calfServoDeg: pose.servoAnglesDeg.calf,
       });
     }
   }

@@ -16,4 +16,8 @@ microcontroller/robot_dog_debug_dashboard/.arduino-build/
 microcontroller/robot_dog_debug_dashboard/coverage/
 microcontroller/robot_dog_debug_dashboard/.env.local
 microcontroller/robot_dog_debug_dashboard/.env.*.local
+leg_controller/full_body_pose_dashboard/node_modules/
+leg_controller/full_body_pose_dashboard/dist/
+leg_controller/full_body_pose_dashboard/dev-server*.log
+leg_controller/full_body_pose_dashboard/test-artifacts/
 npm-debug.log*

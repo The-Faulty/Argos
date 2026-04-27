@@ -77,6 +77,12 @@ function buildPoseFromPayload(pose, fallbackPose, jointLimits) {
     return fallbackPose;
   }
 
+  if (pose.servoAnglesDeg) {
+    return buildLegPoseFromServoAngles(pose.servoAnglesDeg, calibration, {
+      jointLimits,
+    });
+  }
+
   if (pose.foot) {
     return buildLegPoseFromFoot(pose.foot, calibration, {
       startThetaThigh: fallbackPose?.geometry?.thetaThigh,
@@ -93,13 +99,11 @@ function buildPoseFromPayload(pose, fallbackPose, jointLimits) {
     });
   }
 
-  if (pose.servoAnglesDeg) {
-    return buildLegPoseFromServoAngles(pose.servoAnglesDeg, calibration, {
-      jointLimits,
-    });
-  }
-
   return fallbackPose;
+}
+
+function createDefaultLegPose(jointLimits = DEFAULT_JOINT_LIMITS) {
+  return buildLegPoseFromJointAngles(DEFAULT_LEG_COMMAND.jointAnglesDeg, calibration, { jointLimits });
 }
 
 async function handleRealtimeCommand(rawCommand, wss) {
@@ -112,10 +116,7 @@ async function handleRealtimeCommand(rawCommand, wss) {
 function createStatus() {
   const legs = {};
   for (const legId of LEG_IDS) {
-    const desired = buildLegPoseFromFoot(DEFAULT_LEG_COMMAND.foot, calibration, {
-      jointLimits: DEFAULT_JOINT_LIMITS,
-      hipYawDeg: DEFAULT_LEG_COMMAND.jointAnglesDeg.hipYaw,
-    });
+    const desired = createDefaultLegPose(DEFAULT_JOINT_LIMITS);
 
     legs[legId] = {
       desired,
@@ -310,6 +311,17 @@ class BridgeState {
     return createFullBodyPoseCommand(this.status.legs);
   }
 
+  buildLegServoCommand(legId) {
+    const servoAngles = this.status.legs[legId]?.desired?.servoAnglesDeg ?? DEFAULT_LEG_COMMAND.servoAnglesDeg;
+    return {
+      type: "set_leg_servo_angles",
+      legId,
+      hipYawServoDeg: servoAngles.hipYaw,
+      thighServoDeg: servoAngles.thigh,
+      calfServoDeg: servoAngles.calf,
+    };
+  }
+
   async forwardCommand(command) {
     validateCommand(command);
     if (command.type === "set_stance") {
@@ -334,6 +346,11 @@ class BridgeState {
       return;
     }
 
+    if (command.type === "set_leg_foot_xy" || command.type === "set_leg_joint_angles") {
+      await this.send(this.buildLegServoCommand(command.legId));
+      return;
+    }
+
     if (command.type === "stop_motion") {
       await this.sendIfConnected({ type: "set_mode", mode: "idle" });
       return;
@@ -353,7 +370,10 @@ class BridgeState {
   async uploadAnimation(clip) {
     const validated = validateClip(clip);
     this.uploadedClips.set(validated.name, validated);
-    for (const frame of createUploadFrames(validated)) {
+    const jointLimitsByLeg = Object.fromEntries(
+      LEG_IDS.map((legId) => [legId, this.status.legs[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS]),
+    );
+    for (const frame of createUploadFrames(validated, { jointLimitsByLeg })) {
       await this.send(frame);
     }
     this.status.activeAnimation = validated.name;

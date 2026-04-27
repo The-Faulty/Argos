@@ -14,6 +14,13 @@ const PHASE_OFFSETS = {
   rear_left: 0.5,
   rear_right: 0,
 };
+const DRIVE_GAIT_EXAGGERATION = 2;
+const DRIVE_FORWARD_STRIDE_MM = 34 * DRIVE_GAIT_EXAGGERATION;
+const DRIVE_STRAFE_STRIDE_MM = 16 * DRIVE_GAIT_EXAGGERATION;
+const DRIVE_FOOT_LIFT_MM = 28 * DRIVE_GAIT_EXAGGERATION;
+const DRIVE_SUPPORT_DIP_MM = 5 * DRIVE_GAIT_EXAGGERATION;
+const DRIVE_YAW_HIP_BIAS_DEG = 12 * DRIVE_GAIT_EXAGGERATION;
+const DRIVE_STRAFE_HIP_YAW_DEG = 22 * DRIVE_GAIT_EXAGGERATION;
 const RIGHT_LEG_IDS = new Set(["front_right", "rear_right"]);
 
 function clamp(value, min, max) {
@@ -51,12 +58,12 @@ export function createMotionStatePatch({
     const cycle = cycleTimeSec > 0 ? ((timeSec / cycleTimeSec) + phaseOffset) % 1 : phaseOffset;
     const swing = cycle < 0.5;
     const phase = swing ? cycle / 0.5 : (cycle - 0.5) / 0.5;
-    const strideX = normalizedDrive.vx * 34 * (stance.strideScale ?? 1);
-    const strideY = normalizedDrive.vy * 16 * (stance.strideScale ?? 1);
-    const liftY = strideMagnitude > 0.01 ? 16 : 0;
-    const rotateBias = (legId.includes("left") ? 1 : -1) * normalizedDrive.yawRate * 12;
+    const strideX = normalizedDrive.vx * DRIVE_FORWARD_STRIDE_MM * (stance.strideScale ?? 1);
+    const strideY = normalizedDrive.vy * DRIVE_STRAFE_STRIDE_MM * (stance.strideScale ?? 1);
+    const liftY = strideMagnitude > 0.01 ? DRIVE_FOOT_LIFT_MM : 0;
+    const rotateBias = (legId.includes("left") ? 1 : -1) * normalizedDrive.yawRate * DRIVE_YAW_HIP_BIAS_DEG;
     const hipYawDeg = clamp(
-      normalizedDrive.vy * 22 + rotateBias + (stance.hipYawBiasDeg ?? 0),
+      normalizedDrive.vy * DRIVE_STRAFE_HIP_YAW_DEG + rotateBias + (stance.hipYawBiasDeg ?? 0),
       DEFAULT_JOINT_LIMITS.hipYawDeg.min,
       DEFAULT_JOINT_LIMITS.hipYawDeg.max,
     );
@@ -67,7 +74,7 @@ export function createMotionStatePatch({
       const phaseWave = Math.sin(phase * Math.PI);
       footX = swing ? (-strideX / 2) + strideX * phase : (strideX / 2) - strideX * phase;
       footX += swing ? strideY * 0.35 * phaseWave : -strideY * 0.2 * phaseWave;
-      footY = swing ? footHeightOffset + phaseWave * liftY : footHeightOffset - 5 * phaseWave;
+      footY = swing ? footHeightOffset + phaseWave * liftY : footHeightOffset - DRIVE_SUPPORT_DIP_MM * phaseWave;
     }
 
     const pose = buildLegPoseFromFoot(
