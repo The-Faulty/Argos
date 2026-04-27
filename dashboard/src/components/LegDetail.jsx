@@ -1,41 +1,19 @@
-// Big SVG leg view — one leg, rendered with the SAME forward-kinematics the
-// Pi server uses to drive the real robot. Earlier this view ran andy-servo's
-// pixel-space bell-crank (kinematics_legacy.js) with a hand-tuned servo
-// neutral; that math closes against slightly different geometry constants
-// than the real IK in argos_kinematics.js, so the SVG could be off by a few
-// degrees at the same [coxa, femur, tibia] — visible at envelope edges as
-// "the SVG and the leg disagree." Switching to the real FK
-// (buildLegPoseFromJointAngles from argos_kinematics.js) means whatever
-// angles the bridge ships to the firmware put the rendered leg in the same
-// place as the physical leg, by construction.
-//
-// Argos is 3-DOF (coxa/femur/tibia) vs the 2-D sagittal view, so:
-//   - Coxa is read from /joint_states and shown as a number in the stats
-//     grid. It is NOT drawn — the sagittal view is a 2-D side projection.
-//   - Femur and tibia drive the bell-crank linkage in _sagittal_fk_state.
-//     The geometry constants come from LEG_GEOMETRY in robot-config.js
-//     (same source the IK reads), so the visualization is automatically
-//     in sync if those constants ever change.
-//
-// Data flow:
-//   1. Read [coxa, femur, tibia] radians from /joint_states for the active
-//      leg (`readLegAnglesRad`).
-//   2. Pass [coxa, femur, tibia] (rad) to buildLegPoseFromJointAngles.
-//      Output geometry is in METERS in the sagittal frame (hip at origin,
-//      +x forward, +y down-along-leg).
-//   3. Scale m → mm and map every geometry point through toCanvasPoint
-//      once; draw segments and dots.
-//   4. Pointer drag on the foot inverts to a sagittal-frame XY (mm) and
-//      forwards as a foot target in direct_foot_xyz mode.
+// Big SVG leg view — one leg, rendered with andy-servo-control's sagittal
+// bell-crank drawing. The real IK still drives commands, but this panel uses
+// the legacy millimeter-space linkage so the large leg view matches the
+// reference full-body pose dashboard visually.
 
 import { useMemo, useRef } from "react";
 import {
-  buildLegPoseFromJointAngles,
   clamp_joint_matrix,
-  fromCanvasPoint,
   leg_explicit_inverse_kinematics,
-  toCanvasPoint,
 } from "../../shared/argos_kinematics.js";
+import {
+  LEGACY_LEG_GEOMETRY,
+  buildLegPoseFromJointAngles,
+  fromCanvasPoint,
+  toCanvasPoint,
+} from "../../shared/kinematics.js";
 import {
   JOINT_NAMES,
   JOINT_ROWS,
@@ -48,42 +26,22 @@ import {
 import { applyServoCal } from "../../shared/servo_cal.js";
 
 const RAD2DEG = 180.0 / Math.PI;
-
-// Real-FK output is in meters; the canvas helpers expect millimeters.
-// Multiply once at the FK→canvas boundary.
-const M_TO_MM = 1000.0;
-const LEG_DETAIL_DRAWING = {
-  ...LEG_DRAWING,
-  scale: 1.25,
-  offset: { x: 210, y: 70 },
-};
-
-function scalePoint(p) {
-  return { x: p.x * M_TO_MM, y: p.y * M_TO_MM };
-}
+const LEGACY_CALF_FROM_TIBIA_OFFSET_DEG = -150.0;
 
 // Seven segments, drawn in the same colors/widths the legacy view used so
 // the visual identity is preserved. Keys reference the geometry names
-// returned by argos_kinematics.buildLegPoseFromJointAngles:
-//   O          — hip / upper-leg pivot (also doubles as servo pivot)
-//   knee       — upper→lower leg elbow
-//   foot       — toe
-//   horn       — end of the servo horn (rotates about O)
-//   bcLeft     — bell-crank arm carrying the long push-rod (Lr2 → rod2)
-//   bcRight    — bell-crank arm carrying the short push-rod from the horn
-//   rod2       — where the long rod attaches above the knee on the lower link
+// returned by kinematics_legacy.solveGeometry.
 const SEGMENTS = [
-  { key: "upper",     from: "O",       to: "knee",    stroke: "#141414", width: 5 }, // femur (thigh)
-  { key: "lower",     from: "knee",    to: "foot",    stroke: "#1d8cff", width: 5 }, // tibia (calf)
-  { key: "bell-a",    from: "O",       to: "bcRight", stroke: "#21a264", width: 4 }, // bell-crank arm (horn-rod side)
-  { key: "bell-b",    from: "O",       to: "bcLeft",  stroke: "#21a264", width: 4 }, // bell-crank arm (long-rod side)
-  { key: "horn",      from: "O",       to: "horn",    stroke: "#ff5232", width: 4 }, // servo horn
-  { key: "linkShort", from: "horn",    to: "bcRight", stroke: "#ef8a17", width: 4 }, // rod 1: horn → bell-crank
-  { key: "linkLong",  from: "bcLeft",  to: "rod2",    stroke: "#6f4cff", width: 4 }, // rod 2: bell-crank → calf attach
+  { key: "upper",     from: "hip",          to: "knee",         stroke: "#141414", width: 5 },
+  { key: "lower",     from: "knee",         to: "foot",         stroke: "#1d8cff", width: 5 },
+  { key: "bell-a",    from: "hip",          to: "bellArmA",     stroke: "#21a264", width: 4 },
+  { key: "bell-b",    from: "hip",          to: "bellArmB",     stroke: "#21a264", width: 4 },
+  { key: "horn",      from: "servoPivot",   to: "servoHornEnd", stroke: "#ff5232", width: 4 },
+  { key: "linkShort", from: "servoHornEnd", to: "bellArmA",     stroke: "#ef8a17", width: 4 },
+  { key: "linkLong",  from: "bellArmB",     to: "calfAttach",   stroke: "#6f4cff", width: 4 },
 ];
 
-// The 6 non-foot dots. Foot is rendered separately (bigger, blue).
-const DOT_KEYS = ["O", "knee", "horn", "bcLeft", "bcRight", "rod2"];
+const DOT_KEYS = ["hip", "knee", "servoPivot", "servoHornEnd", "bellArmA", "bellArmB", "calfAttach"];
 
 export default function LegDetail({
   activeLeg,
@@ -110,17 +68,14 @@ export default function LegDetail({
 
   const pose = useMemo(() => {
     try {
-      // Real FK: identical to the chain the gait planner runs through IK
-      // (same _sagittal_fk_state in argos_kinematics.js). Output geometry
-      // is in METERS in the sagittal frame, with the hip at (0, 0). The
-      // foot stat below stays in millimeters for operator readability.
-      const result = buildLegPoseFromJointAngles(effectiveAngles, { legId: activeLeg });
-      if (!result?.geometry) return null;
+      const result = buildLegPoseFromJointAngles(toLegacyJointPose(effectiveAngles));
+      const geometry = result.geometry;
       return {
-        geometry: result.geometry,
-        // Foot stat is shown in mm so it stays comparable with the legacy
-        // chip readout (and the operator's mental model of leg length).
-        foot: { x: result.foot.x * M_TO_MM, y: result.foot.y * M_TO_MM },
+        geometry,
+        foot: {
+          x: geometry.foot.x - LEGACY_LEG_GEOMETRY.footOriginOffset.x,
+          y: geometry.foot.y - LEGACY_LEG_GEOMETRY.footOriginOffset.y,
+        },
         reachable: result.reachable,
       };
     } catch {
@@ -128,20 +83,19 @@ export default function LegDetail({
     }
   }, [effectiveAngles, activeLeg]);
 
-  // Pre-map every geometry point to canvas pixels once per render. The real
-  // FK leg is taller than the old legacy preview, so this panel uses a
-  // slightly different transform to keep the hip, rods, and foot in frame.
+  // Pre-map every legacy millimeter-space geometry point once per render.
   const points = useMemo(() => {
     if (!pose?.geometry) return null;
-    const p = (pt) => toCanvasPoint(scalePoint(pt), LEG_DETAIL_DRAWING);
+    const p = (pt) => toCanvasPoint(pt, LEG_DRAWING);
     return {
-      O:       p(pose.geometry.O),
-      knee:    p(pose.geometry.knee),
-      foot:    p(pose.geometry.foot),
-      horn:    p(pose.geometry.horn),
-      bcLeft:  p(pose.geometry.bcLeft),
-      bcRight: p(pose.geometry.bcRight),
-      rod2:    p(pose.geometry.rod2),
+      hip:          p(pose.geometry.hip),
+      knee:         p(pose.geometry.knee),
+      foot:         p(pose.geometry.foot),
+      servoPivot:   p(pose.geometry.servoPivot),
+      servoHornEnd: p(pose.geometry.servoHornEnd),
+      bellArmA:     p(pose.geometry.bellArmA),
+      bellArmB:     p(pose.geometry.bellArmB),
+      calfAttach:   p(pose.geometry.calfAttach),
     };
   }, [pose]);
 
@@ -160,7 +114,7 @@ export default function LegDetail({
   // kinematic frame (+x forward).
   const mirrorX = activeLeg === "FR" || activeLeg === "RR";
   const mirrorTransform = mirrorX
-    ? `translate(${LEG_DETAIL_DRAWING.stageWidth} 0) scale(-1 1)`
+    ? `translate(${LEG_DRAWING.stageWidth} 0) scale(-1 1)`
     : undefined;
 
   function onPointerDown(event) {
@@ -189,16 +143,13 @@ export default function LegDetail({
     const svg = svgRef.current;
     if (!svg) return;
     const rect = svg.getBoundingClientRect();
-    let px = ((event.clientX - rect.left) / rect.width) * LEG_DETAIL_DRAWING.stageWidth;
-    const py = ((event.clientY - rect.top) / rect.height) * LEG_DETAIL_DRAWING.stageHeight;
+    let px = ((event.clientX - rect.left) / rect.width) * LEG_DRAWING.stageWidth;
+    const py = ((event.clientY - rect.top) / rect.height) * LEG_DRAWING.stageHeight;
     // Un-flip the pointer for mirrored legs so the IK target lands in the
     // leg's un-mirrored kinematic frame. Without this, dragging visually
     // right on a mirrored FR/RR would send the foot to the wrong X value.
-    if (mirrorX) px = LEG_DETAIL_DRAWING.stageWidth - px;
-    // fromCanvasPoint returns sagittal-frame millimeters in the real-FK
-    // convention (+x forward, +y down-along-leg). The hip is at the origin
-    // so absMm is already hip-relative.
-    const absMm = fromCanvasPoint({ x: px, y: py }, LEG_DETAIL_DRAWING);
+    if (mirrorX) px = LEG_DRAWING.stageWidth - px;
+    const absMm = fromCanvasPoint({ x: px, y: py }, LEG_DRAWING);
 
     // Real 3-DOF IK using the actual leg geometry. Sagittal frame (mm) →
     // body frame (m) is straightforward because the rendered hip is the
@@ -207,8 +158,8 @@ export default function LegDetail({
     // hip-relative lateral so the abductor doesn't snap mid-drag — that
     // value is computed from the current coxa via the same hip-abductor
     // geometry the IK uses (`L1_HIP * cos(theta1)`).
-    const xBody = absMm.x / M_TO_MM;
-    const zBody = -absMm.y / M_TO_MM;
+    const xBody = absMm.x / 1000.0;
+    const zBody = -absMm.y / 1000.0;
     const legIndex = LEG_IDS.indexOf(activeLeg);
     if (legIndex < 0) return;
     const isRight = legIndex === 0 || legIndex === 2; // FR=0, RR=2
@@ -243,7 +194,7 @@ export default function LegDetail({
       <svg
         ref={svgRef}
         className="leg-detail__svg"
-        viewBox={`0 0 ${LEG_DETAIL_DRAWING.stageWidth} ${LEG_DETAIL_DRAWING.stageHeight}`}
+        viewBox={`0 0 ${LEG_DRAWING.stageWidth} ${LEG_DRAWING.stageHeight}`}
         role="img"
         aria-label={`Sagittal view of leg ${activeLeg}`}
         onPointerDown={onPointerDown}
@@ -283,13 +234,13 @@ export default function LegDetail({
             <FootChip
               pose={pose}
               point={{
-                x: mirrorX ? LEG_DETAIL_DRAWING.stageWidth - points.foot.x : points.foot.x,
+                x: mirrorX ? LEG_DRAWING.stageWidth - points.foot.x : points.foot.x,
                 y: points.foot.y,
               }}
             />
           </>
         ) : (
-          <text x={LEG_DETAIL_DRAWING.stageWidth / 2} y={LEG_DETAIL_DRAWING.stageHeight / 2}
+          <text x={LEG_DRAWING.stageWidth / 2} y={LEG_DRAWING.stageHeight / 2}
                 textAnchor="middle" className="leg-detail__err">
             Unreachable pose
           </text>
@@ -304,19 +255,15 @@ export default function LegDetail({
 // ─── Subcomponents ───────────────────────────────────────────────────────
 
 function StageGrid() {
-  // Light horizontal baseline + vertical body-line so the pose has some
-  // visual context. Ratios match andy-servo's feel without copying any of
-  // their dashed-line gymnastics wholesale.
-  const mid = LEG_DETAIL_DRAWING.stageHeight * 0.75;
   return (
     <g>
       <line
-        x1={10} x2={LEG_DETAIL_DRAWING.stageWidth - 10} y1={mid} y2={mid}
+        x1={0} x2={LEG_DRAWING.stageWidth} y1={LEG_DRAWING.offset.y} y2={LEG_DRAWING.offset.y}
         stroke="rgba(0,0,0,0.08)" strokeDasharray="4 4"
       />
       <line
-        x1={LEG_DETAIL_DRAWING.offset.x} x2={LEG_DETAIL_DRAWING.offset.x} y1={10}
-        y2={LEG_DETAIL_DRAWING.stageHeight - 10}
+        x1={LEG_DRAWING.offset.x} x2={LEG_DRAWING.offset.x} y1={0}
+        y2={LEG_DRAWING.stageHeight}
         stroke="rgba(0,0,0,0.05)" strokeDasharray="4 4"
       />
     </g>
@@ -343,7 +290,7 @@ function FootChip({ pose, point }) {
   const { x = 0, y = 0 } = pose.foot ?? {};
   const chipW = 110;
   const chipH = 30;
-  const chipX = Math.min(LEG_DETAIL_DRAWING.stageWidth - chipW - 4, point.x + 12);
+  const chipX = Math.min(LEG_DRAWING.stageWidth - chipW - 4, point.x + 12);
   const chipY = Math.max(4, point.y - chipH - 8);
   return (
     <g transform={`translate(${chipX}, ${chipY})`}>
@@ -434,6 +381,15 @@ function fmt(n, digits) {
 
 function canvasSegmentPath(a, b) {
   return `M ${a.x} ${a.y} L ${b.x} ${b.y}`;
+}
+
+function toLegacyJointPose(angles) {
+  const femurDeg = (Number(angles?.[1]) || 0) * RAD2DEG;
+  const tibiaDeg = (Number(angles?.[2]) || 0) * RAD2DEG;
+  return {
+    thigh: femurDeg,
+    calf: tibiaDeg + LEGACY_CALF_FROM_TIBIA_OFFSET_DEG,
+  };
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────

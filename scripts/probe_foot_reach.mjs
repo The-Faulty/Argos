@@ -28,13 +28,13 @@ import {
 // Probe at the gait's actual neutral so the resulting reach window matches
 // where clampFootInReach actually needs to clamp.
 const GAIT_STANCE = {
-  FR: [ 0.1000, -0.0733, -0.1950],
-  FL: [ 0.1000,  0.0733, -0.1950],
-  RR: [-0.1233, -0.0733, -0.1950],
-  RL: [-0.1233,  0.0733, -0.1950],
+  FR: [ 0.1135, -0.0733, -0.1900],
+  FL: [ 0.1135,  0.0733, -0.1900],
+  RR: [-0.1100, -0.0733, -0.1900],
+  RL: [-0.1100,  0.0733, -0.1900],
 };
 
-const STANCE_Z = -0.1950;                // matches gait_planner STAND_FOOT_Z
+const STANCE_Z = -0.1900;                // matches gait_planner STAND_FOOT_Z
 const DEFAULT_LIFT_M = 0.018;            // matches gait_planner z_clearance
 
 const args = parseArgs(process.argv.slice(2));
@@ -66,7 +66,7 @@ for (const leg of LEG_IDS) {
 console.log("};");
 
 console.log("");
-console.log(`export const DEFAULT_FOOT_REACH_X_LIFTED = {  // swing-peak z = ${(STANCE_Z + liftM).toFixed(3)} m`);
+console.log(`export const DEFAULT_FOOT_REACH_X_LIFTED = {  // swing-peak z = ${(stanceZ + liftM).toFixed(3)} m`);
 for (const leg of LEG_IDS) {
   const [lo, hi] = liftedWindows[leg];
   console.log(`  ${leg}: [${lo.toFixed(3)}, ${hi.toFixed(3)}],`);

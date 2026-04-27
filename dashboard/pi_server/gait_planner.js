@@ -53,28 +53,33 @@ const DEG2RAD = Math.PI / 180.0;
 
 // Stand / extend pose joints. We bypass IK for these because the abductor's
 // natural lateral offset means foot.y = hip.y can't be reached with coxa = 0,
-// and the femur joint limits ([-50°, 0°]) make the IK reach window only
-// ~75 mm wide at the historical body height. Emitting joints directly puts
-// coxa at exactly 0 (servo 90°) and lets us pick body height by choosing
-// femur/tibia, with no risk of the planner silently holding stale output
-// because IK refused a borderline target.
-const STAND_JOINTS_RAD  = [0, -28.84 * DEG2RAD,  15.80 * DEG2RAD];
+// and emitting joints directly puts coxa at exactly 0 (servo 90°) so STAND
+// and a zero-twist TROT/CRAWL look identical. STAND_JOINTS_RAD must match
+// the IK-FK output at the gait neutral foot — STAND_FRONT_FOOT_X /
+// STAND_REAR_FOOT_X / STAND_FOOT_Y / STAND_FOOT_Z below — otherwise switching
+// from stand → trot snaps every leg to a different pose.
+//
+// Re-derive with `node scripts/probe_neutral_pose.mjs` after any stance
+// change. Current values: front foot at (0.1135, ±0.0733, -0.190), rear at
+// (-0.110, ±0.0733, -0.190).
+const STAND_JOINTS_RAD  = [0, -28.08 * DEG2RAD,  28.98 * DEG2RAD];
 const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 
 // Stride amplitude clamp (meters, peak displacement either side of base).
-// Each leg's stance reach window (DEFAULT_FOOT_REACH_X) is ~72 mm wide;
-// front-leg base.x = 0.100 sits 24 mm above the window's lower edge
-// (0.076), so stance-phase backward sweeps past 24 mm get pinned by
-// clampFootInReach. 0.060 here trades a slightly larger stance-edge pin
-// (and the resulting swing→stance handoff jerk) for a visibly bigger
-// per-step swing arc — the user-visible "stride length" the operator
-// sees while the robot walks.
+// At the current body height (STAND_FOOT_Z = -0.190 m) and re-centered
+// neutral feet (front 0.1135, rear -0.110), each leg's stance reach
+// window (DEFAULT_FOOT_REACH_X) is ~115 mm wide. base.x sits at the
+// window center, so the per-side stride budget is the window half-width
+// (~57 mm) minus a 2 mm safety margin = 0.055 m. At this value the
+// stance-phase foot reaches both edges of the reach window without
+// triggering clampFootInReach — no pin, no swing→stance handoff jerk.
 //
-// If you want a longer effective stride without the pinning, shift
-// STAND_FRONT_FOOT_X / STAND_REAR_FOOT_X to their reach-window centers
-// (0.112 / -0.111). That re-symmetrizes the stride budget but shifts the
-// standing pose by ~12 mm — a deliberate follow-up, not rolled in here.
-const MAX_STRIDE_X = 0.060;
+// To raise this further you'd need a wider stance window, which means
+// raising body height further (lower |STAND_FOOT_Z|), which in turn
+// shrinks the lifted reach window. The current configuration is tuned
+// at the boundary where stance window is widest while keeping the
+// lifted window wide enough to contain the swing trajectory.
+const MAX_STRIDE_X = 0.055;
 const MAX_STRIDE_Y = 0.025;
 
 // Gait profiles. Each leg gets one swing window per cycle; the rest is
@@ -356,19 +361,20 @@ function makeDefaultConfig() {
     swing_time_ms: GAIT_TUNABLE_PARAMS.swing_time_ms.default,
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
-    // Swing-foot vertical lift. STAND_FOOT_Z = -0.195 m leaves only about
-    // 23 mm of IK-safe lift at the neutral swing midpoint — beyond ~24 mm
-    // the lifted reach window collapses (the foot can only reach far-forward
-    // x at peak swing height). To make that lift visible on the real robot
-    // without asking for unreachable targets, the gait uses a broad lift
-    // profile (see swingLiftProfile) instead of a narrow sine spike. The
-    // foot stays near peak clearance for more of the swing, which also
-    // helps overcome servo/linkage backlash.
+    // Swing-foot vertical lift. At the current body height (STAND_FOOT_Z =
+    // -0.190 m), the absolute IK-feasible swing peak is z ≈ -0.172 m, so
+    // z_clearance is bounded above by ~0.018 m — beyond that the lifted
+    // reach window collapses (the foot can only reach far-forward x at
+    // peak swing height). The gait uses a broad lift profile
+    // (swingLiftProfile) instead of a narrow sine spike so the foot stays
+    // near peak clearance for more of the swing, which helps overcome
+    // servo/linkage backlash.
     //
     // If you change this value, also re-probe DEFAULT_FOOT_REACH_X_LIFTED
-    // in robot-config.js with `node scripts/probe_foot_reach.mjs --lift-mm
-    // <new_z_clearance_mm>` and update both numbers together.
-    z_clearance: 0.023,
+    // in robot-config.js with `node scripts/probe_foot_reach.mjs --z-mm
+    // <stance_z_mm> --lift-mm <new_z_clearance_mm>` and update both
+    // numbers together.
+    z_clearance: 0.018,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,
@@ -380,17 +386,20 @@ function makeDefaultConfig() {
   };
 }
 
-// Foot positions corresponding to STAND_JOINTS_RAD = [0, -28.84°, 15.80°]
-// computed by forward-kinematic-ing the linkage (coxa pinned to 0). The old
-// default stance had feet at ±0.1106 m laterally, but coxa=0 can't reach
-// that — IK was forced to splay legs out by ~+11° on every solve, which is
-// why trot looked visibly "kicked out" compared to the stand pose. Anchoring
-// to these positions makes IK produce coxa≈0 at neutral, so STAND and a
-// zero-twist TROT look identical.
-const STAND_FRONT_FOOT_X =  0.1000;
-const STAND_REAR_FOOT_X  = -0.1233;
+// Foot positions corresponding to STAND_JOINTS_RAD = [0, -28.08°, 28.98°]
+// computed by forward-kinematic-ing the linkage (coxa pinned to 0). These
+// are positioned at the per-leg stance reach window centers at body height
+// -0.190 m, so MAX_STRIDE_X can use the full half-width without triggering
+// clampFootInReach. Lateral y stays at 0.0733 — coxa=0 can't reach the old
+// 0.1106 m without splaying ~11°.
+//
+// The body sits 5 mm higher than the historical -0.195 m to widen the
+// stance reach window from 72 mm to 115 mm; the cost is 5 mm less
+// available z_clearance (the lifted window collapses earlier).
+const STAND_FRONT_FOOT_X =  0.1135;
+const STAND_REAR_FOOT_X  = -0.1100;
 const STAND_FOOT_Y       =  0.0733;
-const STAND_FOOT_Z       = -0.1950;
+const STAND_FOOT_Z       = -0.1900;
 
 function makeStanceFeet(cfg, zShift = 0) {
   // delta_x_mm is interpreted as a fore/aft offset on top of the STAND
