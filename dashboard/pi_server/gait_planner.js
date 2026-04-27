@@ -62,22 +62,19 @@ const STAND_JOINTS_RAD  = [0, -28.84 * DEG2RAD,  15.80 * DEG2RAD];
 const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 
 // Stride amplitude clamp (meters, peak displacement either side of base).
-// Each leg's stance reach window (DEFAULT_FOOT_REACH_X) is about 72 mm
-// wide; the gait base.x sits ~12 mm forward of the window center for the
-// front legs (0.100 vs window-center 0.112), so the binding constraint is
-// stride/2 ≤ base.x − stance_lo = 0.100 − 0.076 = 0.024 m. 0.045 leaves
-// ~3 mm of margin before clampFootInReach starts pinning the trailing
-// stance foot to the reach edge — and that pinning is exactly what was
-// producing the visible jerk on FR at the swing→stance handoff (last
-// stance tick stuck at 0.076, first swing tick released to 0.070, 6 mm
-// instantaneous jump on every cycle).
+// Each leg's stance reach window (DEFAULT_FOOT_REACH_X) is ~72 mm wide;
+// front-leg base.x = 0.100 sits 24 mm above the window's lower edge
+// (0.076), so stance-phase backward sweeps past 24 mm get pinned by
+// clampFootInReach. 0.060 here trades a slightly larger stance-edge pin
+// (and the resulting swing→stance handoff jerk) for a visibly bigger
+// per-step swing arc — the user-visible "stride length" the operator
+// sees while the robot walks.
 //
-// If you want a longer effective stride, shift STAND_FRONT_FOOT_X /
-// STAND_REAR_FOOT_X to their reach-window centers (0.112 / -0.111) — that
-// re-symmetrizes the stride budget and lets MAX_STRIDE_X go back up to
-// ~0.060 without the discontinuity. Costs a 12 mm shift of the standing
-// pose, so left as a deliberate follow-up rather than rolled in here.
-const MAX_STRIDE_X = 0.045;
+// If you want a longer effective stride without the pinning, shift
+// STAND_FRONT_FOOT_X / STAND_REAR_FOOT_X to their reach-window centers
+// (0.112 / -0.111). That re-symmetrizes the stride budget but shifts the
+// standing pose by ~12 mm — a deliberate follow-up, not rolled in here.
+const MAX_STRIDE_X = 0.060;
 const MAX_STRIDE_Y = 0.025;
 
 // Gait profiles. Each leg gets one swing window per cycle; the rest is
@@ -360,16 +357,18 @@ function makeDefaultConfig() {
     rotate_rate_max: GAIT_TUNABLE_PARAMS.rotate_rate_max.default,
     default_z_ref: GAIT_TUNABLE_PARAMS.default_z_ref_mm.default / 1000,
     // Swing-foot vertical lift. STAND_FOOT_Z = -0.195 m leaves only about
-    // 20 mm of IK-safe lift at the neutral swing midpoint. To make that lift
-    // visible on the real robot without asking for unreachable targets, the
-    // gait uses a broad lift profile (see swingLiftProfile) instead of a
-    // narrow sine spike. The foot stays near peak clearance for more of the
-    // swing, which also helps overcome servo/linkage backlash.
+    // 23 mm of IK-safe lift at the neutral swing midpoint — beyond ~24 mm
+    // the lifted reach window collapses (the foot can only reach far-forward
+    // x at peak swing height). To make that lift visible on the real robot
+    // without asking for unreachable targets, the gait uses a broad lift
+    // profile (see swingLiftProfile) instead of a narrow sine spike. The
+    // foot stays near peak clearance for more of the swing, which also
+    // helps overcome servo/linkage backlash.
     //
     // If you change this value, also re-probe DEFAULT_FOOT_REACH_X_LIFTED
     // in robot-config.js with `node scripts/probe_foot_reach.mjs --lift-mm
     // <new_z_clearance_mm>` and update both numbers together.
-    z_clearance: 0.020,
+    z_clearance: 0.023,
     stabilization_roll_gain:  STABILIZER_PARAM_BOUNDS.stabilization_roll_gain.default,
     stabilization_pitch_gain: STABILIZER_PARAM_BOUNDS.stabilization_pitch_gain.default,
     stabilization_max_correction_rad: STABILIZER_PARAM_BOUNDS.stabilization_max_correction_rad.default,

@@ -92,13 +92,13 @@ test("coupled femur/tibia samples match measured safe envelope", () => {
 });
 
 test("walking and rotate defaults are tuned for controlled motion", () => {
-  // MAX_LIN_VEL = 0.18 m/s saturates the trot stride near full deflection
-  // (with MAX_STRIDE_X = 0.045 m and ~427 ms stance). Was 0.50 — at that
-  // speed the joystick became binary "off / full speed" past the deadzone
-  // because stride hit the cap at <50% deflection. Changing this also
+  // MAX_LIN_VEL is the velocity the planner sees on a full-deflection arrow
+  // hold. With MAX_STRIDE_X = 0.060 m and ~427 ms stance, 0.25 m/s yields
+  // ~0.107 m peak-to-peak stride, exercising the new cap (0.120 m
+  // peak-to-peak) without saturating off the bottom. Changing this also
   // requires re-checking that full-stick stride still fits inside
   // DEFAULT_FOOT_REACH_X without invoking the per-leg blend-back.
-  assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.18);
+  assert.equal(JOYSTICK_SCALE.MAX_LIN_VEL, 0.25);
   assert.equal(JOYSTICK_SCALE.MAX_ANG_VEL, 1.4);
   assert.equal(GAIT_TUNABLE_PARAMS.swing_time_ms.default, 220);
   assert.deepEqual(DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC, {

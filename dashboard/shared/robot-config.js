@@ -166,10 +166,10 @@ export const DEFAULT_FOOT_REACH_X = {
 // Re-probe with `node scripts/probe_foot_reach.mjs --lift-mm <z_clearance_mm>`
 // after any z_clearance / body-height change.
 export const DEFAULT_FOOT_REACH_X_LIFTED = {
-  FR: [ 0.028,  0.198],
-  FL: [ 0.028,  0.198],
-  RR: [-0.196, -0.025],
-  RL: [-0.196, -0.025],
+  FR: [ 0.018,  0.198],
+  FL: [ 0.018,  0.198],
+  RR: [-0.206, -0.025],
+  RL: [-0.206, -0.025],
 };
 
 // ─── Servo channel map (mirrors firmware s_servo_cal) ────────────────────
@@ -352,13 +352,15 @@ export const GAIT_TUNABLE_PARAMS = {
 // below it sends zero so a slightly off-center stick doesn't dribble
 // commands.
 //
-// MAX_LIN_VEL was 0.50 — at that speed the trot stride hits MAX_STRIDE_X
-// (0.045 m) at less than half-deflection, so the joystick was effectively
-// binary "off / full speed" past the deadzone. 0.18 m/s puts the saturation
-// point near full deflection, giving the operator a usable control range
-// across the whole stick travel and matching the slower-by-default gait.
+// MAX_LIN_VEL was 0.50, then 0.18 to put the saturation point near full
+// deflection on the analog joystick. Now that the dashboard uses arrow
+// buttons (binary full-deflection input), the value sets the velocity the
+// planner sees on every keypress, which drives stride amplitude via
+// stride = velocity × stance_time. 0.25 m/s × 0.426 s stance ≈ 0.107 m
+// peak-to-peak stride, which exercises the new MAX_STRIDE_X = 0.060
+// (clamps at 0.120 m peak-to-peak) without saturating off the bottom.
 export const JOYSTICK_SCALE = {
-  MAX_LIN_VEL: 0.18, // m/s at full deflection (was 0.50; lower = more controlled)
+  MAX_LIN_VEL: 0.25, // m/s at full deflection (arrow-button hold)
   MAX_ANG_VEL: 1.4,  // rad/s; reserved for yaw stick
-  DEADZONE: 0.08,    // normalized fraction
+  DEADZONE: 0.08,    // normalized fraction (unused for arrow buttons)
 };
