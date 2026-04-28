@@ -1949,8 +1949,27 @@ static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config)
     updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, false);
 }
 
+// Front-right hip is mechanically/electrically locked out — anything that
+// tries to command it (gait planner, dashboard direct command, animation,
+// builtin walk) gets overridden here to a fixed 90°. Re-asserted EVERY
+// tick before smoothServoUpdate runs, and desiredServoAngles.hip is
+// pinned so the dashboard panel reflects 90° too. Flip FR_HIP_LOCKED
+// false to release.
+static const bool  FR_HIP_LOCKED      = true;
+static const float FR_HIP_LOCK_DEG    = 90.0f;
+static const int   FR_LEG_INDEX       = 1; // matches LEG_CONFIGS[1] = "front_right"
+
 static void robotLegUpdate(RobotLegState *leg)
 {
+    if (FR_HIP_LOCKED && leg == &g_legs[FR_LEG_INDEX])
+    {
+        leg->hip.targetDeg     = FR_HIP_LOCK_DEG;
+        leg->hip.startDeg      = FR_HIP_LOCK_DEG;
+        leg->hip.estimatedDeg  = FR_HIP_LOCK_DEG;
+        leg->hip.moving        = false;
+        leg->hip.moveDurationUs = 0;
+        leg->desiredServoAngles.hip = FR_HIP_LOCK_DEG;
+    }
     smoothServoUpdate(&leg->hip);
     smoothServoUpdate(&leg->thigh);
     smoothServoUpdate(&leg->calf);
