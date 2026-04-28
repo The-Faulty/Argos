@@ -69,26 +69,40 @@ class RealSenseWorker:
             LOG(self.error)
             return
 
+        def make_config(include_imu: bool):
+            cfg = rs.config()
+            cfg.enable_stream(rs.stream.color, CAM_W, CAM_H, rs.format.bgr8, CAM_FPS)
+            cfg.enable_stream(rs.stream.depth, CAM_W, CAM_H, rs.format.z16, CAM_FPS)
+            if include_imu:
+                cfg.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 250)
+                cfg.enable_stream(rs.stream.gyro,  rs.format.motion_xyz32f, 200)
+            return cfg
+
         pipeline = rs.pipeline()
-        cfg = rs.config()
-        cfg.enable_stream(rs.stream.color, CAM_W, CAM_H, rs.format.bgr8, CAM_FPS)
-        cfg.enable_stream(rs.stream.depth, CAM_W, CAM_H, rs.format.z16, CAM_FPS)
-        # IMU streams. D435i / D455 only — D435 (no i) raises here.
+        # IMU streams. D435i / D455 only. Some devices accept the config call
+        # but fail at pipeline.start(), so retry without IMU before giving up.
+        has_imu = True
         try:
-            cfg.enable_stream(rs.stream.accel, rs.format.motion_xyz32f, 250)
-            cfg.enable_stream(rs.stream.gyro,  rs.format.motion_xyz32f, 200)
-            has_imu = True
-        except Exception:
+            cfg = make_config(include_imu=True)
+            profile = pipeline.start(cfg)
+        except Exception as imu_start_error:
+            LOG(f"RealSense IMU not available, retrying color/depth only: {imu_start_error}")
             has_imu = False
-            LOG("RealSense IMU not available (D435 without 'i'?)")
+            try:
+                pipeline = rs.pipeline()
+                cfg = make_config(include_imu=False)
+                profile = pipeline.start(cfg)
+            except Exception as e:
+                self.error = f"realsense start failed: {e}"
+                LOG(self.error)
+                return
 
         try:
-            profile = pipeline.start(cfg)
             depth_sensor = profile.get_device().first_depth_sensor()
             depth_scale = float(depth_sensor.get_depth_scale())
             align = rs.align(rs.stream.color)
         except Exception as e:
-            self.error = f"realsense start failed: {e}"
+            self.error = f"realsense depth init failed: {e}"
             LOG(self.error)
             return
 
