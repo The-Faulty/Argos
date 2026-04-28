@@ -321,16 +321,28 @@ class ThermalWorker:
             LOG(self.error)
             return
 
+        # I2C clock + refresh rate are tunable from env. Defaults are
+        # conservative (400 kHz / 4 Hz) because the prior 800 kHz / 8 Hz combo
+        # produced "Too many retries" on Pi installs with stock pull-ups and
+        # ~10 cm jumper wires. Bump back up only if your wiring is short and
+        # well-pulled.
+        i2c_hz = int(os.environ.get("ARGOS_THERMAL_I2C_HZ", "400000"))
+        rate_hz = int(os.environ.get("ARGOS_THERMAL_RATE_HZ", "4"))
+        rate_attr = {
+            1: "REFRESH_1_HZ", 2: "REFRESH_2_HZ", 4: "REFRESH_4_HZ",
+            8: "REFRESH_8_HZ", 16: "REFRESH_16_HZ", 32: "REFRESH_32_HZ",
+            64: "REFRESH_64_HZ",
+        }.get(rate_hz, "REFRESH_4_HZ")
         try:
-            i2c = busio.I2C(board.SCL, board.SDA, frequency=800_000)
+            i2c = busio.I2C(board.SCL, board.SDA, frequency=i2c_hz)
             mlx = adafruit_mlx90640.MLX90640(i2c)
-            mlx.refresh_rate = adafruit_mlx90640.RefreshRate.REFRESH_8_HZ
+            mlx.refresh_rate = getattr(adafruit_mlx90640.RefreshRate, rate_attr)
         except Exception as e:
             self.error = f"mlx90640 init failed: {e}"
             LOG(self.error)
             return
 
-        LOG("MLX90640 started @ 8 Hz")
+        LOG(f"MLX90640 started (i2c={i2c_hz/1000:.0f} kHz, refresh={rate_hz} Hz)")
         frame = np.zeros(32 * 24, dtype=np.float32)
         while self.running:
             try:
