@@ -738,12 +738,39 @@ label.checkbox input { accent-color: var(--accent); }
   margin: 4px 0;
   letter-spacing: -0.01em;
 }
+.gas-panel__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 8px 0 10px;
+}
+.gas-panel__metrics div {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+.gas-panel__metrics dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
+}
+.gas-panel__metrics dd {
+  margin: 2px 0 0;
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
 .gas-panel.is-alert {
   background: #fff;
   border-color: var(--danger);
   outline: 1px solid var(--danger);
 }
 .gas-panel__alert { color: var(--danger); font-weight: 600; text-align: center; }
+@media (max-width: 700px) {
+  .gas-panel__metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 /* ─── Stance / animation / recorder ────────────────────────────────── */
 

@@ -306,10 +306,21 @@ export class SerialBridge extends EventEmitter {
       position_servo_deg: positionDeg,
     });
 
-    if (Number.isFinite(dashState.o3Ppb)) {
+    const gas = dashState.gas || {};
+    const o3Ppb = Number.isFinite(gas.ppb) ? gas.ppb : dashState.o3Ppb;
+    if (Number.isFinite(o3Ppb)) {
       // The "gas" event payload retains shape `{data: number}` for back-compat
       // with GasPanel; the units are now ppb of O3 rather than raw ADC counts.
-      this.emit("gas", { data: dashState.o3Ppb, units: "ppb", species: "o3" });
+      this.emit("gas", {
+        data: o3Ppb,
+        units: "ppb",
+        species: gas.species || "o3",
+        raw: gas.raw,
+        ppm: gas.ppm,
+        ppb: o3Ppb,
+        mg_m3: gas.mgM3,
+        ug_m3: gas.ugM3,
+      });
     }
 
     // IMU now arrives on its own {"type":"imu",...} channel at ~50 Hz —
@@ -477,6 +488,7 @@ function translateState(fw) {
     servosReleased: fw.servosReleased,
     servoUpdateRateHz: fw.servoUpdateRateHz ?? DEFAULT_SERVO_UPDATE_RATE_HZ,
     o3Ppb: fw.o3Ppb,
+    gas: fw.gas,
     imuPresent: fw.imuPresent === true,
     firmwareMs: fw.firmwareMs,
     legs,

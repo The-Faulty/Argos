@@ -327,19 +327,34 @@ static const float MQ131_CURVE_A           = 10.0f;       // ppb at Rs/R0 = 1
 static const float MQ131_CURVE_B           = -2.51f;      // log-log slope
 static const float MQ131_ADC_VREF_V        = 3.3f;        // classic ESP32 default
 static const int   MQ131_ADC_MAX_COUNTS    = 4095;        // 12-bit ADC
+static const float O3_MG_M3_PER_PPM        = 48.0f / 24.45f;
 
-static float mq131GetO3Ppb(void) {
+typedef struct {
+    int raw;
+    float ppm;
+    float ppb;
+    float mgM3;
+    float ugM3;
+} GasReading;
+
+static GasReading mq131ReadO3(void) {
+    GasReading out = {0, 0.0f, 0.0f, 0.0f, 0.0f};
     int raw = analogRead(GAS_ADC_PIN);
-    if (raw <= 0) return 0.0f;
+    out.raw = raw;
+    if (raw <= 0) return out;
     float vPin = ((float)raw / (float)MQ131_ADC_MAX_COUNTS) * MQ131_ADC_VREF_V;
     float vA0  = vPin * MQ131_DIVIDER_RATIO;
-    if (vA0 < 0.01f || vA0 >= MQ131_VCC_V) return 0.0f;
+    if (vA0 < 0.01f || vA0 >= MQ131_VCC_V) return out;
     float rsKOhms = MQ131_RL_KOHMS * (MQ131_VCC_V - vA0) / vA0;
     float ratio   = rsKOhms / MQ131_R0_KOHMS;
-    if (ratio <= 0.0f) return 0.0f;
+    if (ratio <= 0.0f) return out;
     float ppb = MQ131_CURVE_A * powf(ratio, MQ131_CURVE_B);
-    if (!isfinite(ppb) || ppb < 0.0f) return 0.0f;
-    return ppb;
+    if (!isfinite(ppb) || ppb < 0.0f) return out;
+    out.ppb = ppb;
+    out.ppm = ppb / 1000.0f;
+    out.mgM3 = out.ppm * O3_MG_M3_PER_PPM;
+    out.ugM3 = out.mgM3 * 1000.0f;
+    return out;
 }
 
 // ─── LSM9DS0 IMU (LSM303D accel+mag + L3GD20H gyro) ──────────────────────
@@ -1790,6 +1805,7 @@ static void sendStateMessage(const char *typeName) {
     static char buf[3584];
     int pos = 0;
     const int cap = (int)sizeof(buf);
+    GasReading gas = mq131ReadO3();
 
     BUF_PRINTF(buf, cap, pos,
                "{\"type\":\"%s\",\"payload\":{\"mode\":\"%s\",\"activeAnimation\":\"",
@@ -1801,12 +1817,15 @@ static void sendStateMessage(const char *typeName) {
     // include "imuPresent" as a one-bit availability hint for the dashboard
     // panel.
     BUF_PRINTF(buf, cap, pos,
-               "\",\"servosReleased\":%s,\"servoUpdateRateHz\":%.3f,\"o3Ppb\":%.2f,"
+               "\",\"servosReleased\":%s,\"servoUpdateRateHz\":%.3f,"
+               "\"o3Ppb\":%.2f,"
+               "\"gas\":{\"species\":\"o3\",\"raw\":%d,\"ppm\":%.6f,\"ppb\":%.2f,\"mgM3\":%.6f,\"ugM3\":%.2f},"
                "\"imuPresent\":%s,"
                "\"firmwareMs\":%lu,\"legs\":{",
                g_servosReleased ? "true" : "false",
                g_pwmFrequencyHz,
-               mq131GetO3Ppb(),
+               gas.ppb,
+               gas.raw, gas.ppm, gas.ppb, gas.mgM3, gas.ugM3,
                g_imuPresent ? "true" : "false",
                (unsigned long)millis());
 

@@ -1,12 +1,11 @@
 // Gas sensor panel.
 //
-// ESP32 publishes a Float32 on /gas. The firmware converts the MQ-131
-// analog reading to ozone PPB via mq131GetO3Ppb() (datasheet curve fit,
-// R0 calibrated in clean air). We show the live PPB value + a user-set
-// alert threshold. When the value exceeds the threshold we flip the
-// panel into a red-warning state AND play a short audio beep (if the
-// user has clicked the page at least once — browsers block autoplay
-// otherwise).
+// ESP32 publishes MQ-131 ozone telemetry. `gas.data` remains the primary
+// O3 ppb value for back-compat; richer firmware also includes ppm, mg/m3,
+// ug/m3, and raw ADC counts. We show the live PPB value + a user-set alert
+// threshold. When the value exceeds the threshold we flip the panel into a
+// red-warning state AND play a short audio beep (if the user has clicked
+// the page at least once — browsers block autoplay otherwise).
 
 import { useEffect, useRef, useState } from "react";
 
@@ -25,6 +24,10 @@ export default function GasPanel({ gas }) {
   }, [threshold]);
 
   const value = Number(gas?.data);
+  const ppm = Number(gas?.ppm);
+  const mgM3 = Number(gas?.mg_m3);
+  const ugM3 = Number(gas?.ug_m3);
+  const raw = Number(gas?.raw);
   const isAlerting = Number.isFinite(value) && value >= threshold;
 
   useEffect(() => {
@@ -56,6 +59,24 @@ export default function GasPanel({ gas }) {
         {Number.isFinite(value) ? value.toFixed(1) : "—"}
         <span className="gas-panel__unit"> ppb</span>
       </div>
+      <dl className="gas-panel__metrics">
+        <div>
+          <dt>ppm</dt>
+          <dd>{fmt(ppm, 4)}</dd>
+        </div>
+        <div>
+          <dt>mg/m3</dt>
+          <dd>{fmt(mgM3, 4)}</dd>
+        </div>
+        <div>
+          <dt>ug/m3</dt>
+          <dd>{fmt(ugM3, 1)}</dd>
+        </div>
+        <div>
+          <dt>raw</dt>
+          <dd>{Number.isFinite(raw) ? raw.toFixed(0) : "--"}</dd>
+        </div>
+      </dl>
 
       <label className="slider">
         <span>Alert threshold (ppb)</span>
@@ -71,6 +92,10 @@ export default function GasPanel({ gas }) {
       {isAlerting && <p className="gas-panel__alert">⚠ O₃ threshold exceeded</p>}
     </section>
   );
+}
+
+function fmt(value, digits) {
+  return Number.isFinite(value) ? value.toFixed(digits) : "--";
 }
 
 function readThreshold() {
