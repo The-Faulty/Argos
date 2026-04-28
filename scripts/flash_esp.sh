@@ -49,8 +49,21 @@ esac
 if [[ "$DO_SETUP" -eq 1 ]]; then
   echo "[setup] installing arduino-cli + esp32 core + libraries"
   if ! command -v arduino-cli >/dev/null 2>&1; then
+    # Install the binary into a user-writable dir so we don't need sudo for
+    # later --setup runs (and so config/cores/libs land in the regular user's
+    # ~/.arduino15 instead of root's). If /usr/local/bin is writable for some
+    # reason, BINDIR can be overridden in the env.
+    bindir="${BINDIR:-$HOME/.local/bin}"
+    mkdir -p "$bindir"
     curl -fsSL https://raw.githubusercontent.com/arduino/arduino-cli/master/install.sh \
-      | BINDIR=/usr/local/bin sh
+      | BINDIR="$bindir" sh
+    # Make sure $bindir is on PATH for this shell so the next commands
+    # find it; warn the user if it isn't on PATH for fresh shells.
+    export PATH="$bindir:$PATH"
+    if ! grep -q "$bindir" <<<"${PATH//:/$'\n'}"; then
+      echo "[setup] warn: $bindir is not on your PATH for new shells."
+      echo "[setup]       add this to ~/.bashrc:    export PATH=\"$bindir:\$PATH\""
+    fi
   fi
   arduino-cli config init --overwrite >/dev/null 2>&1 || true
   arduino-cli config set board_manager.additional_urls \
