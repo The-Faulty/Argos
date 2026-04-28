@@ -52,7 +52,7 @@ test("auto poses apply small directional backlash compensation", async () => {
   assert.ok(serial.lastAngles[2] < 59.75, `tibia command should overshoot past stand target, got ${serial.lastAngles[2]}`);
 });
 
-test("backlash compensation is suppressed for swing-phase legs in trot", async () => {
+test("backlash compensation is suppressed for both swing and stance legs during trot/crawl", async () => {
   const serial = {
     setAllServoAnglesDeg(angles) {
       this.lastAngles = angles.slice();
@@ -64,11 +64,14 @@ test("backlash compensation is suppressed for swing-phase legs in trot", async (
   await mode.setMode("trot");
   mode.setTwist({ x: 0.5, y: 0, yaw: 0 });
 
-  let sawSwingFemurMatch = false;
-  let sawStanceFemurOvershoot = false;
+  // The 1.8°/2.4° femur/tibia kick was visibly jittery on hardware during
+  // gait — comp is now globally suppressed for crawl/trot regardless of
+  // per-leg phase. Static modes (stand/extend/crouch/direct_foot_xyz) still
+  // get the comp; that's covered by the "auto poses apply small directional
+  // backlash compensation" test above.
+  let sawSwingSample = false;
+  let sawStanceSample = false;
 
-  // ~30 ticks covers a full trot cycle (220 ms swing / 0.34 fraction ≈ 647 ms,
-  // ≈16 ticks at 25 Hz) with margin for direction tracking to settle.
   for (let t = 0; t < 30; t++) {
     const out = mode.planner.step();
     if (!out || out.error) continue;
@@ -80,21 +83,16 @@ test("backlash compensation is suppressed for swing-phase legs in trot", async (
       const commanded = serial.lastAngles[femurIdx];
       const diff = Math.abs(commanded - desired);
 
-      if (out.phaseTag[leg] === "swing") {
-        // No overshoot during swing — the 1.8° femur kick that destabilizes
-        // the lift trajectory must not be added.
-        assert.ok(
-          diff < 0.5,
-          `tick ${t} leg ${leg}: swing femur should not get backlash overshoot, got diff=${diff.toFixed(3)}°`,
-        );
-        sawSwingFemurMatch = true;
-      } else if (t > 2 && diff > 0.5) {
-        // Stance still gets the full overshoot once direction has stabilized.
-        sawStanceFemurOvershoot = true;
-      }
+      assert.ok(
+        diff < 0.5,
+        `tick ${t} leg ${leg} (${out.phaseTag[leg]}): trot femur should NOT get backlash overshoot, got diff=${diff.toFixed(3)}°`,
+      );
+
+      if (out.phaseTag[leg] === "swing") sawSwingSample = true;
+      else sawStanceSample = true;
     }
   }
 
-  assert.ok(sawSwingFemurMatch, "expected at least one swing-phase femur sample");
-  assert.ok(sawStanceFemurOvershoot, "expected at least one stance-phase femur tick with overshoot still applied");
+  assert.ok(sawSwingSample, "expected at least one swing-phase femur sample");
+  assert.ok(sawStanceSample, "expected at least one stance-phase femur sample");
 });

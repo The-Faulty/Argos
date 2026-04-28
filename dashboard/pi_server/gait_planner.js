@@ -113,6 +113,15 @@ const GAIT_PROFILES = {
   },
 };
 
+// Threshold + latch for the lockCoxa decision. Below 1e-3 rad/s the twist
+// is "effectively zero" — well under joystick deadband leakage but above
+// any controller noise we've seen on the hardware. Once we decide twist
+// is zero we hold lockCoxa = true for at least LOCK_COXA_LATCH_MS so a
+// single tick of stick wobble doesn't snap coxa servos between the
+// IK-solved value and 0.
+const LOCK_COXA_TWIST_EPS = 1e-3;
+const LOCK_COXA_LATCH_MS = 100;
+
 export class GaitPlanner {
   constructor() {
     this.config = makeDefaultConfig();
@@ -126,6 +135,7 @@ export class GaitPlanner {
     this.lastJointAnglesRad = makeZeroJoints();
     this.lastServoAnglesDeg = jointAnglesRadToServoDeg(this.lastJointAnglesRad);
     this.jointLimitsRad = cloneLimits(DEFAULT_JOINT_LIMITS_RAD);
+    this._lockCoxaUntilMs = 0;
   }
 
   // ─── External knobs ──────────────────────────────────────────────────
@@ -155,6 +165,27 @@ export class GaitPlanner {
 
   setImu({ roll = 0, pitch = 0, yaw = 0 } = {}) {
     this.imu = { roll, pitch, yaw };
+  }
+
+  // True when the operator is essentially asking for pure-x stride (or
+  // standing still). Using a |twist.y| / |twist.yaw| < 1e-6 threshold
+  // raw made coxa servos snap-jump between the IK-solved value and 0
+  // every time joystick deadband leakage flickered — visible jitter at
+  // zero-yaw hold. The 1e-3 floor is well under any real joystick input
+  // (deadband is ~5% of full scale = ~0.08), and the 100 ms latch keeps
+  // the lock engaged through one-tick spikes so the coxa output stays
+  // continuous.
+  _shouldLockCoxa() {
+    const nowMs = (typeof performance !== "undefined" && performance.now)
+      ? performance.now()
+      : Date.now();
+    const isZero = Math.abs(this.twist.y) < LOCK_COXA_TWIST_EPS &&
+                   Math.abs(this.twist.yaw) < LOCK_COXA_TWIST_EPS;
+    if (isZero) {
+      this._lockCoxaUntilMs = nowMs + LOCK_COXA_LATCH_MS;
+      return true;
+    }
+    return nowMs < this._lockCoxaUntilMs;
   }
 
   updateConfig(patch = {}) {
@@ -313,7 +344,7 @@ export class GaitPlanner {
     // reach the target. Re-probe both windows with
     // scripts/probe_foot_reach.mjs after any z_clearance change.
     const clamped = feet.map((f, i) => clampFootInReach(f, LEG_IDS[i], phaseTag[i], this.jointLimitsRad));
-    const lockCoxa = Math.abs(this.twist.y) < 1e-6 && Math.abs(this.twist.yaw) < 1e-6;
+    const lockCoxa = this._shouldLockCoxa();
     return this._solveAndCache(clamped, { lockCoxa, phaseTag });
   }
 

@@ -306,11 +306,13 @@ export class ModeController extends EventEmitter {
       if (Math.abs(delta) > BACKLASH_DEADBAND_DEG) {
         this._backlashDir[i] = Math.sign(delta);
       }
-      // Direction tracking still runs for swing legs so the first tick after
-      // touchdown has a correct delta history; only the overshoot output is
-      // suppressed.
+      // Direction tracking still runs for legs whose comp is suppressed so
+      // the first tick after a phase change has correct delta history; only
+      // the overshoot output is what gets short-circuited below.
       const legPhase = phaseTag ? phaseTag[Math.floor(i / 3)] : "stance";
       if (SKIP_SWING_BACKLASH && legPhase === "swing") continue;
+      if (SKIP_STANCE_BACKLASH && legPhase === "stance" &&
+          SKIP_STANCE_BACKLASH_GAIT_MODES.has(this.mode)) continue;
 
       const dir = this._backlashDir[i];
       if (dir) out[i] = clampServoDeg(JOINT_NAMES[i], desired[i] + dir * comp);
