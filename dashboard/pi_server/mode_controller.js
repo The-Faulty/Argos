@@ -33,8 +33,18 @@ const BACKLASH_COMP_DEG = {
 // reverses sign mid-swing (peak at u=0.5), so the per-tick servo delta flips
 // direction there and triggers a 1.8°/2.4° kick on femur/tibia at the top of
 // every step — visible on bench as foot drag at swing entry/exit and a tipping
-// moment that destabilizes crawl. Stance legs still get full comp.
+// moment that destabilizes crawl.
 const SKIP_SWING_BACKLASH = (process.env.ARGOS_BACKLASH_SKIP_SWING ?? "1") !== "0";
+// Also skip the comp for stance-phase legs when running a periodic gait.
+// Backlash comp adds a 1.8°/2.4° kick every time a joint reverses direction;
+// stance phases of trot/crawl reverse twice per cycle (push-down ramp peak +
+// stride sweep handoff), and stacking that kick on top of an already-moving
+// servo command shows up as visible tick-rate jitter even though the
+// underlying gait math is smooth. Static modes (stand/extend/crouch) and
+// direct_foot_xyz still benefit from the comp — those are the regimes
+// where servo backlash makes a held pose visibly droop.
+const SKIP_STANCE_BACKLASH_GAIT_MODES = new Set(["crawl", "trot"]);
+const SKIP_STANCE_BACKLASH = (process.env.ARGOS_BACKLASH_SKIP_STANCE ?? "1") !== "0";
 
 export class ModeController extends EventEmitter {
   constructor({ serial, persistence, getStances }) {
