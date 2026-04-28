@@ -59,25 +59,30 @@ const SWING_LIFT_PROFILE_EXP = 2.0;
 
 const DEG2RAD = Math.PI / 180.0;
 
-// Stand / extend pose joints. We bypass IK for these because the abductor's
-// natural lateral offset means foot.y = hip.y can't be reached with coxa = 0,
-// and emitting joints directly puts coxa at exactly 0 (servo 90°) so STAND
-// and a zero-twist TROT/CRAWL look identical. STAND_JOINTS_RAD must match
-// the IK-FK output at the gait neutral foot — STAND_FRONT_FOOT_X /
-// STAND_REAR_FOOT_X / STAND_FOOT_Y / STAND_FOOT_Z below — otherwise switching
-// from stand → trot snaps every leg to a different pose.
+// Stand pose joints. The dashboard's bell-crank IK and the firmware's IK
+// don't agree on the mapping from servo angle to leg geometry — the
+// operator-tested pose at servos {90, 43.25, 59.75} (= JS-frame joint
+// triple [0, -46.75°, -30.25°]) is mechanically validated on the bot but
+// the JS `_sagittal_fk_state` returns null at those joints and no
+// foot-anchor in the JS workspace reproduces those servos through IK.
+// Bypassing IK for stand and idle trot/crawl (see _gaitPose's zero-twist
+// branch) sidesteps the disagreement: those modes emit STAND_JOINTS_RAD
+// directly so the operator's tested pose hits the servos exactly.
 //
-// CRITICAL: the IK has two valid bell-crank branches at this footprint
-// (tibia ≈ +20° vs tibia ≈ +29° at z=-0.195, both yield the same foot XYZ).
-// The physical linkage is calibrated to the +20° branch — earlier we tried
-// the +29° branch by mistake and the robot walked backward. Stay on the
-// +20° branch. Re-derive with `node scripts/probe_neutral_pose.mjs` after
-// any stance change and verify tibia < 22°.
+// Active trot/crawl (twist > 0) still runs IK on makeStanceFeet anchors
+// — those anchors are unchanged from the historical (0.112 / -0.111,
+// ±0.0733, -0.195) values, so the swing/stance servo trajectory uses
+// the JS-IK-natural pose. That's a different mechanical pose from
+// stand: one-time snap on joystick press accepted by the operator
+// because the alternative (matching the operator's pose for active
+// trot) requires shifting the anchors into a region the JS IK can't
+// reach the same servos for, which would still snap.
 //
-// Current values: front foot at (0.112, ±0.0733, -0.195), rear at
-// (-0.111, ±0.0733, -0.195) — re-centered on the IK reach window so the
-// stride budget is symmetric and no clampFootInReach pin is ever hit.
-const STAND_JOINTS_RAD  = [0, -25.99 * DEG2RAD,  19.61 * DEG2RAD];
+// STAND_JOINTS_RAD picked from operator's apply_full_body_pose JSON
+// (front coxa splay dropped per "all centered" choice). Values invert
+// `applyServoCal` (servo = 90 + joint_deg, direction=+1, offset=0):
+//   {femur=43.25, tibia=59.75} → joint = (43.25-90, 59.75-90).
+const STAND_JOINTS_RAD  = [0, -46.75 * DEG2RAD, -30.25 * DEG2RAD];
 const EXTEND_JOINTS_RAD = [0, -10.00 * DEG2RAD,   8.00 * DEG2RAD];
 
 // Stride amplitude clamp (meters, peak displacement either side of base).
@@ -216,18 +221,33 @@ export class GaitPlanner {
     if (!timing) return null;
     const { cycleMs, stanceMs, swingFraction, phaseOffsets } = timing;
 
-    // Zero twist → freeze the gait clock and emit the neutral footprint.
-    // Without this, gaitTickMs keeps advancing and swing legs still lift to
-    // z_clearance even with no commanded motion, so the robot trotted in
-    // place after the joystick was released. The mode stays trot/crawl so
-    // the next non-zero stick push resumes immediately.
+    // Zero twist → freeze the gait clock and hold the stand pose. Bypass
+    // IK here for the same reason _stancePose does: the JS bell-crank
+    // model can't reproduce the operator-tested STAND_JOINTS_RAD at any
+    // foot anchor, so running IK on makeStanceFeet would produce a
+    // different pose and stand → trot/crawl-idle would snap. Emitting
+    // STAND_JOINTS_RAD directly keeps the two modes pose-identical at
+    // rest. Active trot/crawl below still runs IK on makeStanceFeet so
+    // the swing/stance trajectory uses JS-IK-natural servos — operator
+    // accepted the one-time snap on joystick press in exchange.
+    //
+    // Without freezing gaitTickMs we'd keep advancing the gait clock and
+    // swing legs would still lift to z_clearance with no commanded
+    // motion, so the robot trotted in place after the joystick was
+    // released. The mode stays trot/crawl so the next non-zero stick
+    // push resumes immediately.
     if (this.twist.x === 0 && this.twist.y === 0 && this.twist.yaw === 0) {
       this.gaitTickMs = 0;
-      const baseFeet = makeStanceFeet(this.config);
-      this._applyImuTilt(baseFeet);
-      // All four feet are on the ground at neutral pose → stance window.
-      const clamped = baseFeet.map((f, i) => clampFootInReach(f, LEG_IDS[i], "stance", this.jointLimitsRad));
-      return this._solveAndCache(clamped, { lockCoxa: true, phaseTag: allStanceTag() });
+      const jointAnglesRad = new Array(JOINT_NAMES.length);
+      for (let i = 0; i < 4; i++) {
+        jointAnglesRad[i * 3 + 0] = STAND_JOINTS_RAD[0];
+        jointAnglesRad[i * 3 + 1] = STAND_JOINTS_RAD[1];
+        jointAnglesRad[i * 3 + 2] = STAND_JOINTS_RAD[2];
+      }
+      const servoAnglesDeg = jointAnglesRadToServoDeg(jointAnglesRad);
+      this.lastJointAnglesRad = jointAnglesRad;
+      this.lastServoAnglesDeg = servoAnglesDeg;
+      return { servoAnglesDeg, jointAnglesRad, feet: makeStanceFeet(this.config), phaseTag: allStanceTag() };
     }
     this.gaitTickMs = (this.gaitTickMs + TICK_DT * 1000) % cycleMs;
 

@@ -43,8 +43,13 @@ test("auto poses apply small directional backlash compensation", async () => {
 
   await mode.setMode("stand");
 
-  assert.ok(serial.lastAngles[1] < 90 - 25.99, "femur command should overshoot in the downward direction");
-  assert.ok(serial.lastAngles[2] > 90 + 19.61, "tibia command should overshoot in the lifting direction");
+  // STAND_JOINTS_RAD is [0, -46.75°, -30.25°] → femur servo 43.25, tibia
+  // servo 59.75. Both move downward from the 90° rest baseline, so the
+  // direction-tracking backlash comp pushes the commanded servos a few
+  // degrees PAST those targets (i.e., even smaller than the desired
+  // servo), regardless of whether tibia is on the "up" or "down" branch.
+  assert.ok(serial.lastAngles[1] < 43.25, `femur command should overshoot past stand target, got ${serial.lastAngles[1]}`);
+  assert.ok(serial.lastAngles[2] < 59.75, `tibia command should overshoot past stand target, got ${serial.lastAngles[2]}`);
 });
 
 test("backlash compensation is suppressed for swing-phase legs in trot", async () => {

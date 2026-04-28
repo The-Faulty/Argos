@@ -30,7 +30,8 @@
       "Bash(node scripts/probe_foot_reach.mjs --lift-mm 23)",
       "Bash(node scripts/probe_foot_reach.mjs --z-mm -180 --lift-mm 22)",
       "Bash(node scripts/probe_foot_reach.mjs --z-mm -185 --lift-mm 25)",
-      "Bash(node scripts/probe_foot_reach.mjs --z-mm -185 --lift-mm 22)"
+      "Bash(node scripts/probe_foot_reach.mjs --z-mm -185 --lift-mm 22)",
+      "Bash(node scripts/probe_fk_pose.mjs)"
     ]
   }
 }

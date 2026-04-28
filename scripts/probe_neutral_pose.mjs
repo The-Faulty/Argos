@@ -43,8 +43,10 @@ for (let i = 0; i < LEG_IDS.length; i++) {
 }
 
 console.log("");
-console.log("# STAND_JOINTS_RAD (used by stand/extend mode, no IK):");
-console.log("#   coxa=0.000°  femur=-25.990°  tibia=19.610°");
+console.log("# STAND_JOINTS_RAD (used by stand and trot/crawl idle, no IK):");
+console.log("#   coxa=0.000°  femur=-46.750°  tibia=-30.250°");
 console.log("");
-console.log("# If the IK coxa above is non-zero, switching from stand → trot");
-console.log("# will jump every leg's coxa from 0 to that value.");
+console.log("# stand and idle trot/crawl bypass IK entirely (the operator-tested");
+console.log("# pose is on a bell-crank branch the JS IK can't reproduce). Active");
+console.log("# trot/crawl still IKs makeStanceFeet — those servos are what the");
+console.log("# table above shows, and that's the pose joystick-pressed trot uses.");
