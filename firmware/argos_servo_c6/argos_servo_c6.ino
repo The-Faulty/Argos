@@ -24,6 +24,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Adafruit_PWMServoDriver.h>
+#include <Adafruit_NeoPixel.h>
 #include <math.h>
 #include <stdbool.h>
 #include <float.h>
@@ -104,6 +105,38 @@ static const float NEUTRAL_THIGH_THETA = 0.0f;
 static const float NEUTRAL_SERVO_THETA = -2.768896484375f;
 static const float SERVO_SEARCH_STEP_DEG = 5.0f;
 static const float SERVO_REFINE_STEPS_DEG[] = {2.0f, 1.0f, 0.5f, 0.25f};
+
+// ─── NeoPixel LED strip ───────────────────────────────────────────────────
+// 46 LEDs daisy-chained on GPIO 5.
+//   LEDs  0–39  → underbelly strip
+//   LEDs 40–42  → left  signal (3 LEDs)
+//   LEDs 43–45  → right signal (3 LEDs)
+//
+// Configurable signal flash colors — change these to taste:
+#define SIGNAL_LEFT_R 255
+#define SIGNAL_LEFT_G 165
+#define SIGNAL_LEFT_B 0 // amber/orange by default
+
+#define SIGNAL_RIGHT_R 255
+#define SIGNAL_RIGHT_G 165
+#define SIGNAL_RIGHT_B 0 // amber/orange by default
+
+static const uint8_t NEOPIXEL_PIN = 5;
+static const uint16_t NEOPIXEL_COUNT = 46;
+static const uint8_t NEOPIXEL_BRIGHTNESS = 80;
+
+// Underbelly LED index range (inclusive)
+static const uint16_t BELLY_FIRST = 0;
+static const uint16_t BELLY_LAST = 39;
+
+// Signal LED index ranges (3 LEDs each, inclusive)
+static const uint16_t LEFT_SIG_FIRST = 40;
+static const uint16_t LEFT_SIG_LAST = 42;
+static const uint16_t RIGHT_SIG_FIRST = 43;
+static const uint16_t RIGHT_SIG_LAST = 45;
+
+// Flash period for turn signals and reverse (ms per half-cycle)
+static const uint32_t SIGNAL_FLASH_HALF_MS = 250; // 2 Hz
 
 typedef struct
 {
@@ -285,6 +318,15 @@ typedef enum
     MODE_ANIMATION_PLAYBACK
 } RobotMode;
 
+typedef enum
+{
+    WALK_STOP,
+    WALK_FORWARD,
+    WALK_BACKWARD,
+    WALK_TURN_LEFT,
+    WALK_TURN_RIGHT
+} WalkIntent;
+
 static const float L_THIGH = 127.0f;
 static const float L_CALF = 127.0f;
 static const float HORN = 20.0f;
@@ -303,9 +345,11 @@ static const LegHardwareConfig LEG_CONFIGS[NUM_LEGS] = {
     {"rear_right", 11, 6, 7, RIGHT_HIP_SIGN, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN}};
 
 static Adafruit_PWMServoDriver g_pwm = Adafruit_PWMServoDriver(PCA9685_ADDRESS);
+static Adafruit_NeoPixel g_ledStrip(NEOPIXEL_COUNT, NEOPIXEL_PIN, NEO_GRB + NEO_KHZ800);
 static RobotLegState g_legs[NUM_LEGS];
 static AnimationClip g_animation;
 static RobotMode g_mode = MODE_IDLE;
+static WalkIntent g_walkIntent = WALK_STOP;
 static char g_builtinName[MAX_NAME_LEN] = "";
 static char g_activeAnimationName[MAX_NAME_LEN] = "";
 static float g_thighNeutralAngle = NEUTRAL_THIGH_THETA;
@@ -1801,6 +1845,12 @@ static void setMode(RobotMode mode)
         g_builtinName[0] = '\0';
     }
 
+    // Clear walk intent whenever we leave walking mode so LED state is clean.
+    if (mode != MODE_BUILTIN_WALK)
+    {
+        g_walkIntent = WALK_STOP;
+    }
+
     if (mode != MODE_ANIMATION_PLAYBACK)
     {
         g_animation.playing = false;
@@ -2572,6 +2622,19 @@ static void processCommandLine(const char *line)
         g_builtinName[MAX_NAME_LEN - 1] = '\0';
         if (strcmp(name, "walk") == 0)
         {
+            // Optional "intent" field: "forward" | "backward" | "turn_left" | "turn_right" | "stop"
+            char intentStr[16] = "forward";
+            jsonExtractString(line, "intent", intentStr, sizeof(intentStr));
+            if (strcmp(intentStr, "backward") == 0)
+                g_walkIntent = WALK_BACKWARD;
+            else if (strcmp(intentStr, "turn_left") == 0)
+                g_walkIntent = WALK_TURN_LEFT;
+            else if (strcmp(intentStr, "turn_right") == 0)
+                g_walkIntent = WALK_TURN_RIGHT;
+            else if (strcmp(intentStr, "stop") == 0)
+                g_walkIntent = WALK_STOP;
+            else
+                g_walkIntent = WALK_FORWARD;
             setMode(MODE_BUILTIN_WALK);
             sendAck(seq, "builtin walk");
             return;
@@ -2880,6 +2943,116 @@ static void processCommandLine(const char *line)
     sendError(seq, detail);
 }
 
+// ─── LED strip helpers ────────────────────────────────────────────────────
+
+// Fill a contiguous range of LEDs with one colour.
+static void ledFillRange(uint16_t first, uint16_t last, uint8_t r, uint8_t g, uint8_t b)
+{
+    for (uint16_t i = first; i <= last; ++i)
+        g_ledStrip.setPixelColor(i, g_ledStrip.Color(r, g, b));
+}
+
+// Clear (turn off) a contiguous range.
+static void ledClearRange(uint16_t first, uint16_t last)
+{
+    ledFillRange(first, last, 0, 0, 0);
+}
+
+// Idle ring-chase effect — a bright green head orbits the underbelly with a
+// short fading tail. Runs entirely off millis(); no state variables needed.
+//   IDLE_RING_PERIOD_MS  — time (ms) for one full lap of the underbelly
+//   IDLE_RING_TAIL       — number of LEDs in the fading tail (excluding head)
+static const uint32_t IDLE_RING_PERIOD_MS = 1200;
+static const uint16_t IDLE_RING_TAIL = 6;
+
+static void ledIdleRing(void)
+{
+    uint32_t nowMs = millis();
+    uint16_t len = BELLY_LAST - BELLY_FIRST + 1; // 40 LEDs
+    // Head position: advances smoothly around the ring
+    uint16_t head = (uint16_t)((nowMs % IDLE_RING_PERIOD_MS) * len / IDLE_RING_PERIOD_MS);
+
+    for (uint16_t i = 0; i < len; ++i)
+    {
+        // Distance behind the head (wrapping)
+        uint16_t dist = (head >= i) ? (head - i) : (len - i + head);
+
+        uint8_t brightness;
+        if (dist == 0)
+        {
+            brightness = 255; // full-bright head
+        }
+        else if (dist <= IDLE_RING_TAIL)
+        {
+            // Linear fade from 180 down to ~20 across the tail
+            brightness = (uint8_t)(180 - (160 * (dist - 1)) / IDLE_RING_TAIL);
+        }
+        else
+        {
+            brightness = 0; // dark
+        }
+
+        g_ledStrip.setPixelColor(BELLY_FIRST + i, g_ledStrip.Color(0, brightness, 0));
+    }
+}
+
+// Called from loop() — updates the strip to match the current robot state.
+// Uses millis() internally for non-blocking animation; never calls delay().
+static void updateLedStrip(void)
+{
+    uint32_t nowMs = millis();
+
+    bool flashOn_signal = ((nowMs / SIGNAL_FLASH_HALF_MS) & 1) == 0;
+
+    // --- Left signal ---
+    if (g_walkIntent == WALK_TURN_LEFT)
+        ledFillRange(LEFT_SIG_FIRST, LEFT_SIG_LAST,
+                     flashOn_signal ? SIGNAL_LEFT_R : 0,
+                     flashOn_signal ? SIGNAL_LEFT_G : 0,
+                     flashOn_signal ? SIGNAL_LEFT_B : 0);
+    else if (g_walkIntent == WALK_BACKWARD)
+        ledFillRange(LEFT_SIG_FIRST, LEFT_SIG_LAST,
+                     flashOn_signal ? 255 : 0, 0, 0);
+    else
+        ledClearRange(LEFT_SIG_FIRST, LEFT_SIG_LAST);
+
+    // --- Right signal ---
+    if (g_walkIntent == WALK_TURN_RIGHT)
+        ledFillRange(RIGHT_SIG_FIRST, RIGHT_SIG_LAST,
+                     flashOn_signal ? SIGNAL_RIGHT_R : 0,
+                     flashOn_signal ? SIGNAL_RIGHT_G : 0,
+                     flashOn_signal ? SIGNAL_RIGHT_B : 0);
+    else if (g_walkIntent == WALK_BACKWARD)
+        ledFillRange(RIGHT_SIG_FIRST, RIGHT_SIG_LAST,
+                     flashOn_signal ? 255 : 0, 0, 0);
+    else
+        ledClearRange(RIGHT_SIG_FIRST, RIGHT_SIG_LAST);
+
+    // --- Underbelly ---
+    if (g_mode == MODE_BUILTIN_CROUCH)
+    {
+        // Crouching → solid blue
+        ledFillRange(BELLY_FIRST, BELLY_LAST, 0, 0, 255);
+    }
+    else if (g_mode == MODE_BUILTIN_WALK && g_walkIntent == WALK_BACKWARD)
+    {
+        // Moving backwards → solid red
+        ledFillRange(BELLY_FIRST, BELLY_LAST, 255, 0, 0);
+    }
+    else if (g_mode == MODE_BUILTIN_WALK)
+    {
+        // Moving (forward / turn) → solid green
+        ledFillRange(BELLY_FIRST, BELLY_LAST, 0, 255, 0);
+    }
+    else
+    {
+        // Idle → green ring-chase orbiting the underbelly
+        ledIdleRing();
+    }
+
+    g_ledStrip.show();
+}
+
 void setup()
 {
     // Buffer sizing for 921600 baud telemetry + command bursts.
@@ -2942,6 +3115,12 @@ void setup()
     g_lastBuiltinStatusMs = millis();
     g_lastAnimationStatusMs = millis();
     sendStateMessage("state");
+
+    // Initialise LED strip — all off until first updateLedStrip() call.
+    g_ledStrip.begin();
+    g_ledStrip.setBrightness(NEOPIXEL_BRIGHTNESS);
+    g_ledStrip.clear();
+    g_ledStrip.show();
 }
 
 void loop()
@@ -2977,6 +3156,8 @@ void loop()
     {
         robotLegUpdate(&g_legs[i]);
     }
+
+    updateLedStrip();
 
     maybeSendPeriodicEvents();
 }
