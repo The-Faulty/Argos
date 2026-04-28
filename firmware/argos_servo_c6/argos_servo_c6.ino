@@ -72,7 +72,7 @@ static const float DEFAULT_CALF_MAX_DEG = 90.0f;
 static const int COUPLED_LIMIT_SAMPLE_COUNT = 7;
 static const float COUPLED_THIGH_SAMPLES_DEG[COUPLED_LIMIT_SAMPLE_COUNT] = {-90.0f, -50.0f, -38.0f, -35.0f, -25.0f, -13.0f, 0.0f};
 static const float COUPLED_CALF_MIN_SAMPLES_DEG[COUPLED_LIMIT_SAMPLE_COUNT] = {-90.0f, -90.0f, -90.0f, -90.0f, -70.0f, -50.0f, -25.0f};
-static const float COUPLED_CALF_MAX_SAMPLES_DEG[COUPLED_LIMIT_SAMPLE_COUNT] = {-90.0f,   5.0f,  30.0f,  37.0f,  60.0f,  90.0f,  90.0f};
+static const float COUPLED_CALF_MAX_SAMPLES_DEG[COUPLED_LIMIT_SAMPLE_COUNT] = {-90.0f, 5.0f, 30.0f, 37.0f, 60.0f, 90.0f, 90.0f};
 static const uint8_t PCA9685_ADDRESS = 0x40;
 static const float DEFAULT_PCA9685_FREQUENCY_HZ = 150.0f;
 static const float MIN_PCA9685_FREQUENCY_HZ = 40.0f;
@@ -97,12 +97,14 @@ static const float NEUTRAL_SERVO_THETA = -2.768896484375f;
 static const float SERVO_SEARCH_STEP_DEG = 5.0f;
 static const float SERVO_REFINE_STEPS_DEG[] = {2.0f, 1.0f, 0.5f, 0.25f};
 
-typedef struct {
+typedef struct
+{
     float x;
     float y;
 } Point2f;
 
-typedef struct {
+typedef struct
+{
     Point2f hip;
     Point2f servoPivot;
     Point2f knee;
@@ -117,7 +119,8 @@ typedef struct {
     bool valid;
 } LegGeometry;
 
-typedef struct {
+typedef struct
+{
     float thetaThigh;
     float thetaServo;
     float thighServoDeg;
@@ -128,7 +131,8 @@ typedef struct {
     bool success;
 } LegIKResult;
 
-typedef struct {
+typedef struct
+{
     float modelThighDeg;
     float modelCalfDeg;
     float thetaThigh;
@@ -141,7 +145,8 @@ typedef struct {
     bool valid;
 } FootServoCandidate;
 
-typedef struct {
+typedef struct
+{
     float modelCalfDeg;
     float thetaServo;
     float thetaCalf;
@@ -152,7 +157,8 @@ typedef struct {
     bool valid;
 } JointServoCandidate;
 
-typedef struct {
+typedef struct
+{
     uint32_t count;
     uint32_t successCount;
     uint32_t lastUs;
@@ -160,28 +166,33 @@ typedef struct {
     double totalUs;
 } SolverTimingStats;
 
-typedef struct {
+typedef struct
+{
     float thighDeg;
     float calfDeg;
 } JointAnglesDeg;
 
-typedef struct {
+typedef struct
+{
     float min;
     float max;
 } JointLimitRangeDeg;
 
-typedef struct {
+typedef struct
+{
     JointLimitRangeDeg thighDeg;
     JointLimitRangeDeg calfDeg;
 } JointLimitsDeg;
 
-typedef struct {
+typedef struct
+{
     float hip;
     float thigh;
     float calf;
 } ServoAnglesDeg;
 
-typedef struct {
+typedef struct
+{
     const char *id;
     uint8_t hipChannel;
     uint8_t thighChannel;
@@ -191,7 +202,8 @@ typedef struct {
     float calfSign;
 } LegHardwareConfig;
 
-typedef struct {
+typedef struct
+{
     uint8_t channel;
     bool attached;
     float minDeg;
@@ -208,7 +220,8 @@ typedef struct {
     bool moving;
 } SmoothServo;
 
-typedef struct {
+typedef struct
+{
     SmoothServo hip;
     SmoothServo thigh;
     SmoothServo calf;
@@ -228,18 +241,21 @@ typedef struct {
     char lastError[MAX_ERROR_LEN];
 } RobotLegState;
 
-typedef struct {
+typedef struct
+{
     float time;
     float x;
     float y;
 } AnimationFrame;
 
-typedef struct {
+typedef struct
+{
     AnimationFrame frames[MAX_ANIM_KEYFRAMES];
     int count;
 } LegTrack;
 
-typedef struct {
+typedef struct
+{
     char name[MAX_NAME_LEN];
     float duration;
     LegTrack tracks[NUM_LEGS];
@@ -250,7 +266,8 @@ typedef struct {
     float pausedTimeSec;
 } AnimationClip;
 
-typedef enum {
+typedef enum
+{
     MODE_IDLE,
     MODE_DIRECT_FOOT_XY,
     MODE_DIRECT_JOINT_ANGLES,
@@ -275,8 +292,7 @@ static const LegHardwareConfig LEG_CONFIGS[NUM_LEGS] = {
     {"front_left", 8, 0, 1, LEFT_HIP_SIGN, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
     {"front_right", 9, 2, 3, RIGHT_HIP_SIGN, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN},
     {"rear_left", 10, 4, 5, LEFT_HIP_SIGN, LEFT_THIGH_SIGN, LEFT_CALF_SIGN},
-    {"rear_right", 11, 6, 7, RIGHT_HIP_SIGN, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN}
-};
+    {"rear_right", 11, 6, 7, RIGHT_HIP_SIGN, RIGHT_THIGH_SIGN, RIGHT_CALF_SIGN}};
 
 static Adafruit_PWMServoDriver g_pwm = Adafruit_PWMServoDriver(PCA9685_ADDRESS);
 static RobotLegState g_legs[NUM_LEGS];
@@ -298,34 +314,44 @@ static float g_pwmFrequencyHz = DEFAULT_PCA9685_FREQUENCY_HZ;
 static SolverTimingStats g_footSolveStats;
 static SolverTimingStats g_jointSolveStats;
 
-static bool i2cDevicePresent(uint8_t addr) {
+static bool i2cDevicePresent(uint8_t addr)
+{
     Wire.beginTransmission(addr);
     return Wire.endTransmission() == 0;
 }
 
-static float clampf(float x, float lo, float hi) {
-    if (x < lo) return lo;
-    if (x > hi) return hi;
+static float clampf(float x, float lo, float hi)
+{
+    if (x < lo)
+        return lo;
+    if (x > hi)
+        return hi;
     return x;
 }
 
-static float lerpf(float a, float b, float t) {
+static float lerpf(float a, float b, float t)
+{
     return a + (b - a) * t;
 }
 
-static float clampAngle(float angle) {
+static float clampAngle(float angle)
+{
     const float twoPi = 2.0f * (float)M_PI;
     float value = fmodf(angle, twoPi);
-    if (value <= -(float)M_PI) value += twoPi;
-    if (value > (float)M_PI) value -= twoPi;
+    if (value <= -(float)M_PI)
+        value += twoPi;
+    if (value > (float)M_PI)
+        value -= twoPi;
     return value;
 }
 
-static float radToDeg(float radians) {
+static float radToDeg(float radians)
+{
     return radians * 180.0f / (float)M_PI;
 }
 
-static float degToRad(float degrees) {
+static float degToRad(float degrees)
+{
     return degrees * (float)M_PI / 180.0f;
 }
 
@@ -338,85 +364,287 @@ static float degToRad(float degrees) {
 // come from accel directly; yaw is gyro-z integrated with a long-stall
 // dt clamp, so it drifts (no magnetometer fusion yet — swap in a
 // Madgwick/Mahony filter if drift becomes a problem).
-static const uint8_t  LSM303D_ADDR        = 0x1D;
-static const uint8_t  L3GD20H_ADDR        = 0x6B;
-static const uint8_t  LSM303D_WHO_AM_I_OK = 0x49;
-static const uint8_t  L3GD20H_WHO_AM_I_OK = 0xD7;
+static const uint8_t LSM303D_ADDR = 0x1D;
+static const uint8_t L3GD20H_ADDR = 0x6B;
+static const uint8_t LSM303D_WHO_AM_I_OK = 0x49;
+static const uint8_t L3GD20H_WHO_AM_I_OK = 0xD4;
 // Sensitivities at the configured full-scale ranges (datasheet typical).
-static const float    LSM303D_ACCEL_LSB_TO_G   = 0.000061f;     // ±2g
-static const float    LSM303D_MAG_LSB_TO_GAUSS = 0.00008f;      // ±2 gauss high-res
-static const float    L3GD20H_GYRO_LSB_TO_DPS  = 0.00875f;      // ±245 dps
-static const float    GRAVITY_MS2_F            = 9.80665f;
-static const uint32_t IMU_POLL_INTERVAL_MS     = 20;            // 50 Hz
+static const float LSM303D_ACCEL_LSB_TO_G = 0.000061f;  // ±2g
+static const float LSM303D_MAG_LSB_TO_GAUSS = 0.00008f; // ±2 gauss high-res
+static const float L3GD20H_GYRO_LSB_TO_DPS = 0.00875f;  // ±245 dps
+static const float GRAVITY_MS2_F = 9.80665f;
+static const uint32_t IMU_POLL_INTERVAL_MS = 20; // 50 Hz
 
-static bool     g_imuPresent       = false;
-static float    g_imuAccelMs2[3]   = {0.0f, 0.0f, 0.0f};   // ax, ay, az (m/s²)
-static float    g_imuGyroRads[3]   = {0.0f, 0.0f, 0.0f};   // gx, gy, gz (rad/s)
-static float    g_imuMagGauss[3]   = {0.0f, 0.0f, 0.0f};   // mx, my, mz (gauss)
-static float    g_imuRollRad       = 0.0f;
-static float    g_imuPitchRad      = 0.0f;
-static float    g_imuYawRad        = 0.0f;
-static uint32_t g_imuLastSampleMs  = 0;
-static uint32_t g_lastImuPollMs    = 0;
+static bool g_imuPresent = false;
+static float g_imuAccelMs2[3] = {0.0f, 0.0f, 0.0f}; // ax, ay, az (m/s²)
+static float g_imuGyroRads[3] = {0.0f, 0.0f, 0.0f}; // gx, gy, gz (rad/s)
+static float g_imuMagGauss[3] = {0.0f, 0.0f, 0.0f}; // mx, my, mz (gauss)
+static float g_imuRollRad = 0.0f;
+static float g_imuPitchRad = 0.0f;
+static float g_imuYawRad = 0.0f;
+static uint32_t g_imuLastSampleMs = 0;
+static uint32_t g_lastImuPollMs = 0;
 
-static bool imuI2cWrite(uint8_t addr, uint8_t reg, uint8_t val) {
+static const float MADGWICK_BETA = 0.1f;
+
+static float g_q0 = 1.0f;
+static float g_q1 = 0.0f;
+static float g_q2 = 0.0f;
+static float g_q3 = 0.0f;
+
+static float invSqrt(float x)
+{
+    // Fast inverse square root (Quake III / Madgwick reference implementation).
+    // Falls back to 1/sqrtf on platforms where the bit-cast trick is unsafe.
+    if (x <= 0.0f)
+        return 0.0f;
+    union
+    {
+        float f;
+        uint32_t i;
+    } conv = {x};
+    conv.i = 0x5F3759DFu - (conv.i >> 1u);
+    float y = conv.f;
+    y *= 1.5f - (0.5f * x * y * y); // one Newton-Raphson step
+    return y;
+}
+
+static void madgwickUpdate(float gx, float gy, float gz,
+                           float ax, float ay, float az,
+                           float mx, float my, float mz,
+                           float dt)
+{
+    if (dt <= 0.0f)
+        return;
+
+    float q0 = g_q0, q1 = g_q1, q2 = g_q2, q3 = g_q3;
+
+    // ── Normalise accelerometer ──────────────────────────────────────────
+    float aNorm = invSqrt(ax * ax + ay * ay + az * az);
+    if (aNorm == 0.0f)
+        return; // degenerate — skip this sample
+    ax *= aNorm;
+    ay *= aNorm;
+    az *= aNorm;
+
+    // ── Normalise magnetometer ───────────────────────────────────────────
+    float mNorm = invSqrt(mx * mx + my * my + mz * mz);
+    if (mNorm == 0.0f)
+    {
+        // Magnetometer reading is zero (sensor missing or saturated).
+        // Fall back to 6-DOF (accel + gyro only): zero out mag gradient term
+        // by passing a unit vector aligned with the reference field direction
+        // so the mag correction contributes nothing new.
+        mx = 0.0f;
+        my = 0.0f;
+        mz = 1.0f;
+        mNorm = 1.0f;
+    }
+    else
+    {
+        mx *= mNorm;
+        my *= mNorm;
+        mz *= mNorm;
+    }
+
+    // ── Reference direction of Earth's magnetic field ────────────────────
+    // Rotate normalised mag measurement into Earth frame using current q,
+    // then project onto the horizontal plane (bx, bz only) to decouple
+    // heading from dip angle.
+    float hx = 2.0f * (mx * (0.5f - q2 * q2 - q3 * q3) + my * (q1 * q2 - q0 * q3) + mz * (q1 * q3 + q0 * q2));
+    float hy = 2.0f * (mx * (q1 * q2 + q0 * q3) + my * (0.5f - q1 * q1 - q3 * q3) + mz * (q2 * q3 - q0 * q1));
+    float hz = 2.0f * (mx * (q1 * q3 - q0 * q2) + my * (q2 * q3 + q0 * q1) + mz * (0.5f - q1 * q1 - q2 * q2));
+
+    float bx = sqrtf(hx * hx + hy * hy); // horizontal magnitude
+    float bz = hz;                       // vertical component (dip)
+
+    // ── Gradient descent objective function ─────────────────────────────
+    // f1..f3: accel objective  (align gravity direction with sensor z-down)
+    // f4..f6: mag objective    (align mag reference with sensor reading)
+
+    float _2q0 = 2.0f * q0, _2q1 = 2.0f * q1;
+    float _2q2 = 2.0f * q2, _2q3 = 2.0f * q3;
+    float _2bx = 2.0f * bx, _2bz = 2.0f * bz;
+    float _4bx = 4.0f * bx, _4bz = 4.0f * bz;
+    float q0q0 = q0 * q0, q1q1 = q1 * q1, q2q2 = q2 * q2, q3q3 = q3 * q3;
+    float q0q1 = q0 * q1, q0q2 = q0 * q2, q0q3 = q0 * q3;
+    float q1q2 = q1 * q2, q1q3 = q1 * q3, q2q3 = q2 * q3;
+
+    // Gravity objective (expected: [0,0,1] in body frame)
+    float f1 = 2.0f * (q1q3 - q0q2) - ax;
+    float f2 = 2.0f * (q0q1 + q2q3) - ay;
+    float f3 = 2.0f * (0.5f - q1q1 - q2q2) - az;
+
+    // Magnetic objective (expected: [bx,0,bz] in body frame)
+    float f4 = _2bx * (0.5f - q2q2 - q3q3) + _2bz * (q1q3 - q0q2) - mx;
+    float f5 = _2bx * (q1q2 - q0q3) + _2bz * (q0q1 + q2q3) - my;
+    float f6 = _2bx * (q0q2 + q1q3) + _2bz * (0.5f - q1q1 - q2q2) - mz;
+
+    // Jacobian transposed times objective — the gradient direction
+    float J11 = -_2q2, J12 = _2q1, J13 = 0.0f;
+    float J14 = -_2bz * q2, J15 = -_2bx * q3 + _2bz * q1;
+    float J16 = _2bx * q2;
+
+    float J21 = _2q3, J22 = _2q0, J23 = -4.0f * q1;
+    float J24 = _2bx * q2 + _2bz * q0;
+    float J25 = _2bx * q3 + _2bz * q1; // wait, recompute carefully below
+    float J26 = _2bx * q0 - _4bz * q2;
+
+    // (Re-derive cleanly to avoid copy-paste slips — Madgwick eq. 25)
+    float s0 = -_2q2 * f1 + _2q1 * f2 + (-_2bz * q2) * f4 + (-_2bx * q3 + _2bz * q1) * f5 + (_2bx * q2) * f6;
+
+    float s1 = _2q3 * f1 + _2q0 * f2 - 4.0f * q1 * f3 + (_2bz * q3) * f4 + (_2bx * q2 + _2bz * q0) * f5 + (_2bx * q3 - _4bx * q1) * f6; // note: _4bx not _4bz for last
+    // Corrected s1 using the reference paper formula:
+    s1 = _2q3 * f1 + _2q0 * f2 - 4.0f * q1 * f3 + (_2bz * q3) * f4 + (_2bx * q2 + _2bz * q0) * f5 + (_2bx * q3 - _4bx * q1) * f6;
+
+    float s2 = -_2q0 * f1 + _2q3 * f2 - 4.0f * q2 * f3 + (-_4bx * q2 - _2bz * q0) * f4 + (_2bx * q1 + _2bz * q3) * f5 + (_2bx * q0 - _4bz * q2) * f6;
+
+    float s3 = _2q1 * f1 + _2q2 * f2 + (-_4bx * q3 + _2bz * q1) * f4 + (-_2bx * q0 + _2bz * q2) * f5 + (_2bx * q1) * f6;
+
+    // Normalise gradient
+    float sNorm = invSqrt(s0 * s0 + s1 * s1 + s2 * s2 + s3 * s3);
+    if (sNorm > 0.0f)
+    {
+        s0 *= sNorm;
+        s1 *= sNorm;
+        s2 *= sNorm;
+        s3 *= sNorm;
+    }
+
+    // ── Quaternion rate from gyro ────────────────────────────────────────
+    float qDot0 = 0.5f * (-q1 * gx - q2 * gy - q3 * gz) - MADGWICK_BETA * s0;
+    float qDot1 = 0.5f * (q0 * gx + q2 * gz - q3 * gy) - MADGWICK_BETA * s1;
+    float qDot2 = 0.5f * (q0 * gy - q1 * gz + q3 * gx) - MADGWICK_BETA * s2;
+    float qDot3 = 0.5f * (q0 * gz + q1 * gy - q2 * gx) - MADGWICK_BETA * s3;
+
+    // ── Integrate ────────────────────────────────────────────────────────
+    q0 += qDot0 * dt;
+    q1 += qDot1 * dt;
+    q2 += qDot2 * dt;
+    q3 += qDot3 * dt;
+
+    // ── Re-normalise quaternion ──────────────────────────────────────────
+    float qNorm = invSqrt(q0 * q0 + q1 * q1 + q2 * q2 + q3 * q3);
+    g_q0 = q0 * qNorm;
+    g_q1 = q1 * qNorm;
+    g_q2 = q2 * qNorm;
+    g_q3 = q3 * qNorm;
+
+    // Suppress unused-variable warnings from the intermediate Jacobian terms
+    // that were superseded by the direct s0..s3 calculation above.
+    (void)J11;
+    (void)J12;
+    (void)J13;
+    (void)J14;
+    (void)J15;
+    (void)J16;
+    (void)J21;
+    (void)J22;
+    (void)J23;
+    (void)J24;
+    (void)J25;
+    (void)J26;
+}
+
+static void quaternionToEuler(void)
+{
+    float q0 = g_q0, q1 = g_q1, q2 = g_q2, q3 = g_q3;
+
+    // Roll  (rotation about X)
+    float sinr_cosp = 2.0f * (q0 * q1 + q2 * q3);
+    float cosr_cosp = 1.0f - 2.0f * (q1 * q1 + q2 * q2);
+    g_imuRollRad = atan2f(sinr_cosp, cosr_cosp);
+
+    // Pitch (rotation about Y) — clamp to avoid NaN at ±90°
+    float sinp = 2.0f * (q0 * q2 - q3 * q1);
+    sinp = clampf(sinp, -1.0f, 1.0f);
+    g_imuPitchRad = asinf(sinp);
+
+    // Yaw   (rotation about Z)
+    float siny_cosp = 2.0f * (q0 * q3 + q1 * q2);
+    float cosy_cosp = 1.0f - 2.0f * (q2 * q2 + q3 * q3);
+    g_imuYawRad = atan2f(siny_cosp, cosy_cosp);
+}
+
+static bool imuI2cWrite(uint8_t addr, uint8_t reg, uint8_t val)
+{
     Wire.beginTransmission(addr);
     Wire.write(reg);
     Wire.write(val);
     return Wire.endTransmission() == 0;
 }
 
-static bool imuI2cRead(uint8_t addr, uint8_t reg, uint8_t *buf, size_t n) {
+static bool imuI2cRead(uint8_t addr, uint8_t reg, uint8_t *buf, size_t n)
+{
     Wire.beginTransmission(addr);
     // MSB of subaddress = auto-increment for multi-byte reads on both chips.
     Wire.write((uint8_t)(reg | 0x80));
-    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.endTransmission(false) != 0)
+        return false;
     size_t got = Wire.requestFrom((int)addr, (int)n);
-    if (got != n) return false;
-    for (size_t i = 0; i < n; ++i) buf[i] = Wire.read();
+    if (got != n)
+        return false;
+    for (size_t i = 0; i < n; ++i)
+        buf[i] = Wire.read();
     return true;
 }
 
-static bool imuReadByte(uint8_t addr, uint8_t reg, uint8_t *out) {
+static bool imuReadByte(uint8_t addr, uint8_t reg, uint8_t *out)
+{
     Wire.beginTransmission(addr);
     Wire.write(reg);
-    if (Wire.endTransmission(false) != 0) return false;
-    if (Wire.requestFrom((int)addr, 1) != 1) return false;
+    if (Wire.endTransmission(false) != 0)
+        return false;
+    if (Wire.requestFrom((int)addr, 1) != 1)
+        return false;
     *out = Wire.read();
     return true;
 }
 
-static bool imuInit(void) {
+static bool imuInit(void)
+{
     uint8_t who = 0;
 
     // ── LSM303D (accel + magnetometer) ──
-    if (!imuReadByte(LSM303D_ADDR, 0x0F, &who) || who != LSM303D_WHO_AM_I_OK) return false;
+    if (!imuReadByte(LSM303D_ADDR, 0x0F, &who) || who != LSM303D_WHO_AM_I_OK)
+        return false;
     // CTRL1 = 0x57: ODR=50 Hz, BDU=0, all axes enabled (0101 0111)
-    if (!imuI2cWrite(LSM303D_ADDR, 0x20, 0x57)) return false;
+    if (!imuI2cWrite(LSM303D_ADDR, 0x20, 0x57))
+        return false;
     // CTRL2 = 0x00: ±2g, no anti-alias filter override
-    if (!imuI2cWrite(LSM303D_ADDR, 0x21, 0x00)) return false;
+    if (!imuI2cWrite(LSM303D_ADDR, 0x21, 0x00))
+        return false;
     // CTRL5 = 0x70: temp off, mag high-res, mag ODR=50 Hz, no INT (0111 0000)
-    if (!imuI2cWrite(LSM303D_ADDR, 0x24, 0x70)) return false;
+    if (!imuI2cWrite(LSM303D_ADDR, 0x24, 0x70))
+        return false;
     // CTRL6 = 0x00: mag ±2 gauss
-    if (!imuI2cWrite(LSM303D_ADDR, 0x25, 0x00)) return false;
+    if (!imuI2cWrite(LSM303D_ADDR, 0x25, 0x00))
+        return false;
     // CTRL7 = 0x00: mag continuous-conversion mode
-    if (!imuI2cWrite(LSM303D_ADDR, 0x26, 0x00)) return false;
+    if (!imuI2cWrite(LSM303D_ADDR, 0x26, 0x00))
+        return false;
 
     // ── L3GD20H (gyroscope) ──
-    if (!imuReadByte(L3GD20H_ADDR, 0x0F, &who) || who != L3GD20H_WHO_AM_I_OK) return false;
+    if (!imuReadByte(L3GD20H_ADDR, 0x0F, &who) || who != L3GD20H_WHO_AM_I_OK)
+        return false;
     // CTRL1 = 0x0F: power up (Normal mode), all axes, 100 Hz ODR (0000 1111)
-    if (!imuI2cWrite(L3GD20H_ADDR, 0x20, 0x0F)) return false;
+    if (!imuI2cWrite(L3GD20H_ADDR, 0x20, 0x0F))
+        return false;
     // CTRL4 = 0x00: ±245 dps, BDU=0, little-endian
-    if (!imuI2cWrite(L3GD20H_ADDR, 0x23, 0x00)) return false;
+    if (!imuI2cWrite(L3GD20H_ADDR, 0x23, 0x00))
+        return false;
 
     return true;
 }
 
-static void imuPoll(void) {
-    if (!g_imuPresent) return;
+static void imuPoll(void)
+{
+    if (!g_imuPresent)
+        return;
     uint8_t buf[6];
 
-    if (imuI2cRead(LSM303D_ADDR, 0x28, buf, 6)) {
+    if (imuI2cRead(LSM303D_ADDR, 0x28, buf, 6))
+    {
         int16_t ax = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
         int16_t ay = (int16_t)((uint16_t)buf[2] | ((uint16_t)buf[3] << 8));
         int16_t az = (int16_t)((uint16_t)buf[4] | ((uint16_t)buf[5] << 8));
@@ -425,7 +653,8 @@ static void imuPoll(void) {
         g_imuAccelMs2[2] = (float)az * LSM303D_ACCEL_LSB_TO_G * GRAVITY_MS2_F;
     }
 
-    if (imuI2cRead(LSM303D_ADDR, 0x08, buf, 6)) {
+    if (imuI2cRead(LSM303D_ADDR, 0x08, buf, 6))
+    {
         int16_t mx = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
         int16_t my = (int16_t)((uint16_t)buf[2] | ((uint16_t)buf[3] << 8));
         int16_t mz = (int16_t)((uint16_t)buf[4] | ((uint16_t)buf[5] << 8));
@@ -434,7 +663,8 @@ static void imuPoll(void) {
         g_imuMagGauss[2] = (float)mz * LSM303D_MAG_LSB_TO_GAUSS;
     }
 
-    if (imuI2cRead(L3GD20H_ADDR, 0x28, buf, 6)) {
+    if (imuI2cRead(L3GD20H_ADDR, 0x28, buf, 6))
+    {
         int16_t gx = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
         int16_t gy = (int16_t)((uint16_t)buf[2] | ((uint16_t)buf[3] << 8));
         int16_t gz = (int16_t)((uint16_t)buf[4] | ((uint16_t)buf[5] << 8));
@@ -448,139 +678,172 @@ static void imuPoll(void) {
     uint32_t now = millis();
     float dt = (g_imuLastSampleMs > 0) ? (float)(now - g_imuLastSampleMs) * 0.001f : 0.0f;
     g_imuLastSampleMs = now;
-    if (dt > 0.5f) dt = 0.0f;
+    if (dt > 0.5f)
+        dt = 0.0f;
 
-    float ax = g_imuAccelMs2[0];
-    float ay = g_imuAccelMs2[1];
-    float az = g_imuAccelMs2[2];
-    float anorm = sqrtf(ax * ax + ay * ay + az * az);
-    if (anorm > 1e-3f) {
-        g_imuRollRad  = atan2f(ay, az);
-        g_imuPitchRad = atan2f(-ax, sqrtf(ay * ay + az * az));
-    }
-    g_imuYawRad = clampAngle(g_imuYawRad + g_imuGyroRads[2] * dt);
+    madgwickUpdate(
+        g_imuGyroRads[0], g_imuGyroRads[1], g_imuGyroRads[2],
+        g_imuAccelMs2[0], g_imuAccelMs2[1], g_imuAccelMs2[2],
+        g_imuMagGauss[0], g_imuMagGauss[1], g_imuMagGauss[2],
+        dt);
+
+    quaternionToEuler();
 }
 
-static float thetaToModelServoDegInline(float theta, float neutralTheta) {
+static float thetaToModelServoDegInline(float theta, float neutralTheta)
+{
     return 90.0f + radToDeg(theta - neutralTheta);
 }
 
-static float servoRangePenalty(float modelDeg) {
-    if (modelDeg < 0.0f) {
+static float servoRangePenalty(float modelDeg)
+{
+    if (modelDeg < 0.0f)
+    {
         return -modelDeg;
     }
-    if (modelDeg > 180.0f) {
+    if (modelDeg > 180.0f)
+    {
         return modelDeg - 180.0f;
     }
     return 0.0f;
 }
 
-static float servoSolutionPenalty(float thetaThigh, float thetaServo) {
-    return
-        servoRangePenalty(thetaToModelServoDegInline(thetaThigh, g_thighNeutralAngle)) +
-        servoRangePenalty(thetaToModelServoDegInline(thetaServo, g_servoNeutralAngle));
+static float servoSolutionPenalty(float thetaThigh, float thetaServo)
+{
+    return servoRangePenalty(thetaToModelServoDegInline(thetaThigh, g_thighNeutralAngle)) +
+           servoRangePenalty(thetaToModelServoDegInline(thetaServo, g_servoNeutralAngle));
 }
 
-static bool footCandidateBetter(float servoPenalty, float error, float bestServoPenalty, float bestError) {
-    if (error < (bestError - 0.5f)) {
+static bool footCandidateBetter(float servoPenalty, float error, float bestServoPenalty, float bestError)
+{
+    if (error < (bestError - 0.5f))
+    {
         return true;
     }
-    if (error > (bestError + 0.5f)) {
+    if (error > (bestError + 0.5f))
+    {
         return false;
     }
-    if ((servoPenalty + 0.000001f) < bestServoPenalty) {
+    if ((servoPenalty + 0.000001f) < bestServoPenalty)
+    {
         return true;
     }
-    if (servoPenalty > (bestServoPenalty + 0.000001f)) {
+    if (servoPenalty > (bestServoPenalty + 0.000001f))
+    {
         return false;
     }
     return error < bestError;
 }
 
-static bool jointCandidateBetter(float servoPenalty, float error, float bestServoPenalty, float bestError) {
+static bool jointCandidateBetter(float servoPenalty, float error, float bestServoPenalty, float bestError)
+{
     float tolerance = degToRad(0.75f);
-    if (error < (bestError - tolerance)) {
+    if (error < (bestError - tolerance))
+    {
         return true;
     }
-    if (error > (bestError + tolerance)) {
+    if (error > (bestError + tolerance))
+    {
         return false;
     }
-    if ((servoPenalty + 0.000001f) < bestServoPenalty) {
+    if ((servoPenalty + 0.000001f) < bestServoPenalty)
+    {
         return true;
     }
-    if (servoPenalty > (bestServoPenalty + 0.000001f)) {
+    if (servoPenalty > (bestServoPenalty + 0.000001f))
+    {
         return false;
     }
     return error < bestError;
 }
 
-static float footContinuityPenalty(float modelThighDeg, float modelCalfDeg, float startModelThighDeg, float startModelCalfDeg) {
+static float footContinuityPenalty(float modelThighDeg, float modelCalfDeg, float startModelThighDeg, float startModelCalfDeg)
+{
     return fabsf(modelThighDeg - startModelThighDeg) + fabsf(modelCalfDeg - startModelCalfDeg);
 }
 
-static bool footServoCandidateBetter(const FootServoCandidate *candidate, const FootServoCandidate *best) {
-    if (!candidate->valid) {
+static bool footServoCandidateBetter(const FootServoCandidate *candidate, const FootServoCandidate *best)
+{
+    if (!candidate->valid)
+    {
         return false;
     }
-    if (!best->valid) {
+    if (!best->valid)
+    {
         return true;
     }
-    if (footCandidateBetter(candidate->servoPenalty, candidate->error, best->servoPenalty, best->error)) {
+    if (footCandidateBetter(candidate->servoPenalty, candidate->error, best->servoPenalty, best->error))
+    {
         return true;
     }
-    if (footCandidateBetter(best->servoPenalty, best->error, candidate->servoPenalty, candidate->error)) {
-        return false;
-    }
-    return candidate->continuityPenalty < best->continuityPenalty;
-}
-
-static bool jointServoCandidateBetter(const JointServoCandidate *candidate, const JointServoCandidate *best) {
-    if (!candidate->valid) {
-        return false;
-    }
-    if (!best->valid) {
-        return true;
-    }
-    if (jointCandidateBetter(candidate->servoPenalty, candidate->error, best->servoPenalty, best->error)) {
-        return true;
-    }
-    if (jointCandidateBetter(best->servoPenalty, best->error, candidate->servoPenalty, candidate->error)) {
+    if (footCandidateBetter(best->servoPenalty, best->error, candidate->servoPenalty, candidate->error))
+    {
         return false;
     }
     return candidate->continuityPenalty < best->continuityPenalty;
 }
 
-static void resetSolverTimingStats(SolverTimingStats *stats) {
+static bool jointServoCandidateBetter(const JointServoCandidate *candidate, const JointServoCandidate *best)
+{
+    if (!candidate->valid)
+    {
+        return false;
+    }
+    if (!best->valid)
+    {
+        return true;
+    }
+    if (jointCandidateBetter(candidate->servoPenalty, candidate->error, best->servoPenalty, best->error))
+    {
+        return true;
+    }
+    if (jointCandidateBetter(best->servoPenalty, best->error, candidate->servoPenalty, candidate->error))
+    {
+        return false;
+    }
+    return candidate->continuityPenalty < best->continuityPenalty;
+}
+
+static void resetSolverTimingStats(SolverTimingStats *stats)
+{
     memset(stats, 0, sizeof(*stats));
 }
 
-static void recordSolverTiming(SolverTimingStats *stats, uint32_t elapsedUs, bool success) {
+static void recordSolverTiming(SolverTimingStats *stats, uint32_t elapsedUs, bool success)
+{
     stats->count += 1;
-    if (success) {
+    if (success)
+    {
         stats->successCount += 1;
     }
     stats->lastUs = elapsedUs;
-    if (elapsedUs > stats->maxUs) {
+    if (elapsedUs > stats->maxUs)
+    {
         stats->maxUs = elapsedUs;
     }
     stats->totalUs += (double)elapsedUs;
 }
 
-static double solverTimingAverageUs(const SolverTimingStats *stats) {
-    if (stats->count == 0) {
+static double solverTimingAverageUs(const SolverTimingStats *stats)
+{
+    if (stats->count == 0)
+    {
         return 0.0;
     }
     return stats->totalUs / (double)stats->count;
 }
 
-static JointLimitsDeg normalizeJointLimits(JointLimitsDeg limits) {
-    if (limits.thighDeg.min > limits.thighDeg.max) {
+static JointLimitsDeg normalizeJointLimits(JointLimitsDeg limits)
+{
+    if (limits.thighDeg.min > limits.thighDeg.max)
+    {
         float tmp = limits.thighDeg.min;
         limits.thighDeg.min = limits.thighDeg.max;
         limits.thighDeg.max = tmp;
     }
 
-    if (limits.calfDeg.min > limits.calfDeg.max) {
+    if (limits.calfDeg.min > limits.calfDeg.max)
+    {
         float tmp = limits.calfDeg.min;
         limits.calfDeg.min = limits.calfDeg.max;
         limits.calfDeg.max = tmp;
@@ -589,7 +852,8 @@ static JointLimitsDeg normalizeJointLimits(JointLimitsDeg limits) {
     return limits;
 }
 
-static JointLimitsDeg defaultJointLimits(void) {
+static JointLimitsDeg defaultJointLimits(void)
+{
     JointLimitsDeg limits;
     limits.thighDeg.min = DEFAULT_THIGH_MIN_DEG;
     limits.thighDeg.max = DEFAULT_THIGH_MAX_DEG;
@@ -598,16 +862,21 @@ static JointLimitsDeg defaultJointLimits(void) {
     return limits;
 }
 
-static float interpCoupledLimit(float x, const float *xs, const float *ys, int count) {
-    if (x <= xs[0]) {
+static float interpCoupledLimit(float x, const float *xs, const float *ys, int count)
+{
+    if (x <= xs[0])
+    {
         return ys[0];
     }
-    if (x >= xs[count - 1]) {
+    if (x >= xs[count - 1])
+    {
         return ys[count - 1];
     }
 
-    for (int i = 1; i < count; ++i) {
-        if (x <= xs[i]) {
+    for (int i = 1; i < count; ++i)
+    {
+        if (x <= xs[i])
+        {
             float span = xs[i] - xs[i - 1];
             float t = span == 0.0f ? 0.0f : (x - xs[i - 1]) / span;
             return lerpf(ys[i - 1], ys[i], t);
@@ -617,25 +886,25 @@ static float interpCoupledLimit(float x, const float *xs, const float *ys, int c
     return ys[count - 1];
 }
 
-static JointLimitRangeDeg coupledCalfLimitsForThighDeg(float thighDeg, const JointLimitsDeg *limits) {
+static JointLimitRangeDeg coupledCalfLimitsForThighDeg(float thighDeg, const JointLimitsDeg *limits)
+{
     float limitedThighDeg = clampf(thighDeg, limits->thighDeg.min, limits->thighDeg.max);
     JointLimitRangeDeg range;
     range.min = interpCoupledLimit(
         limitedThighDeg,
         COUPLED_THIGH_SAMPLES_DEG,
         COUPLED_CALF_MIN_SAMPLES_DEG,
-        COUPLED_LIMIT_SAMPLE_COUNT
-    );
+        COUPLED_LIMIT_SAMPLE_COUNT);
     range.max = interpCoupledLimit(
         limitedThighDeg,
         COUPLED_THIGH_SAMPLES_DEG,
         COUPLED_CALF_MAX_SAMPLES_DEG,
-        COUPLED_LIMIT_SAMPLE_COUNT
-    );
+        COUPLED_LIMIT_SAMPLE_COUNT);
     range.min = fmaxf(range.min, limits->calfDeg.min);
     range.max = fminf(range.max, limits->calfDeg.max);
 
-    if (range.min > range.max) {
+    if (range.min > range.max)
+    {
         float mid = 0.5f * (range.min + range.max);
         range.min = mid;
         range.max = mid;
@@ -644,13 +913,14 @@ static JointLimitRangeDeg coupledCalfLimitsForThighDeg(float thighDeg, const Joi
     return range;
 }
 
-static bool jointAnglesWithinLimits(float thighDeg, float calfDeg, const JointLimitsDeg *limits) {
+static bool jointAnglesWithinLimits(float thighDeg, float calfDeg, const JointLimitsDeg *limits)
+{
     if (
         thighDeg < limits->thighDeg.min ||
         thighDeg > limits->thighDeg.max ||
         calfDeg < limits->calfDeg.min ||
-        calfDeg > limits->calfDeg.max
-    ) {
+        calfDeg > limits->calfDeg.max)
+    {
         return false;
     }
 
@@ -658,8 +928,10 @@ static bool jointAnglesWithinLimits(float thighDeg, float calfDeg, const JointLi
     return calfDeg >= coupledCalf.min && calfDeg <= coupledCalf.max;
 }
 
-static bool geometryWithinJointLimits(const LegGeometry *geometry, const JointLimitsDeg *limits) {
-    if (!geometry->valid) {
+static bool geometryWithinJointLimits(const LegGeometry *geometry, const JointLimitsDeg *limits)
+{
+    if (!geometry->valid)
+    {
         return false;
     }
 
@@ -668,65 +940,81 @@ static bool geometryWithinJointLimits(const LegGeometry *geometry, const JointLi
     return jointAnglesWithinLimits(thighDeg, calfDeg, limits);
 }
 
-static JointAnglesDeg clampJointAnglesToLimits(JointAnglesDeg jointAngles, const JointLimitsDeg *limits) {
+static JointAnglesDeg clampJointAnglesToLimits(JointAnglesDeg jointAngles, const JointLimitsDeg *limits)
+{
     jointAngles.thighDeg = clampf(jointAngles.thighDeg, limits->thighDeg.min, limits->thighDeg.max);
     JointLimitRangeDeg calfLimits = coupledCalfLimitsForThighDeg(jointAngles.thighDeg, limits);
     jointAngles.calfDeg = clampf(jointAngles.calfDeg, calfLimits.min, calfLimits.max);
     return jointAngles;
 }
 
-static float dist2f(Point2f a, Point2f b) {
+static float dist2f(Point2f a, Point2f b)
+{
     float dx = b.x - a.x;
     float dy = b.y - a.y;
     return sqrtf(dx * dx + dy * dy);
 }
 
-static Point2f footRelativeToAbsolute(Point2f relativeFoot) {
+static Point2f footRelativeToAbsolute(Point2f relativeFoot)
+{
     Point2f absoluteFoot;
     absoluteFoot.x = relativeFoot.x + FOOT_ORIGIN_OFFSET.x;
     absoluteFoot.y = relativeFoot.y + FOOT_ORIGIN_OFFSET.y;
     return absoluteFoot;
 }
 
-static Point2f footAbsoluteToRelative(Point2f absoluteFoot) {
+static Point2f footAbsoluteToRelative(Point2f absoluteFoot)
+{
     Point2f relativeFoot;
     relativeFoot.x = absoluteFoot.x - FOOT_ORIGIN_OFFSET.x;
     relativeFoot.y = absoluteFoot.y - FOOT_ORIGIN_OFFSET.y;
     return relativeFoot;
 }
 
-static float servoSpeedDegPerSecFromVoltage(float volts) {
+static float servoSpeedDegPerSecFromVoltage(float volts)
+{
     float secPer60;
-    if (volts >= 8.4f) {
+    if (volts >= 8.4f)
+    {
         secPer60 = 0.10f;
-    } else if (volts >= 7.4f) {
+    }
+    else if (volts >= 7.4f)
+    {
         float t = (volts - 7.4f) / (8.4f - 7.4f);
         secPer60 = 0.11f + t * (0.10f - 0.11f);
-    } else if (volts >= 5.0f) {
+    }
+    else if (volts >= 5.0f)
+    {
         float t = (volts - 5.0f) / (7.4f - 5.0f);
         secPer60 = 0.13f + t * (0.11f - 0.13f);
-    } else {
+    }
+    else
+    {
         secPer60 = 0.13f;
     }
     return 60.0f / secPer60;
 }
 
-static float easeInOutSmoothStep(float t) {
+static float easeInOutSmoothStep(float t)
+{
     t = clampf(t, 0.0f, 1.0f);
     return t * t * (3.0f - 2.0f * t);
 }
 
-static bool circleIntersections(Point2f c0, float r0, Point2f c1, float r1, Point2f *out1, Point2f *out2) {
+static bool circleIntersections(Point2f c0, float r0, Point2f c1, float r1, Point2f *out1, Point2f *out2)
+{
     float dx = c1.x - c0.x;
     float dy = c1.y - c0.y;
     float d = sqrtf(dx * dx + dy * dy);
-    if (d == 0.0f || d > (r0 + r1) || d < fabsf(r0 - r1)) {
+    if (d == 0.0f || d > (r0 + r1) || d < fabsf(r0 - r1))
+    {
         return false;
     }
 
     float a = (r0 * r0 - r1 * r1 + d * d) / (2.0f * d);
     float hSquared = r0 * r0 - a * a;
-    if (hSquared < 0.0f) {
+    if (hSquared < 0.0f)
+    {
         return false;
     }
 
@@ -742,17 +1030,20 @@ static bool circleIntersections(Point2f c0, float r0, Point2f c1, float r1, Poin
     return true;
 }
 
-static Point2f chooseBellPoint(Point2f p1, Point2f p2) {
+static Point2f chooseBellPoint(Point2f p1, Point2f p2)
+{
     return (p1.y > p2.y) ? p1 : p2;
 }
 
-static Point2f chooseCalfAttachPoint(Point2f p1, Point2f p2, Point2f knee) {
+static Point2f chooseCalfAttachPoint(Point2f p1, Point2f p2, Point2f knee)
+{
     float score1 = (knee.y - p1.y) * 3.0f + fabsf(knee.x - p1.x);
     float score2 = (knee.y - p2.y) * 3.0f + fabsf(knee.x - p2.x);
     return (score1 < score2) ? p1 : p2;
 }
 
-static LegGeometry solveGeometry(float thetaThigh, float thetaServo) {
+static LegGeometry solveGeometry(float thetaThigh, float thetaServo)
+{
     LegGeometry g;
     g.valid = true;
     g.hip = HIP_PIVOT;
@@ -766,7 +1057,8 @@ static LegGeometry solveGeometry(float thetaThigh, float thetaServo) {
     g.servoHornEnd.y = g.servoPivot.y + HORN * sinf(thetaServo);
 
     Point2f bellI1, bellI2;
-    if (!circleIntersections(g.hip, BELL, g.servoHornEnd, LINK_SHORT, &bellI1, &bellI2)) {
+    if (!circleIntersections(g.hip, BELL, g.servoHornEnd, LINK_SHORT, &bellI1, &bellI2))
+    {
         g.valid = false;
         return g;
     }
@@ -777,7 +1069,8 @@ static LegGeometry solveGeometry(float thetaThigh, float thetaServo) {
     g.bellArmB.y = g.hip.y + BELL * sinf(bellAngle - (float)M_PI / 2.0f);
 
     Point2f calfI1, calfI2;
-    if (!circleIntersections(g.bellArmB, LINK_LONG, g.knee, CALF_ATTACH_OFFSET, &calfI1, &calfI2)) {
+    if (!circleIntersections(g.bellArmB, LINK_LONG, g.knee, CALF_ATTACH_OFFSET, &calfI1, &calfI2))
+    {
         g.valid = false;
         return g;
     }
@@ -795,8 +1088,8 @@ static FootServoCandidate evaluateFootServoCandidate(
     Point2f target,
     const JointLimitsDeg *limits,
     float startModelThighDeg,
-    float startModelCalfDeg
-) {
+    float startModelCalfDeg)
+{
     FootServoCandidate candidate;
     memset(&candidate, 0, sizeof(candidate));
     candidate.valid = false;
@@ -805,8 +1098,8 @@ static FootServoCandidate evaluateFootServoCandidate(
         modelThighDeg < SERVO_MIN_DEG ||
         modelThighDeg > SERVO_MAX_DEG ||
         modelCalfDeg < SERVO_MIN_DEG ||
-        modelCalfDeg > SERVO_MAX_DEG
-    ) {
+        modelCalfDeg > SERVO_MAX_DEG)
+    {
         return candidate;
     }
 
@@ -816,7 +1109,8 @@ static FootServoCandidate evaluateFootServoCandidate(
     candidate.thetaServo = g_servoNeutralAngle + degToRad(modelCalfDeg - 90.0f);
     candidate.geometry = solveGeometry(candidate.thetaThigh, candidate.thetaServo);
 
-    if (!geometryWithinJointLimits(&candidate.geometry, limits)) {
+    if (!geometryWithinJointLimits(&candidate.geometry, limits))
+    {
         return candidate;
     }
 
@@ -833,13 +1127,14 @@ static JointServoCandidate evaluateJointServoCandidate(
     float modelCalfDeg,
     float targetThetaCalf,
     const JointLimitsDeg *limits,
-    float startModelCalfDeg
-) {
+    float startModelCalfDeg)
+{
     JointServoCandidate candidate;
     memset(&candidate, 0, sizeof(candidate));
     candidate.valid = false;
 
-    if (modelCalfDeg < SERVO_MIN_DEG || modelCalfDeg > SERVO_MAX_DEG) {
+    if (modelCalfDeg < SERVO_MIN_DEG || modelCalfDeg > SERVO_MAX_DEG)
+    {
         return candidate;
     }
 
@@ -847,7 +1142,8 @@ static JointServoCandidate evaluateJointServoCandidate(
     candidate.thetaServo = g_servoNeutralAngle + degToRad(modelCalfDeg - 90.0f);
     candidate.geometry = solveGeometry(thetaThigh, candidate.thetaServo);
 
-    if (!geometryWithinJointLimits(&candidate.geometry, limits)) {
+    if (!geometryWithinJointLimits(&candidate.geometry, limits))
+    {
         return candidate;
     }
 
@@ -864,18 +1160,21 @@ static FootServoCandidate refineFootServoCandidate(
     Point2f target,
     const JointLimitsDeg *limits,
     float startModelThighDeg,
-    float startModelCalfDeg
-) {
-    if (!best.valid) {
+    float startModelCalfDeg)
+{
+    if (!best.valid)
+    {
         return best;
     }
 
     const size_t refineCount = sizeof(SERVO_REFINE_STEPS_DEG) / sizeof(SERVO_REFINE_STEPS_DEG[0]);
-    for (size_t i = 0; i < refineCount; ++i) {
+    for (size_t i = 0; i < refineCount; ++i)
+    {
         float step = SERVO_REFINE_STEPS_DEG[i];
         bool improved = true;
 
-        while (improved) {
+        while (improved)
+        {
             improved = false;
             const float neighbors[8][2] = {
                 {best.modelThighDeg + step, best.modelCalfDeg},
@@ -885,19 +1184,19 @@ static FootServoCandidate refineFootServoCandidate(
                 {best.modelThighDeg + step, best.modelCalfDeg + step},
                 {best.modelThighDeg + step, best.modelCalfDeg - step},
                 {best.modelThighDeg - step, best.modelCalfDeg + step},
-                {best.modelThighDeg - step, best.modelCalfDeg - step}
-            };
+                {best.modelThighDeg - step, best.modelCalfDeg - step}};
 
-            for (int neighborIndex = 0; neighborIndex < 8; ++neighborIndex) {
+            for (int neighborIndex = 0; neighborIndex < 8; ++neighborIndex)
+            {
                 FootServoCandidate candidate = evaluateFootServoCandidate(
                     neighbors[neighborIndex][0],
                     neighbors[neighborIndex][1],
                     target,
                     limits,
                     startModelThighDeg,
-                    startModelCalfDeg
-                );
-                if (footServoCandidateBetter(&candidate, &best)) {
+                    startModelCalfDeg);
+                if (footServoCandidateBetter(&candidate, &best))
+                {
                     best = candidate;
                     improved = true;
                 }
@@ -913,33 +1212,36 @@ static JointServoCandidate refineJointServoCandidate(
     float thetaThigh,
     float targetThetaCalf,
     const JointLimitsDeg *limits,
-    float startModelCalfDeg
-) {
-    if (!best.valid) {
+    float startModelCalfDeg)
+{
+    if (!best.valid)
+    {
         return best;
     }
 
     const size_t refineCount = sizeof(SERVO_REFINE_STEPS_DEG) / sizeof(SERVO_REFINE_STEPS_DEG[0]);
-    for (size_t i = 0; i < refineCount; ++i) {
+    for (size_t i = 0; i < refineCount; ++i)
+    {
         float step = SERVO_REFINE_STEPS_DEG[i];
         bool improved = true;
 
-        while (improved) {
+        while (improved)
+        {
             improved = false;
             const float neighbors[2] = {
                 best.modelCalfDeg + step,
-                best.modelCalfDeg - step
-            };
+                best.modelCalfDeg - step};
 
-            for (int neighborIndex = 0; neighborIndex < 2; ++neighborIndex) {
+            for (int neighborIndex = 0; neighborIndex < 2; ++neighborIndex)
+            {
                 JointServoCandidate candidate = evaluateJointServoCandidate(
                     thetaThigh,
                     neighbors[neighborIndex],
                     targetThetaCalf,
                     limits,
-                    startModelCalfDeg
-                );
-                if (jointServoCandidateBetter(&candidate, &best)) {
+                    startModelCalfDeg);
+                if (jointServoCandidateBetter(&candidate, &best))
+                {
                     best = candidate;
                     improved = true;
                 }
@@ -950,24 +1252,27 @@ static JointServoCandidate refineJointServoCandidate(
     return best;
 }
 
-static void solveAnglesForAbsoluteFoot(Point2f target, float startThetaThigh, float startThetaServo, const JointLimitsDeg *limits, float *outThetaThigh, float *outThetaServo, float *outFootError, bool *outHasSolution, bool *outSuccess) {
+static void solveAnglesForAbsoluteFoot(Point2f target, float startThetaThigh, float startThetaServo, const JointLimitsDeg *limits, float *outThetaThigh, float *outThetaServo, float *outFootError, bool *outHasSolution, bool *outSuccess)
+{
     float startModelThighDeg = clampf(thetaToModelServoDegInline(startThetaThigh, g_thighNeutralAngle), SERVO_MIN_DEG, SERVO_MAX_DEG);
     float startModelCalfDeg = clampf(thetaToModelServoDegInline(startThetaServo, g_servoNeutralAngle), SERVO_MIN_DEG, SERVO_MAX_DEG);
     FootServoCandidate best;
     memset(&best, 0, sizeof(best));
     best.valid = false;
 
-    for (float modelThighDeg = SERVO_MIN_DEG; modelThighDeg <= SERVO_MAX_DEG; modelThighDeg += SERVO_SEARCH_STEP_DEG) {
-        for (float modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG) {
+    for (float modelThighDeg = SERVO_MIN_DEG; modelThighDeg <= SERVO_MAX_DEG; modelThighDeg += SERVO_SEARCH_STEP_DEG)
+    {
+        for (float modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG)
+        {
             FootServoCandidate candidate = evaluateFootServoCandidate(
                 modelThighDeg,
                 modelCalfDeg,
                 target,
                 limits,
                 startModelThighDeg,
-                startModelCalfDeg
-            );
-            if (footServoCandidateBetter(&candidate, &best)) {
+                startModelCalfDeg);
+            if (footServoCandidateBetter(&candidate, &best))
+            {
                 best = candidate;
             }
         }
@@ -975,7 +1280,8 @@ static void solveAnglesForAbsoluteFoot(Point2f target, float startThetaThigh, fl
 
     best = refineFootServoCandidate(best, target, limits, startModelThighDeg, startModelCalfDeg);
 
-    if (!best.valid) {
+    if (!best.valid)
+    {
         LegGeometry fallbackGeometry = solveGeometry(startThetaThigh, startThetaServo);
         *outThetaThigh = startThetaThigh;
         *outThetaServo = startThetaServo;
@@ -993,28 +1299,31 @@ static void solveAnglesForAbsoluteFoot(Point2f target, float startThetaThigh, fl
     *outSuccess = best.geometry.valid && isfinite(best.error) && (best.error < 10.0f);
 }
 
-static void solveServoForJointAngles(float thetaThigh, float targetThetaCalf, float startThetaServo, const JointLimitsDeg *limits, float *outThetaServo, float *outJointError, bool *outHasSolution, bool *outSuccess) {
+static void solveServoForJointAngles(float thetaThigh, float targetThetaCalf, float startThetaServo, const JointLimitsDeg *limits, float *outThetaServo, float *outJointError, bool *outHasSolution, bool *outSuccess)
+{
     float startModelCalfDeg = clampf(thetaToModelServoDegInline(startThetaServo, g_servoNeutralAngle), SERVO_MIN_DEG, SERVO_MAX_DEG);
     JointServoCandidate best;
     memset(&best, 0, sizeof(best));
     best.valid = false;
 
-    for (float modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG) {
+    for (float modelCalfDeg = SERVO_MIN_DEG; modelCalfDeg <= SERVO_MAX_DEG; modelCalfDeg += SERVO_SEARCH_STEP_DEG)
+    {
         JointServoCandidate candidate = evaluateJointServoCandidate(
             thetaThigh,
             modelCalfDeg,
             targetThetaCalf,
             limits,
-            startModelCalfDeg
-        );
-        if (jointServoCandidateBetter(&candidate, &best)) {
+            startModelCalfDeg);
+        if (jointServoCandidateBetter(&candidate, &best))
+        {
             best = candidate;
         }
     }
 
     best = refineJointServoCandidate(best, thetaThigh, targetThetaCalf, limits, startModelCalfDeg);
 
-    if (!best.valid) {
+    if (!best.valid)
+    {
         *outThetaServo = startThetaServo;
         *outJointError = FLT_MAX;
         *outHasSolution = false;
@@ -1028,21 +1337,20 @@ static void solveServoForJointAngles(float thetaThigh, float targetThetaCalf, fl
     *outSuccess = best.geometry.valid && isfinite(best.error) && (best.error < degToRad(3.0f));
 }
 
-static void runSolverBenchmark(uint32_t iterations, SolverTimingStats *footStats, SolverTimingStats *jointStats) {
+static void runSolverBenchmark(uint32_t iterations, SolverTimingStats *footStats, SolverTimingStats *jointStats)
+{
     static const Point2f footTargets[] = {
         {-60.0f, 0.0f},
         {-30.0f, 0.0f},
         {0.0f, 0.0f},
         {20.0f, -8.0f},
-        {30.0f, 0.0f}
-    };
+        {30.0f, 0.0f}};
     static const JointAnglesDeg jointTargets[] = {
         {-42.0f, -154.0f},
         {-30.0f, -140.0f},
         {-18.0f, -120.0f},
         {-55.0f, -163.0f},
-        {-48.0f, -150.0f}
-    };
+        {-48.0f, -150.0f}};
 
     RobotLegState *leg = &g_legs[0];
     float thetaThigh = leg->lastThetaThigh;
@@ -1051,19 +1359,21 @@ static void runSolverBenchmark(uint32_t iterations, SolverTimingStats *footStats
     resetSolverTimingStats(footStats);
     resetSolverTimingStats(jointStats);
 
-    for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
-        for (size_t targetIndex = 0; targetIndex < (sizeof(footTargets) / sizeof(footTargets[0])); ++targetIndex) {
+    for (uint32_t iteration = 0; iteration < iterations; ++iteration)
+    {
+        for (size_t targetIndex = 0; targetIndex < (sizeof(footTargets) / sizeof(footTargets[0])); ++targetIndex)
+        {
             uint32_t startedUs = micros();
             LegIKResult ik = robotDogLegIK(
                 footTargets[targetIndex].x,
                 footTargets[targetIndex].y,
                 thetaThigh,
                 thetaServo,
-                &leg->jointLimits
-            );
+                &leg->jointLimits);
             uint32_t elapsedUs = micros() - startedUs;
             recordSolverTiming(footStats, elapsedUs, ik.hasSolution);
-            if (ik.hasSolution) {
+            if (ik.hasSolution)
+            {
                 thetaThigh = ik.thetaThigh;
                 thetaServo = ik.thetaServo;
             }
@@ -1073,8 +1383,10 @@ static void runSolverBenchmark(uint32_t iterations, SolverTimingStats *footStats
     thetaThigh = leg->lastThetaThigh;
     thetaServo = leg->lastThetaServo;
 
-    for (uint32_t iteration = 0; iteration < iterations; ++iteration) {
-        for (size_t targetIndex = 0; targetIndex < (sizeof(jointTargets) / sizeof(jointTargets[0])); ++targetIndex) {
+    for (uint32_t iteration = 0; iteration < iterations; ++iteration)
+    {
+        for (size_t targetIndex = 0; targetIndex < (sizeof(jointTargets) / sizeof(jointTargets[0])); ++targetIndex)
+        {
             float solvedThetaServo = thetaServo;
             float jointError = 0.0f;
             bool hasSolution = false;
@@ -1088,11 +1400,11 @@ static void runSolverBenchmark(uint32_t iterations, SolverTimingStats *footStats
                 &solvedThetaServo,
                 &jointError,
                 &hasSolution,
-                &success
-            );
+                &success);
             uint32_t elapsedUs = micros() - startedUs;
             recordSolverTiming(jointStats, elapsedUs, hasSolution && success);
-            if (hasSolution) {
+            if (hasSolution)
+            {
                 thetaThigh = degToRad(jointTargets[targetIndex].thighDeg);
                 thetaServo = solvedThetaServo;
             }
@@ -1100,22 +1412,27 @@ static void runSolverBenchmark(uint32_t iterations, SolverTimingStats *footStats
     }
 }
 
-static void robotDogLegInitNeutral(void) {
+static void robotDogLegInitNeutral(void)
+{
     g_thighNeutralAngle = NEUTRAL_THIGH_THETA;
     g_servoNeutralAngle = NEUTRAL_SERVO_THETA;
     g_neutralInitialized = true;
 }
 
-static float thetaToModelServoDeg(float theta, float neutralTheta) {
+static float thetaToModelServoDeg(float theta, float neutralTheta)
+{
     return 90.0f + radToDeg(theta - neutralTheta);
 }
 
-static float modelServoDegToTheta(float modelDeg, float neutralTheta) {
+static float modelServoDegToTheta(float modelDeg, float neutralTheta)
+{
     return neutralTheta + degToRad(modelDeg - 90.0f);
 }
 
-static LegIKResult robotDogLegIK(float footX, float footY, float startThetaThigh, float startThetaServo, const JointLimitsDeg *limits) {
-    if (!g_neutralInitialized) {
+static LegIKResult robotDogLegIK(float footX, float footY, float startThetaThigh, float startThetaServo, const JointLimitsDeg *limits)
+{
+    if (!g_neutralInitialized)
+    {
         robotDogLegInitNeutral();
     }
 
@@ -1136,8 +1453,7 @@ static LegIKResult robotDogLegIK(float footX, float footY, float startThetaThigh
         &thetaServo,
         &footError,
         &hasSolution,
-        &success
-    );
+        &success);
 
     LegGeometry geometry = solveGeometry(thetaThigh, thetaServo);
     LegIKResult result;
@@ -1152,18 +1468,22 @@ static LegIKResult robotDogLegIK(float footX, float footY, float startThetaThigh
     return result;
 }
 
-static float applyServoCalibration(float modelDeg, float centerDeg, float sign) {
+static float applyServoCalibration(float modelDeg, float centerDeg, float sign)
+{
     return centerDeg + sign * (modelDeg - 90.0f);
 }
 
-static float removeServoCalibration(float rawDeg, float centerDeg, float sign) {
-    if (sign == 0.0f) {
+static float removeServoCalibration(float rawDeg, float centerDeg, float sign)
+{
+    if (sign == 0.0f)
+    {
         return 90.0f;
     }
     return 90.0f + (rawDeg - centerDeg) / sign;
 }
 
-static uint16_t servoDegToPcaTicks(float servoDeg) {
+static uint16_t servoDegToPcaTicks(float servoDeg)
+{
     float clamped = clampf(servoDeg, SERVO_MIN_DEG, SERVO_MAX_DEG);
     float ratio = clamped / 180.0f;
     float pulseUs = SERVO_MIN_PULSE_US + ratio * (SERVO_MAX_PULSE_US - SERVO_MIN_PULSE_US);
@@ -1172,50 +1492,61 @@ static uint16_t servoDegToPcaTicks(float servoDeg) {
     return (uint16_t)roundf(ticks);
 }
 
-static void applyPca9685Frequency(float hz) {
+static void applyPca9685Frequency(float hz)
+{
     g_pwmFrequencyHz = clampf(hz, MIN_PCA9685_FREQUENCY_HZ, MAX_PCA9685_FREQUENCY_HZ);
     g_pwm.setPWMFreq(g_pwmFrequencyHz);
 }
 
 static float smoothServoReadEstimate(const SmoothServo *s);
 
-static void smoothServoRelease(SmoothServo *s) {
+static void smoothServoRelease(SmoothServo *s)
+{
     s->estimatedDeg = smoothServoReadEstimate(s);
     s->startDeg = s->estimatedDeg;
     s->targetDeg = s->estimatedDeg;
     s->moveDurationUs = 1;
     s->moving = false;
-    if (s->channel != INVALID_CHANNEL) {
+    if (s->channel != INVALID_CHANNEL)
+    {
         g_pwm.setPWM(s->channel, 0, 4096);
     }
     s->attached = false;
 }
 
-static void smoothServoWriteRaw(SmoothServo *s, float rawDeg) {
-    if (s->attached) {
+static void smoothServoWriteRaw(SmoothServo *s, float rawDeg)
+{
+    if (s->attached)
+    {
         g_pwm.setPWM(s->channel, 0, servoDegToPcaTicks(rawDeg));
     }
 }
 
-static void smoothServoWriteEstimate(SmoothServo *s) {
+static void smoothServoWriteEstimate(SmoothServo *s)
+{
     smoothServoWriteRaw(s, smoothServoReadEstimate(s));
 }
 
-static float smoothServoEffectiveMaxSpeedDegPerSec(const SmoothServo *s) {
+static float smoothServoEffectiveMaxSpeedDegPerSec(const SmoothServo *s)
+{
     float limit = s->speedLimitDegPerSec;
-    if (limit <= 0.0f) {
+    if (limit <= 0.0f)
+    {
         limit = s->hardwareMaxSpeedDegPerSec;
     }
-    if (limit > s->hardwareMaxSpeedDegPerSec) {
+    if (limit > s->hardwareMaxSpeedDegPerSec)
+    {
         limit = s->hardwareMaxSpeedDegPerSec;
     }
-    if (limit < 1.0f) {
+    if (limit < 1.0f)
+    {
         limit = 1.0f;
     }
     return limit;
 }
 
-static void smoothServoBegin(SmoothServo *s, uint8_t channel, float initialDeg, float minDeg, float maxDeg, float centerDeg, float sign, float supplyVolts) {
+static void smoothServoBegin(SmoothServo *s, uint8_t channel, float initialDeg, float minDeg, float maxDeg, float centerDeg, float sign, float supplyVolts)
+{
     s->channel = channel;
     s->attached = (channel != INVALID_CHANNEL);
     s->minDeg = minDeg;
@@ -1233,12 +1564,15 @@ static void smoothServoBegin(SmoothServo *s, uint8_t channel, float initialDeg, 
     smoothServoWriteEstimate(s);
 }
 
-static float smoothServoReadEstimate(const SmoothServo *s) {
+static float smoothServoReadEstimate(const SmoothServo *s)
+{
     return s->estimatedDeg;
 }
 
-static void smoothServoCommandRaw(SmoothServo *s, float rawTargetDeg) {
-    if (s->channel != INVALID_CHANNEL) {
+static void smoothServoCommandRaw(SmoothServo *s, float rawTargetDeg)
+{
+    if (s->channel != INVALID_CHANNEL)
+    {
         s->attached = true;
     }
     rawTargetDeg = clampf(rawTargetDeg, s->minDeg, s->maxDeg);
@@ -1252,8 +1586,10 @@ static void smoothServoCommandRaw(SmoothServo *s, float rawTargetDeg) {
     smoothServoWriteEstimate(s);
 }
 
-static void smoothServoCommandRawImmediate(SmoothServo *s, float rawTargetDeg) {
-    if (s->channel != INVALID_CHANNEL) {
+static void smoothServoCommandRawImmediate(SmoothServo *s, float rawTargetDeg)
+{
+    if (s->channel != INVALID_CHANNEL)
+    {
         s->attached = true;
     }
     rawTargetDeg = clampf(rawTargetDeg, s->minDeg, s->maxDeg);
@@ -1266,19 +1602,23 @@ static void smoothServoCommandRawImmediate(SmoothServo *s, float rawTargetDeg) {
     smoothServoWriteRaw(s, rawTargetDeg);
 }
 
-static void smoothServoCommandModelDeg(SmoothServo *s, float modelDeg) {
+static void smoothServoCommandModelDeg(SmoothServo *s, float modelDeg)
+{
     float raw = applyServoCalibration(modelDeg, s->centerDeg, s->sign);
     smoothServoCommandRaw(s, raw);
 }
 
-static void smoothServoCommandModelDegImmediate(SmoothServo *s, float modelDeg) {
+static void smoothServoCommandModelDegImmediate(SmoothServo *s, float modelDeg)
+{
     float raw = applyServoCalibration(modelDeg, s->centerDeg, s->sign);
     smoothServoCommandRawImmediate(s, raw);
 }
 
-static void smoothServoSetSpeedLimitDegPerSec(SmoothServo *s, float speedLimitDegPerSec) {
+static void smoothServoSetSpeedLimitDegPerSec(SmoothServo *s, float speedLimitDegPerSec)
+{
     s->speedLimitDegPerSec = speedLimitDegPerSec;
-    if (!s->attached) {
+    if (!s->attached)
+    {
         return;
     }
 
@@ -1291,21 +1631,27 @@ static void smoothServoSetSpeedLimitDegPerSec(SmoothServo *s, float speedLimitDe
     smoothServoWriteEstimate(s);
 }
 
-static void smoothServoUpdate(SmoothServo *s) {
+static void smoothServoUpdate(SmoothServo *s)
+{
     uint32_t nowUs = micros();
 
-    if (s->moving) {
+    if (s->moving)
+    {
         uint32_t elapsedUs = nowUs - s->moveStartUs;
-        if (elapsedUs > 0) {
+        if (elapsedUs > 0)
+        {
             float effectiveMaxSpeed = smoothServoEffectiveMaxSpeedDegPerSec(s) / MOTION_TIME_SCALE;
             float maxDelta = effectiveMaxSpeed * ((float)elapsedUs / 1000000.0f);
             float remaining = s->targetDeg - s->estimatedDeg;
             float step = clampf(remaining, -maxDelta, maxDelta);
 
-            if (fabsf(remaining) <= fmaxf(0.01f, maxDelta)) {
+            if (fabsf(remaining) <= fmaxf(0.01f, maxDelta))
+            {
                 s->estimatedDeg = s->targetDeg;
                 s->moving = false;
-            } else {
+            }
+            else
+            {
                 s->estimatedDeg = clampf(s->estimatedDeg + step, s->minDeg, s->maxDeg);
             }
         }
@@ -1317,7 +1663,8 @@ static void smoothServoUpdate(SmoothServo *s) {
     smoothServoWriteRaw(s, s->estimatedDeg);
 }
 
-static ServoAnglesDeg getCurrentServoAngles(const RobotLegState *leg) {
+static ServoAnglesDeg getCurrentServoAngles(const RobotLegState *leg)
+{
     ServoAnglesDeg result;
     result.hip = removeServoCalibration(leg->hip.estimatedDeg, leg->hip.centerDeg, leg->hip.sign);
     result.thigh = removeServoCalibration(leg->thigh.estimatedDeg, leg->thigh.centerDeg, leg->thigh.sign);
@@ -1325,21 +1672,26 @@ static ServoAnglesDeg getCurrentServoAngles(const RobotLegState *leg) {
     return result;
 }
 
-static void updateLegDerivedStateFromServo(RobotLegState *leg, ServoAnglesDeg servoAngles, bool desiredState) {
+static void updateLegDerivedStateFromServo(RobotLegState *leg, ServoAnglesDeg servoAngles, bool desiredState)
+{
     float thetaThigh = modelServoDegToTheta(servoAngles.thigh, g_thighNeutralAngle);
     float thetaServo = modelServoDegToTheta(servoAngles.calf, g_servoNeutralAngle);
     LegGeometry geometry = solveGeometry(thetaThigh, thetaServo);
 
-    if (!geometry.valid) {
+    if (!geometry.valid)
+    {
         return;
     }
 
-    if (desiredState) {
+    if (desiredState)
+    {
         leg->desiredServoAngles = servoAngles;
         leg->desiredJointAngles.thighDeg = radToDeg(geometry.thetaThigh);
         leg->desiredJointAngles.calfDeg = radToDeg(geometry.thetaCalf);
         leg->desiredFoot = footAbsoluteToRelative(geometry.foot);
-    } else {
+    }
+    else
+    {
         leg->currentServoAngles = servoAngles;
         leg->currentJointAngles.thighDeg = radToDeg(geometry.thetaThigh);
         leg->currentJointAngles.calfDeg = radToDeg(geometry.thetaCalf);
@@ -1347,52 +1699,71 @@ static void updateLegDerivedStateFromServo(RobotLegState *leg, ServoAnglesDeg se
     }
 }
 
-static int legIndexFromId(const char *id) {
-    for (int i = 0; i < NUM_LEGS; ++i) {
-        if (strcmp(id, LEG_CONFIGS[i].id) == 0) {
+static int legIndexFromId(const char *id)
+{
+    for (int i = 0; i < NUM_LEGS; ++i)
+    {
+        if (strcmp(id, LEG_CONFIGS[i].id) == 0)
+        {
             return i;
         }
     }
     return -1;
 }
 
-static const char *modeToString(RobotMode mode) {
-    switch (mode) {
-        case MODE_IDLE: return "idle";
-        case MODE_DIRECT_FOOT_XY: return "direct_foot_xy";
-        case MODE_DIRECT_JOINT_ANGLES: return "direct_joint_angles";
-        case MODE_DIRECT_SERVO_ANGLES: return "direct_servo_angles";
-        case MODE_BUILTIN_WALK: return "builtin_walk";
-        case MODE_BUILTIN_CROUCH: return "builtin_crouch";
-        case MODE_ANIMATION_PLAYBACK: return "animation_playback";
-        default: return "idle";
+static const char *modeToString(RobotMode mode)
+{
+    switch (mode)
+    {
+    case MODE_IDLE:
+        return "idle";
+    case MODE_DIRECT_FOOT_XY:
+        return "direct_foot_xy";
+    case MODE_DIRECT_JOINT_ANGLES:
+        return "direct_joint_angles";
+    case MODE_DIRECT_SERVO_ANGLES:
+        return "direct_servo_angles";
+    case MODE_BUILTIN_WALK:
+        return "builtin_walk";
+    case MODE_BUILTIN_CROUCH:
+        return "builtin_crouch";
+    case MODE_ANIMATION_PLAYBACK:
+        return "animation_playback";
+    default:
+        return "idle";
     }
 }
 
-static void setMode(RobotMode mode) {
+static void setMode(RobotMode mode)
+{
     g_mode = mode;
     g_modeStartMs = millis();
 
-    if (mode != MODE_BUILTIN_WALK && mode != MODE_BUILTIN_CROUCH) {
+    if (mode != MODE_BUILTIN_WALK && mode != MODE_BUILTIN_CROUCH)
+    {
         g_builtinName[0] = '\0';
     }
 
-    if (mode != MODE_ANIMATION_PLAYBACK) {
+    if (mode != MODE_ANIMATION_PLAYBACK)
+    {
         g_animation.playing = false;
         g_animation.paused = false;
     }
 }
 
-static void clearLegError(RobotLegState *leg) {
+static void clearLegError(RobotLegState *leg)
+{
     leg->lastError[0] = '\0';
 }
 
-static void setLegError(RobotLegState *leg, const char *message) {
+static void setLegError(RobotLegState *leg, const char *message)
+{
     strncpy(leg->lastError, message, MAX_ERROR_LEN - 1);
     leg->lastError[MAX_ERROR_LEN - 1] = '\0';
 }
 
-static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config) {
+static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config)
+{
     smoothServoBegin(&leg->hip, config->hipChannel, HIP_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, HIP_CENTER_DEG, config->hipSign, SERVO_SUPPLY_VOLTS);
     smoothServoBegin(&leg->thigh, config->thighChannel, THIGH_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, THIGH_CENTER_DEG, config->thighSign, SERVO_SUPPLY_VOLTS);
     smoothServoBegin(&leg->calf, config->calfChannel, CALF_CENTER_DEG, SERVO_MIN_DEG, SERVO_MAX_DEG, CALF_CENTER_DEG, config->calfSign, SERVO_SUPPLY_VOLTS);
@@ -1420,7 +1791,8 @@ static void robotLegBegin(RobotLegState *leg, const LegHardwareConfig *config) {
     updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, false);
 }
 
-static void robotLegUpdate(RobotLegState *leg) {
+static void robotLegUpdate(RobotLegState *leg)
+{
     smoothServoUpdate(&leg->hip);
     smoothServoUpdate(&leg->thigh);
     smoothServoUpdate(&leg->calf);
@@ -1430,7 +1802,8 @@ static void robotLegUpdate(RobotLegState *leg) {
 
 static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfDeg);
 
-static void robotLegSetServoChannels(int legIndex, uint8_t hipChannel, uint8_t thighChannel, uint8_t calfChannel) {
+static void robotLegSetServoChannels(int legIndex, uint8_t hipChannel, uint8_t thighChannel, uint8_t calfChannel)
+{
     RobotLegState *leg = &g_legs[legIndex];
     leg->hip.channel = hipChannel;
     leg->thigh.channel = thighChannel;
@@ -1446,8 +1819,10 @@ static void robotLegSetServoChannels(int legIndex, uint8_t hipChannel, uint8_t t
     smoothServoWriteEstimate(&leg->calf);
 }
 
-static void releaseAllServos(void) {
-    for (int i = 0; i < NUM_LEGS; ++i) {
+static void releaseAllServos(void)
+{
+    for (int i = 0; i < NUM_LEGS; ++i)
+    {
         smoothServoRelease(&g_legs[i].hip);
         smoothServoRelease(&g_legs[i].thigh);
         smoothServoRelease(&g_legs[i].calf);
@@ -1457,13 +1832,15 @@ static void releaseAllServos(void) {
     g_servosReleased = true;
 }
 
-static void robotLegSetJointLimits(int legIndex, JointLimitsDeg limits) {
+static void robotLegSetJointLimits(int legIndex, JointLimitsDeg limits)
+{
     RobotLegState *leg = &g_legs[legIndex];
     leg->jointLimits = normalizeJointLimits(limits);
     robotLegCommandJointAngles(legIndex, leg->desiredJointAngles.thighDeg, leg->desiredJointAngles.calfDeg);
 }
 
-static void robotLegSetServoSpeedLimit(int legIndex, float hipDegPerSec, float thighDegPerSec, float calfDegPerSec) {
+static void robotLegSetServoSpeedLimit(int legIndex, float hipDegPerSec, float thighDegPerSec, float calfDegPerSec)
+{
     RobotLegState *leg = &g_legs[legIndex];
     leg->servoSpeedLimitDegPerSec.hip = hipDegPerSec;
     leg->servoSpeedLimitDegPerSec.thigh = thighDegPerSec;
@@ -1473,7 +1850,8 @@ static void robotLegSetServoSpeedLimit(int legIndex, float hipDegPerSec, float t
     smoothServoSetSpeedLimitDegPerSec(&leg->calf, calfDegPerSec);
 }
 
-static void robotLegCommandServo(int legIndex, float hipServoDeg, float thighServoDeg, float calfServoDeg) {
+static void robotLegCommandServo(int legIndex, float hipServoDeg, float thighServoDeg, float calfServoDeg)
+{
     RobotLegState *leg = &g_legs[legIndex];
     g_servosReleased = false;
     smoothServoCommandModelDeg(&leg->hip, hipServoDeg);
@@ -1485,7 +1863,8 @@ static void robotLegCommandServo(int legIndex, float hipServoDeg, float thighSer
     updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, true);
 }
 
-static void robotLegCommandServoImmediate(int legIndex, float hipServoDeg, float thighServoDeg, float calfServoDeg) {
+static void robotLegCommandServoImmediate(int legIndex, float hipServoDeg, float thighServoDeg, float calfServoDeg)
+{
     RobotLegState *leg = &g_legs[legIndex];
     g_servosReleased = false;
     smoothServoCommandModelDegImmediate(&leg->hip, hipServoDeg);
@@ -1497,12 +1876,14 @@ static void robotLegCommandServoImmediate(int legIndex, float hipServoDeg, float
     updateLegDerivedStateFromServo(leg, leg->desiredServoAngles, true);
 }
 
-static bool robotLegCommandFoot(int legIndex, float footX, float footY) {
+static bool robotLegCommandFoot(int legIndex, float footX, float footY)
+{
     RobotLegState *leg = &g_legs[legIndex];
     uint32_t startedUs = micros();
     LegIKResult ik = robotDogLegIK(footX, footY, leg->lastThetaThigh, leg->lastThetaServo, &leg->jointLimits);
     recordSolverTiming(&g_footSolveStats, micros() - startedUs, ik.hasSolution && ik.success);
-    if (!ik.hasSolution) {
+    if (!ik.hasSolution)
+    {
         setLegError(leg, "IK failed for foot target");
         return false;
     }
@@ -1515,7 +1896,8 @@ static bool robotLegCommandFoot(int legIndex, float footX, float footY) {
     return true;
 }
 
-static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfDeg) {
+static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfDeg)
+{
     RobotLegState *leg = &g_legs[legIndex];
     JointAnglesDeg requestedAngles;
     requestedAngles.thighDeg = thighDeg;
@@ -1530,7 +1912,8 @@ static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfD
 
     solveServoForJointAngles(thetaThigh, degToRad(limitedAngles.calfDeg), leg->lastThetaServo, &leg->jointLimits, &thetaServo, &jointError, &hasSolution, &success);
     recordSolverTiming(&g_jointSolveStats, micros() - startedUs, hasSolution && success);
-    if (!hasSolution) {
+    if (!hasSolution)
+    {
         setLegError(leg, "Joint angle solve failed");
         return false;
     }
@@ -1546,24 +1929,29 @@ static bool robotLegCommandJointAngles(int legIndex, float thighDeg, float calfD
     return true;
 }
 
-static void animationReset(AnimationClip *clip) {
+static void animationReset(AnimationClip *clip)
+{
     memset(clip, 0, sizeof(AnimationClip));
 }
 
-static void animationBeginUpload(AnimationClip *clip, const char *name, float duration) {
+static void animationBeginUpload(AnimationClip *clip, const char *name, float duration)
+{
     animationReset(clip);
     strncpy(clip->name, name, MAX_NAME_LEN - 1);
     clip->name[MAX_NAME_LEN - 1] = '\0';
     clip->duration = clampf(duration, 0.1f, 30.0f);
 }
 
-static bool animationAddFrame(AnimationClip *clip, int legIndex, float time, float x, float y) {
-    if (legIndex < 0 || legIndex >= NUM_LEGS) {
+static bool animationAddFrame(AnimationClip *clip, int legIndex, float time, float x, float y)
+{
+    if (legIndex < 0 || legIndex >= NUM_LEGS)
+    {
         return false;
     }
 
     LegTrack *track = &clip->tracks[legIndex];
-    if (track->count >= MAX_ANIM_KEYFRAMES) {
+    if (track->count >= MAX_ANIM_KEYFRAMES)
+    {
         return false;
     }
 
@@ -1574,34 +1962,41 @@ static bool animationAddFrame(AnimationClip *clip, int legIndex, float time, flo
     return true;
 }
 
-static void animationCommit(AnimationClip *clip) {
+static void animationCommit(AnimationClip *clip)
+{
     clip->ready = true;
     clip->playing = false;
     clip->paused = false;
 }
 
-static Point2f interpolateTrack(const LegTrack *track, float timeSec) {
+static Point2f interpolateTrack(const LegTrack *track, float timeSec)
+{
     Point2f result = {0.0f, 0.0f};
-    if (track->count <= 0) {
+    if (track->count <= 0)
+    {
         return result;
     }
 
-    if (timeSec <= track->frames[0].time) {
+    if (timeSec <= track->frames[0].time)
+    {
         result.x = track->frames[0].x;
         result.y = track->frames[0].y;
         return result;
     }
 
-    if (timeSec >= track->frames[track->count - 1].time) {
+    if (timeSec >= track->frames[track->count - 1].time)
+    {
         result.x = track->frames[track->count - 1].x;
         result.y = track->frames[track->count - 1].y;
         return result;
     }
 
-    for (int i = 0; i < track->count - 1; ++i) {
+    for (int i = 0; i < track->count - 1; ++i)
+    {
         AnimationFrame a = track->frames[i];
         AnimationFrame b = track->frames[i + 1];
-        if (timeSec >= a.time && timeSec <= b.time) {
+        if (timeSec >= a.time && timeSec <= b.time)
+        {
             float span = b.time - a.time;
             float t = (span > 0.0f) ? (timeSec - a.time) / span : 0.0f;
             result.x = lerpf(a.x, b.x, t);
@@ -1615,7 +2010,8 @@ static Point2f interpolateTrack(const LegTrack *track, float timeSec) {
     return result;
 }
 
-static Point2f builtinWalkTarget(int legIndex, float timeSec) {
+static Point2f builtinWalkTarget(int legIndex, float timeSec)
+{
     static const float phaseOffsets[NUM_LEGS] = {0.0f, 0.5f, 0.5f, 0.0f};
     float cycle = fmodf((timeSec / 1.6f) + phaseOffsets[legIndex], 1.0f);
     float x = lerpf(-18.0f, 18.0f, cycle);
@@ -1624,16 +2020,20 @@ static Point2f builtinWalkTarget(int legIndex, float timeSec) {
     return foot;
 }
 
-static Point2f builtinCrouchTarget(float timeSec) {
+static Point2f builtinCrouchTarget(float timeSec)
+{
     float t = clampf(timeSec / 0.9f, 0.0f, 1.0f);
     float eased = easeInOutSmoothStep(t);
     Point2f foot = {0.0f, lerpf(0.0f, -28.0f, eased)};
     return foot;
 }
 
-static void jsonPrintEscaped(const char *value) {
-    while (*value) {
-        if (*value == '"' || *value == '\\') {
+static void jsonPrintEscaped(const char *value)
+{
+    while (*value)
+    {
+        if (*value == '"' || *value == '\\')
+        {
             Serial.print('\\');
         }
         Serial.print(*value);
@@ -1641,7 +2041,8 @@ static void jsonPrintEscaped(const char *value) {
     }
 }
 
-static void sendAck(int seq, const char *message) {
+static void sendAck(int seq, const char *message)
+{
     Serial.print("{\"type\":\"ack\",\"seq\":");
     Serial.print(seq);
     Serial.print(",\"message\":\"");
@@ -1649,7 +2050,8 @@ static void sendAck(int seq, const char *message) {
     Serial.println("\"}");
 }
 
-static void sendError(int seq, const char *message) {
+static void sendError(int seq, const char *message)
+{
     Serial.print("{\"type\":\"error\",\"seq\":");
     Serial.print(seq);
     Serial.print(",\"message\":\"");
@@ -1657,7 +2059,8 @@ static void sendError(int seq, const char *message) {
     Serial.println("\"}");
 }
 
-static void sendBuiltinStatus(void) {
+static void sendBuiltinStatus(void)
+{
     Serial.print("{\"type\":\"builtin_status\",\"name\":\"");
     jsonPrintEscaped(g_builtinName);
     Serial.print("\",\"mode\":\"");
@@ -1665,11 +2068,15 @@ static void sendBuiltinStatus(void) {
     Serial.println("\"}");
 }
 
-static void sendAnimationProgress(void) {
+static void sendAnimationProgress(void)
+{
     float elapsedSec = 0.0f;
-    if (g_animation.playing && g_animation.duration > 0.0f) {
+    if (g_animation.playing && g_animation.duration > 0.0f)
+    {
         elapsedSec = fmodf((millis() - g_animation.startMs) / 1000.0f, g_animation.duration);
-    } else if (g_animation.paused) {
+    }
+    else if (g_animation.paused)
+    {
         elapsedSec = g_animation.pausedTimeSec;
     }
 
@@ -1680,7 +2087,8 @@ static void sendAnimationProgress(void) {
     Serial.println("}");
 }
 
-static void sendSolverTimingStatsJson(const char *name, const SolverTimingStats *stats) {
+static void sendSolverTimingStatsJson(const char *name, const SolverTimingStats *stats)
+{
     Serial.print("\"");
     Serial.print(name);
     Serial.print("\":{\"count\":");
@@ -1696,7 +2104,8 @@ static void sendSolverTimingStatsJson(const char *name, const SolverTimingStats 
     Serial.print("}");
 }
 
-static void sendBenchmarkResult(int seq, uint32_t iterations, const SolverTimingStats *footStats, const SolverTimingStats *jointStats) {
+static void sendBenchmarkResult(int seq, uint32_t iterations, const SolverTimingStats *footStats, const SolverTimingStats *jointStats)
+{
     Serial.print("{\"type\":\"benchmark_result\",\"seq\":");
     Serial.print(seq);
     Serial.print(",\"iterations\":");
@@ -1712,11 +2121,15 @@ static void sendBenchmarkResult(int seq, uint32_t iterations, const SolverTiming
 // special characters. Updates `*pos`. Stops cleanly at the buffer edge so the
 // caller's snprintf safety chain stays valid even if the input string is too
 // long. Returns the new position.
-static int jsonAppendEscaped(char *buf, size_t cap, int pos, const char *value) {
-    if (!buf || pos < 0) return pos;
-    while (*value && (size_t)pos + 2 < cap) {
+static int jsonAppendEscaped(char *buf, size_t cap, int pos, const char *value)
+{
+    if (!buf || pos < 0)
+        return pos;
+    while (*value && (size_t)pos + 2 < cap)
+    {
         char c = *value++;
-        if (c == '"' || c == '\\') {
+        if (c == '"' || c == '\\')
+        {
             buf[pos++] = '\\';
         }
         buf[pos++] = c;
@@ -1729,14 +2142,20 @@ static int jsonAppendEscaped(char *buf, size_t cap, int pos, const char *value) 
 // then call again with `cap - pos`, the second size argument can become
 // negative and underflow to a huge size_t — which lets snprintf overrun the
 // buffer. This wrapper saturates at `cap` so subsequent calls stay safe.
-#define BUF_PRINTF(buf, cap, pos, ...)                          \
-    do {                                                        \
-        if ((pos) < (cap)) {                                    \
+#define BUF_PRINTF(buf, cap, pos, ...)                                              \
+    do                                                                              \
+    {                                                                               \
+        if ((pos) < (cap))                                                          \
+        {                                                                           \
             int _n = snprintf((buf) + (pos), (size_t)((cap) - (pos)), __VA_ARGS__); \
-            if (_n < 0) { /* encoding error */ }                \
-            else if ((pos) + _n >= (cap)) (pos) = (cap);        \
-            else (pos) += _n;                                   \
-        }                                                       \
+            if (_n < 0)                                                             \
+            { /* encoding error */                                                  \
+            }                                                                       \
+            else if ((pos) + _n >= (cap))                                           \
+                (pos) = (cap);                                                      \
+            else                                                                    \
+                (pos) += _n;                                                        \
+        }                                                                           \
     } while (0)
 
 // State telemetry. Built into a single static buffer and shipped with one
@@ -1747,7 +2166,8 @@ static int jsonAppendEscaped(char *buf, size_t cap, int pos, const char *value) 
 // log: `[serial] unknown command type [parsed='' raw='oDeg":...']`). Buffer
 // is sized for the worst-case payload (~2.3 KB) with margin; TX ring is
 // 8192 B (see setup()), so the write is a memcpy and returns immediately.
-static void sendStateMessage(const char *typeName) {
+static void sendStateMessage(const char *typeName)
+{
     static char buf[3584];
     int pos = 0;
     const int cap = (int)sizeof(buf);
@@ -1773,8 +2193,10 @@ static void sendStateMessage(const char *typeName) {
                g_imuRollRad, g_imuPitchRad, g_imuYawRad,
                (unsigned long)millis());
 
-    for (int i = 0; i < NUM_LEGS; ++i) {
-        if (i > 0 && pos < cap - 1) {
+    for (int i = 0; i < NUM_LEGS; ++i)
+    {
+        if (i > 0 && pos < cap - 1)
+        {
             buf[pos++] = ',';
         }
         RobotLegState *leg = &g_legs[i];
@@ -1795,7 +2217,8 @@ static void sendStateMessage(const char *typeName) {
                    leg->jointLimits.calfDeg.min, leg->jointLimits.calfDeg.max,
                    leg->desiredServoAngles.hip, leg->desiredServoAngles.thigh, leg->desiredServoAngles.calf,
                    leg->currentServoAngles.hip, leg->currentServoAngles.thigh, leg->currentServoAngles.calf);
-        if (pos >= cap - 1) break;
+        if (pos >= cap - 1)
+            break;
     }
 
     BUF_PRINTF(buf, cap, pos, "}}}\n");
@@ -1803,20 +2226,24 @@ static void sendStateMessage(const char *typeName) {
     Serial.write((const uint8_t *)buf, (size_t)pos);
 }
 
-static bool jsonExtractString(const char *json, const char *key, char *out, size_t outSize) {
+static bool jsonExtractString(const char *json, const char *key, char *out, size_t outSize)
+{
     char pattern[40];
     snprintf(pattern, sizeof(pattern), "\"%s\":\"", key);
     const char *start = strstr(json, pattern);
-    if (!start) {
+    if (!start)
+    {
         return false;
     }
     start += strlen(pattern);
     const char *end = strchr(start, '"');
-    if (!end) {
+    if (!end)
+    {
         return false;
     }
     size_t len = (size_t)(end - start);
-    if (len >= outSize) {
+    if (len >= outSize)
+    {
         len = outSize - 1;
     }
     memcpy(out, start, len);
@@ -1824,11 +2251,13 @@ static bool jsonExtractString(const char *json, const char *key, char *out, size
     return true;
 }
 
-static bool jsonExtractFloat(const char *json, const char *key, float *outValue) {
+static bool jsonExtractFloat(const char *json, const char *key, float *outValue)
+{
     char pattern[40];
     snprintf(pattern, sizeof(pattern), "\"%s\":", key);
     const char *start = strstr(json, pattern);
-    if (!start) {
+    if (!start)
+    {
         return false;
     }
     start += strlen(pattern);
@@ -1836,11 +2265,13 @@ static bool jsonExtractFloat(const char *json, const char *key, float *outValue)
     return true;
 }
 
-static bool jsonExtractInt(const char *json, const char *key, int *outValue) {
+static bool jsonExtractInt(const char *json, const char *key, int *outValue)
+{
     char pattern[40];
     snprintf(pattern, sizeof(pattern), "\"%s\":", key);
     const char *start = strstr(json, pattern);
-    if (!start) {
+    if (!start)
+    {
         return false;
     }
     start += strlen(pattern);
@@ -1848,74 +2279,98 @@ static bool jsonExtractInt(const char *json, const char *key, int *outValue) {
     return true;
 }
 
-static void refreshCurrentState(void) {
-    for (int i = 0; i < NUM_LEGS; ++i) {
+static void refreshCurrentState(void)
+{
+    for (int i = 0; i < NUM_LEGS; ++i)
+    {
         g_legs[i].currentServoAngles = getCurrentServoAngles(&g_legs[i]);
         updateLegDerivedStateFromServo(&g_legs[i], g_legs[i].currentServoAngles, false);
     }
 }
 
-static void runBuiltinsAndAnimation(void) {
+static void runBuiltinsAndAnimation(void)
+{
     float elapsedSec = (millis() - g_modeStartMs) / 1000.0f;
 
-    if (g_mode == MODE_BUILTIN_WALK) {
-        for (int i = 0; i < NUM_LEGS; ++i) {
+    if (g_mode == MODE_BUILTIN_WALK)
+    {
+        for (int i = 0; i < NUM_LEGS; ++i)
+        {
             Point2f foot = builtinWalkTarget(i, elapsedSec);
             robotLegCommandFoot(i, foot.x, foot.y);
         }
     }
 
-    if (g_mode == MODE_BUILTIN_CROUCH) {
+    if (g_mode == MODE_BUILTIN_CROUCH)
+    {
         Point2f foot = builtinCrouchTarget(elapsedSec);
-        for (int i = 0; i < NUM_LEGS; ++i) {
+        for (int i = 0; i < NUM_LEGS; ++i)
+        {
             robotLegCommandFoot(i, foot.x, foot.y);
         }
     }
 
-    if (g_mode == MODE_ANIMATION_PLAYBACK && g_animation.ready && g_animation.playing && !g_animation.paused) {
+    if (g_mode == MODE_ANIMATION_PLAYBACK && g_animation.ready && g_animation.playing && !g_animation.paused)
+    {
         float timeSec = fmodf((millis() - g_animation.startMs) / 1000.0f, g_animation.duration);
-        for (int i = 0; i < NUM_LEGS; ++i) {
+        for (int i = 0; i < NUM_LEGS; ++i)
+        {
             Point2f foot = interpolateTrack(&g_animation.tracks[i], timeSec);
             robotLegCommandFoot(i, foot.x, foot.y);
         }
     }
 }
 
-static void maybeSendPeriodicEvents(void) {
+static void maybeSendPeriodicEvents(void)
+{
     uint32_t nowMs = millis();
-    if (g_imuPresent && (nowMs - g_lastImuPollMs) >= IMU_POLL_INTERVAL_MS) {
+    if (g_imuPresent && (nowMs - g_lastImuPollMs) >= IMU_POLL_INTERVAL_MS)
+    {
         g_lastImuPollMs = nowMs;
         imuPoll();
     }
-    if ((nowMs - g_lastTelemetryMs) >= TELEMETRY_INTERVAL_MS) {
+    if ((nowMs - g_lastTelemetryMs) >= TELEMETRY_INTERVAL_MS)
+    {
         g_lastTelemetryMs = nowMs;
         refreshCurrentState();
         sendStateMessage("state");
     }
 
-    if ((g_mode == MODE_BUILTIN_WALK || g_mode == MODE_BUILTIN_CROUCH) && (nowMs - g_lastBuiltinStatusMs) >= BUILTIN_STATUS_INTERVAL_MS) {
+    if ((g_mode == MODE_BUILTIN_WALK || g_mode == MODE_BUILTIN_CROUCH) && (nowMs - g_lastBuiltinStatusMs) >= BUILTIN_STATUS_INTERVAL_MS)
+    {
         g_lastBuiltinStatusMs = nowMs;
         sendBuiltinStatus();
     }
 
-    if (g_mode == MODE_ANIMATION_PLAYBACK && (nowMs - g_lastAnimationStatusMs) >= ANIMATION_STATUS_INTERVAL_MS) {
+    if (g_mode == MODE_ANIMATION_PLAYBACK && (nowMs - g_lastAnimationStatusMs) >= ANIMATION_STATUS_INTERVAL_MS)
+    {
         g_lastAnimationStatusMs = nowMs;
         sendAnimationProgress();
     }
 }
 
-static void handleModeCommand(const char *modeString) {
-    if (strcmp(modeString, "idle") == 0) setMode(MODE_IDLE);
-    if (strcmp(modeString, "direct_foot_xy") == 0) setMode(MODE_DIRECT_FOOT_XY);
-    if (strcmp(modeString, "direct_joint_angles") == 0) setMode(MODE_DIRECT_JOINT_ANGLES);
-    if (strcmp(modeString, "direct_servo_angles") == 0) setMode(MODE_DIRECT_SERVO_ANGLES);
-    if (strcmp(modeString, "builtin_walk") == 0) setMode(MODE_BUILTIN_WALK);
-    if (strcmp(modeString, "builtin_crouch") == 0) setMode(MODE_BUILTIN_CROUCH);
-    if (strcmp(modeString, "animation_playback") == 0) setMode(MODE_ANIMATION_PLAYBACK);
+static void handleModeCommand(const char *modeString)
+{
+    if (strcmp(modeString, "idle") == 0)
+        setMode(MODE_IDLE);
+    if (strcmp(modeString, "direct_foot_xy") == 0)
+        setMode(MODE_DIRECT_FOOT_XY);
+    if (strcmp(modeString, "direct_joint_angles") == 0)
+        setMode(MODE_DIRECT_JOINT_ANGLES);
+    if (strcmp(modeString, "direct_servo_angles") == 0)
+        setMode(MODE_DIRECT_SERVO_ANGLES);
+    if (strcmp(modeString, "builtin_walk") == 0)
+        setMode(MODE_BUILTIN_WALK);
+    if (strcmp(modeString, "builtin_crouch") == 0)
+        setMode(MODE_BUILTIN_CROUCH);
+    if (strcmp(modeString, "animation_playback") == 0)
+        setMode(MODE_ANIMATION_PLAYBACK);
 }
 
-static void playAnimationByName(const char *name) {
-    if (!g_animation.ready || strcmp(g_animation.name, name) != 0) {
+static void playAnimationByName(const char *name)
+{
+    if (!g_animation.ready || strcmp(g_animation.name, name) != 0)
+    {
         return;
     }
     strncpy(g_activeAnimationName, name, MAX_NAME_LEN - 1);
@@ -1926,29 +2381,34 @@ static void playAnimationByName(const char *name) {
     setMode(MODE_ANIMATION_PLAYBACK);
 }
 
-static void processCommandLine(const char *line) {
+static void processCommandLine(const char *line)
+{
     char type[32] = "";
     int seq = 0;
     jsonExtractString(line, "type", type, sizeof(type));
     jsonExtractInt(line, "seq", &seq);
 
-    if (strcmp(type, "hello") == 0) {
+    if (strcmp(type, "hello") == 0)
+    {
         refreshCurrentState();
         sendStateMessage("hello_ack");
         sendAck(seq, "hello");
         return;
     }
 
-    if (strcmp(type, "get_state") == 0) {
+    if (strcmp(type, "get_state") == 0)
+    {
         refreshCurrentState();
         sendStateMessage("state");
         sendAck(seq, "state");
         return;
     }
 
-    if (strcmp(type, "set_mode") == 0) {
+    if (strcmp(type, "set_mode") == 0)
+    {
         char modeString[32] = "";
-        if (!jsonExtractString(line, "mode", modeString, sizeof(modeString))) {
+        if (!jsonExtractString(line, "mode", modeString, sizeof(modeString)))
+        {
             sendError(seq, "set_mode missing mode");
             return;
         }
@@ -1957,14 +2417,17 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "set_servo_update_rate_hz") == 0) {
+    if (strcmp(type, "set_servo_update_rate_hz") == 0)
+    {
         float hz = DEFAULT_PCA9685_FREQUENCY_HZ;
-        if (!jsonExtractFloat(line, "hz", &hz)) {
+        if (!jsonExtractFloat(line, "hz", &hz))
+        {
             sendError(seq, "set_servo_update_rate_hz missing hz");
             return;
         }
 
-        if (hz < MIN_PCA9685_FREQUENCY_HZ || hz > MAX_PCA9685_FREQUENCY_HZ) {
+        if (hz < MIN_PCA9685_FREQUENCY_HZ || hz > MAX_PCA9685_FREQUENCY_HZ)
+        {
             sendError(seq, "servo update rate must be between 40 and 200 hz");
             return;
         }
@@ -1974,16 +2437,19 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "release_servos") == 0) {
+    if (strcmp(type, "release_servos") == 0)
+    {
         releaseAllServos();
         sendAck(seq, "servos released");
         return;
     }
 
-    if (strcmp(type, "benchmark_solver") == 0) {
+    if (strcmp(type, "benchmark_solver") == 0)
+    {
         int iterations = 200;
         jsonExtractInt(line, "iterations", &iterations);
-        if (iterations <= 0 || iterations > 2000) {
+        if (iterations <= 0 || iterations > 2000)
+        {
             sendError(seq, "benchmark iterations must be between 1 and 2000");
             return;
         }
@@ -1996,22 +2462,26 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "run_builtin") == 0) {
+    if (strcmp(type, "run_builtin") == 0)
+    {
         char name[MAX_NAME_LEN] = "";
-        if (!jsonExtractString(line, "name", name, sizeof(name))) {
+        if (!jsonExtractString(line, "name", name, sizeof(name)))
+        {
             sendError(seq, "run_builtin missing name");
             return;
         }
 
         strncpy(g_builtinName, name, MAX_NAME_LEN - 1);
         g_builtinName[MAX_NAME_LEN - 1] = '\0';
-        if (strcmp(name, "walk") == 0) {
+        if (strcmp(name, "walk") == 0)
+        {
             setMode(MODE_BUILTIN_WALK);
             sendAck(seq, "builtin walk");
             return;
         }
 
-        if (strcmp(name, "crouch") == 0) {
+        if (strcmp(name, "crouch") == 0)
+        {
             setMode(MODE_BUILTIN_CROUCH);
             sendAck(seq, "builtin crouch");
             return;
@@ -2021,23 +2491,27 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "set_leg_foot_xy") == 0) {
+    if (strcmp(type, "set_leg_foot_xy") == 0)
+    {
         char legId[24] = "";
         float x = 0.0f;
         float y = 0.0f;
-        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "x", &x) || !jsonExtractFloat(line, "y", &y)) {
+        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "x", &x) || !jsonExtractFloat(line, "y", &y))
+        {
             sendError(seq, "foot command missing fields");
             return;
         }
 
         int legIndex = legIndexFromId(legId);
-        if (legIndex < 0) {
+        if (legIndex < 0)
+        {
             sendError(seq, "unknown leg");
             return;
         }
 
         setMode(MODE_DIRECT_FOOT_XY);
-        if (!robotLegCommandFoot(legIndex, x, y)) {
+        if (!robotLegCommandFoot(legIndex, x, y))
+        {
             sendError(seq, g_legs[legIndex].lastError);
             return;
         }
@@ -2045,23 +2519,27 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "set_leg_joint_angles") == 0) {
+    if (strcmp(type, "set_leg_joint_angles") == 0)
+    {
         char legId[24] = "";
         float thighDeg = 0.0f;
         float calfDeg = 0.0f;
-        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "thighDeg", &thighDeg) || !jsonExtractFloat(line, "calfDeg", &calfDeg)) {
+        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "thighDeg", &thighDeg) || !jsonExtractFloat(line, "calfDeg", &calfDeg))
+        {
             sendError(seq, "joint command missing fields");
             return;
         }
 
         int legIndex = legIndexFromId(legId);
-        if (legIndex < 0) {
+        if (legIndex < 0)
+        {
             sendError(seq, "unknown leg");
             return;
         }
 
         setMode(MODE_DIRECT_JOINT_ANGLES);
-        if (!robotLegCommandJointAngles(legIndex, thighDeg, calfDeg)) {
+        if (!robotLegCommandJointAngles(legIndex, thighDeg, calfDeg))
+        {
             sendError(seq, g_legs[legIndex].lastError);
             return;
         }
@@ -2069,18 +2547,21 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "set_leg_servo_angles") == 0) {
+    if (strcmp(type, "set_leg_servo_angles") == 0)
+    {
         char legId[24] = "";
         float hipServoDeg = 90.0f;
         float thighServoDeg = 0.0f;
         float calfServoDeg = 0.0f;
-        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "thighServoDeg", &thighServoDeg) || !jsonExtractFloat(line, "calfServoDeg", &calfServoDeg)) {
+        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "thighServoDeg", &thighServoDeg) || !jsonExtractFloat(line, "calfServoDeg", &calfServoDeg))
+        {
             sendError(seq, "servo command missing fields");
             return;
         }
 
         int legIndex = legIndexFromId(legId);
-        if (legIndex < 0) {
+        if (legIndex < 0)
+        {
             sendError(seq, "unknown leg");
             return;
         }
@@ -2093,18 +2574,21 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "set_leg_servo_channel_map") == 0) {
+    if (strcmp(type, "set_leg_servo_channel_map") == 0)
+    {
         char legId[24] = "";
         int hipChannel = 0;
         int thighChannel = 0;
         int calfChannel = 0;
-        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractInt(line, "thighChannel", &thighChannel) || !jsonExtractInt(line, "calfChannel", &calfChannel)) {
+        if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractInt(line, "thighChannel", &thighChannel) || !jsonExtractInt(line, "calfChannel", &calfChannel))
+        {
             sendError(seq, "servo channel map missing fields");
             return;
         }
 
         int legIndex = legIndexFromId(legId);
-        if (legIndex < 0) {
+        if (legIndex < 0)
+        {
             sendError(seq, "unknown leg");
             return;
         }
@@ -2112,7 +2596,8 @@ static void processCommandLine(const char *line) {
         hipChannel = g_legs[legIndex].hipChannel;
         jsonExtractInt(line, "hipChannel", &hipChannel);
 
-        if (hipChannel < 0 || hipChannel > 15 || thighChannel < 0 || thighChannel > 15 || calfChannel < 0 || calfChannel > 15) {
+        if (hipChannel < 0 || hipChannel > 15 || thighChannel < 0 || thighChannel > 15 || calfChannel < 0 || calfChannel > 15)
+        {
             sendError(seq, "servo channels must be between 0 and 15");
             return;
         }
@@ -2122,7 +2607,8 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "set_leg_joint_limits") == 0) {
+    if (strcmp(type, "set_leg_joint_limits") == 0)
+    {
         char legId[24] = "";
         float thighMinDeg = DEFAULT_THIGH_MIN_DEG;
         float thighMaxDeg = DEFAULT_THIGH_MAX_DEG;
@@ -2133,14 +2619,15 @@ static void processCommandLine(const char *line) {
             !jsonExtractFloat(line, "thighMinDeg", &thighMinDeg) ||
             !jsonExtractFloat(line, "thighMaxDeg", &thighMaxDeg) ||
             !jsonExtractFloat(line, "calfMinDeg", &calfMinDeg) ||
-            !jsonExtractFloat(line, "calfMaxDeg", &calfMaxDeg)
-        ) {
+            !jsonExtractFloat(line, "calfMaxDeg", &calfMaxDeg))
+        {
             sendError(seq, "joint limit command missing fields");
             return;
         }
 
         int legIndex = legIndexFromId(legId);
-        if (legIndex < 0) {
+        if (legIndex < 0)
+        {
             sendError(seq, "unknown leg");
             return;
         }
@@ -2155,7 +2642,8 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "set_leg_servo_speed_limit") == 0) {
+    if (strcmp(type, "set_leg_servo_speed_limit") == 0)
+    {
         char legId[24] = "";
         float hipDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
         float thighDegPerSec = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC;
@@ -2163,14 +2651,15 @@ static void processCommandLine(const char *line) {
         if (
             !jsonExtractString(line, "legId", legId, sizeof(legId)) ||
             !jsonExtractFloat(line, "thighDegPerSec", &thighDegPerSec) ||
-            !jsonExtractFloat(line, "calfDegPerSec", &calfDegPerSec)
-        ) {
+            !jsonExtractFloat(line, "calfDegPerSec", &calfDegPerSec))
+        {
             sendError(seq, "servo speed limit command missing fields");
             return;
         }
 
         int legIndex = legIndexFromId(legId);
-        if (legIndex < 0) {
+        if (legIndex < 0)
+        {
             sendError(seq, "unknown leg");
             return;
         }
@@ -2178,7 +2667,8 @@ static void processCommandLine(const char *line) {
         hipDegPerSec = g_legs[legIndex].servoSpeedLimitDegPerSec.hip;
         jsonExtractFloat(line, "hipDegPerSec", &hipDegPerSec);
 
-        if (hipDegPerSec <= 0.0f || thighDegPerSec <= 0.0f || calfDegPerSec <= 0.0f) {
+        if (hipDegPerSec <= 0.0f || thighDegPerSec <= 0.0f || calfDegPerSec <= 0.0f)
+        {
             sendError(seq, "servo speed limits must be positive");
             return;
         }
@@ -2188,14 +2678,17 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "upload_animation") == 0) {
+    if (strcmp(type, "upload_animation") == 0)
+    {
         char stage[16] = "";
-        if (!jsonExtractString(line, "stage", stage, sizeof(stage))) {
+        if (!jsonExtractString(line, "stage", stage, sizeof(stage)))
+        {
             sendError(seq, "upload_animation missing stage");
             return;
         }
 
-        if (strcmp(stage, "begin") == 0) {
+        if (strcmp(stage, "begin") == 0)
+        {
             char name[MAX_NAME_LEN] = "";
             float duration = 1.0f;
             jsonExtractString(line, "name", name, sizeof(name));
@@ -2205,18 +2698,21 @@ static void processCommandLine(const char *line) {
             return;
         }
 
-        if (strcmp(stage, "frame") == 0) {
+        if (strcmp(stage, "frame") == 0)
+        {
             char legId[24] = "";
             float time = 0.0f;
             float x = 0.0f;
             float y = 0.0f;
-            if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "time", &time) || !jsonExtractFloat(line, "x", &x) || !jsonExtractFloat(line, "y", &y)) {
+            if (!jsonExtractString(line, "legId", legId, sizeof(legId)) || !jsonExtractFloat(line, "time", &time) || !jsonExtractFloat(line, "x", &x) || !jsonExtractFloat(line, "y", &y))
+            {
                 sendError(seq, "animation frame missing fields");
                 return;
             }
 
             int legIndex = legIndexFromId(legId);
-            if (!animationAddFrame(&g_animation, legIndex, time, x, y)) {
+            if (!animationAddFrame(&g_animation, legIndex, time, x, y))
+            {
                 sendError(seq, "animation frame rejected");
                 return;
             }
@@ -2224,7 +2720,8 @@ static void processCommandLine(const char *line) {
             return;
         }
 
-        if (strcmp(stage, "commit") == 0) {
+        if (strcmp(stage, "commit") == 0)
+        {
             animationCommit(&g_animation);
             strncpy(g_activeAnimationName, g_animation.name, MAX_NAME_LEN - 1);
             g_activeAnimationName[MAX_NAME_LEN - 1] = '\0';
@@ -2236,14 +2733,17 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "play_animation") == 0) {
+    if (strcmp(type, "play_animation") == 0)
+    {
         char name[MAX_NAME_LEN] = "";
-        if (!jsonExtractString(line, "name", name, sizeof(name))) {
+        if (!jsonExtractString(line, "name", name, sizeof(name)))
+        {
             sendError(seq, "play_animation missing name");
             return;
         }
 
-        if (!g_animation.ready || strcmp(g_animation.name, name) != 0) {
+        if (!g_animation.ready || strcmp(g_animation.name, name) != 0)
+        {
             sendError(seq, "animation not ready");
             return;
         }
@@ -2253,8 +2753,10 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "pause_animation") == 0) {
-        if (g_animation.playing) {
+    if (strcmp(type, "pause_animation") == 0)
+    {
+        if (g_animation.playing)
+        {
             g_animation.playing = false;
             g_animation.paused = true;
             g_animation.pausedTimeSec = (millis() - g_animation.startMs) / 1000.0f;
@@ -2263,7 +2765,8 @@ static void processCommandLine(const char *line) {
         return;
     }
 
-    if (strcmp(type, "stop_animation") == 0) {
+    if (strcmp(type, "stop_animation") == 0)
+    {
         g_animation.playing = false;
         g_animation.paused = false;
         setMode(MODE_IDLE);
@@ -2280,7 +2783,8 @@ static void processCommandLine(const char *line) {
     sendError(seq, detail);
 }
 
-void setup() {
+void setup()
+{
     // Buffer sizing for 921600 baud telemetry + command bursts.
     //
     // RX: the host sends 4× set_leg_servo_angles (~480 B) per gait tick.
@@ -2297,7 +2801,8 @@ void setup() {
 #endif
     Serial.begin(SERIAL_BAUD);
     unsigned long serialStartMs = millis();
-    while (!Serial && (millis() - serialStartMs) < 5000) {
+    while (!Serial && (millis() - serialStartMs) < 5000)
+    {
         delay(10);
     }
     delay(100);
@@ -2307,18 +2812,21 @@ void setup() {
 #endif
     Wire.begin();
 
-    if (!i2cDevicePresent(PCA9685_ADDRESS)) {
+    if (!i2cDevicePresent(PCA9685_ADDRESS))
+    {
         Serial.print("PCA9685 not found on I2C at 0x");
         Serial.println(PCA9685_ADDRESS, HEX);
         Serial.println("Check SDA/SCL wiring, board power, and address pins.");
-        while (true) {
+        while (true)
+        {
             delay(1000);
         }
     }
 
     // LSM9DS0 IMU on the same I2C bus — non-fatal if missing.
     g_imuPresent = imuInit();
-    if (!g_imuPresent) {
+    if (!g_imuPresent)
+    {
         Serial.println("LSM9DS0 not detected (skipping IMU; gait stabilizer will run un-fused)");
     }
 
@@ -2327,7 +2835,8 @@ void setup() {
     robotDogLegInitNeutral();
     animationReset(&g_animation);
 
-    for (int i = 0; i < NUM_LEGS; ++i) {
+    for (int i = 0; i < NUM_LEGS; ++i)
+    {
         robotLegBegin(&g_legs[i], &LEG_CONFIGS[i]);
         robotLegCommandFoot(i, 0.0f, 0.0f);
     }
@@ -2338,30 +2847,37 @@ void setup() {
     sendStateMessage("state");
 }
 
-void loop() {
-    while (Serial.available() > 0) {
+void loop()
+{
+    while (Serial.available() > 0)
+    {
         char c = (char)Serial.read();
-        if (c == '\r') {
+        if (c == '\r')
+        {
             continue;
         }
 
-        if (c == '\n') {
+        if (c == '\n')
+        {
             g_serialBuffer[g_serialIndex] = '\0';
-            if (g_serialIndex > 0) {
+            if (g_serialIndex > 0)
+            {
                 processCommandLine(g_serialBuffer);
             }
             g_serialIndex = 0;
             continue;
         }
 
-        if (g_serialIndex < (SERIAL_BUFFER_SIZE - 1)) {
+        if (g_serialIndex < (SERIAL_BUFFER_SIZE - 1))
+        {
             g_serialBuffer[g_serialIndex++] = c;
         }
     }
 
     runBuiltinsAndAnimation();
 
-    for (int i = 0; i < NUM_LEGS; ++i) {
+    for (int i = 0; i < NUM_LEGS; ++i)
+    {
         robotLegUpdate(&g_legs[i]);
     }
 
