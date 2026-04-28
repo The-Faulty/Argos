@@ -142,6 +142,11 @@ pre {
   color: #9a4a17;
 }
 
+.count-warn {
+  background: #f6e7d6;
+  color: #9a4a17;
+}
+
 .count-bad {
   background: #f5dddc;
   color: #a32e27;
@@ -275,9 +280,51 @@ pre {
   background: #f7e6e4;
 }
 
+.leg-button.clamped {
+  background: #fff0dd;
+}
+
+.leg-button.clamped strong {
+  color: #9a4a17;
+}
+
 .handle-panel {
   display: grid;
   gap: 0.65rem;
+}
+
+.toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 38px;
+  color: #22303e;
+  font-weight: 700;
+}
+
+.toggle-row input {
+  width: auto;
+  min-height: auto;
+  margin: 0;
+}
+
+.action-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid #d1d9e1;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #22303e;
+  font-weight: 700;
+}
+
+.action-toggle input {
+  width: auto;
+  min-height: auto;
+  margin: 0;
 }
 
 .segmented-control {
@@ -364,6 +411,31 @@ pre {
 
 .readout-grid strong {
   font-size: 0.92rem;
+}
+
+.motion-readout-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.motion-readout-grid > div {
+  display: grid;
+  gap: 0.25rem;
+  border: 1px solid #d5dce4;
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 0.65rem;
+}
+
+.motion-readout-grid span {
+  color: #66788a;
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
+.motion-readout-grid strong {
+  font-size: 0.9rem;
 }
 
 .command-preview {
@@ -497,6 +569,10 @@ pre {
 
   .leg-selector,
   .axis-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .motion-readout-grid {
     grid-template-columns: 1fr;
   }
 }

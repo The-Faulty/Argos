@@ -827,100 +827,88 @@
   <child link="lidar_link_1"/>
 </joint>
 
-<joint name="FL_coxa_joint" type="revolute">
+<joint name="FL_coxa_joint" type="continuous">
   <origin xyz="-0.016983 -0.073583 0.014583" rpy="0 0 0"/>
   <parent link="base_link"/>
   <child link="FL_coxa_link_1"/>
   <axis xyz="1.0 0.0 0.0"/>
-  <limit lower="-0.524" upper="0.524" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="FL_femur_joint" type="revolute">
+<joint name="FL_femur_joint" type="continuous">
   <origin xyz="-0.024100 -0.037800 0.012550" rpy="0 0 0"/>
   <parent link="FL_coxa_link_1"/>
   <child link="FL_femur_link_1"/>
   <axis xyz="0.0 1.0 -0.0"/>
-  <limit lower="-1.047" upper="2.094" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="FL_tibia_joint" type="revolute">
+<joint name="FL_tibia_joint" type="continuous">
   <origin xyz="0.105946 0.000641 -0.070032" rpy="0 0 0"/>
   <parent link="FL_femur_link_1"/>
   <child link="FL_tibia_link_1"/>
   <axis xyz="0 1 0"/>
-  <limit lower="-2.618" upper="0.0" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="FR_coxa_joint" type="revolute">
+<joint name="FR_coxa_joint" type="continuous">
   <origin xyz="-0.016983 0.055217 0.014583" rpy="0 0 0"/>
   <parent link="base_link"/>
   <child link="FR_coxa_link_1"/>
   <axis xyz="1.0 0.0 0.0"/>
-  <limit lower="-0.524" upper="0.524" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="FR_femur_joint" type="revolute">
+<joint name="FR_femur_joint" type="continuous">
   <origin xyz="-0.024100 0.037800 0.012550" rpy="0 0 0"/>
   <parent link="FR_coxa_link_1"/>
   <child link="FR_femur_link_1"/>
   <axis xyz="0.0 -1.0 -0.0"/>
-  <limit lower="-1.047" upper="2.094" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="FR_tibia_joint" type="revolute">
+<joint name="FR_tibia_joint" type="continuous">
   <origin xyz="0.105932 -0.000641 -0.070053" rpy="0 0 0"/>
   <parent link="FR_femur_link_1"/>
   <child link="FR_tibia_link_1"/>
   <axis xyz="0 -1 0"/>
-  <limit lower="-2.618" upper="0.0" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="RR_coxa_joint" type="revolute">
+<joint name="RR_coxa_joint" type="continuous">
   <origin xyz="0.131617 0.055217 0.014583" rpy="0 0 0"/>
   <parent link="base_link"/>
   <child link="RR_coxa_link_1"/>
   <axis xyz="-1.0 -0.0 -0.0"/>
-  <limit lower="-0.524" upper="0.524" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="RR_femur_joint" type="revolute">
+<joint name="RR_femur_joint" type="continuous">
   <origin xyz="0.044900 0.037800 0.012550" rpy="0 0 0"/>
   <parent link="RR_coxa_link_1"/>
   <child link="RR_femur_link_1"/>
   <axis xyz="-0.0 1.0 -0.0"/>
-  <limit lower="-1.047" upper="2.094" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="RR_tibia_joint" type="revolute">
+<joint name="RR_tibia_joint" type="continuous">
   <origin xyz="0.098904 -0.000641 -0.079668" rpy="0 0 0"/>
   <parent link="RR_femur_link_1"/>
   <child link="RR_tibia_link_1"/>
   <axis xyz="0 1 0"/>
-  <limit lower="-2.618" upper="0.0" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="RL_coxa_joint" type="revolute">
+<joint name="RL_coxa_joint" type="continuous">
   <origin xyz="0.131617 -0.073583 0.014583" rpy="0 0 0"/>
   <parent link="base_link"/>
   <child link="RL_coxa_link_1"/>
   <axis xyz="1.0 0.0 0.0"/>
-  <limit lower="-0.524" upper="0.524" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="RL_femur_joint" type="revolute">
+<joint name="RL_femur_joint" type="continuous">
   <origin xyz="0.044900 -0.037800 0.012550" rpy="0 0 0"/>
   <parent link="RL_coxa_link_1"/>
   <child link="RL_femur_link_1"/>
   <axis xyz="-0.0 1.0 0.0"/>
-  <limit lower="-1.047" upper="2.094" effort="4.41" velocity="6.28"/>
 </joint>
 
-<joint name="RL_tibia_joint" type="revolute">
+<joint name="RL_tibia_joint" type="continuous">
   <origin xyz="0.099021 0.000641 -0.079522" rpy="0 0 0"/>
   <parent link="RL_femur_link_1"/>
   <child link="RL_tibia_link_1"/>
   <axis xyz="0 1 0"/>
-  <limit lower="-2.618" upper="0.0" effort="4.41" velocity="6.28"/>
 </joint>
 
 <joint name="FL_shoulder_linkage_joint" type="fixed">

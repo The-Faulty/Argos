@@ -1,6 +1,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createFullBodyPoseCommand, createMotionStatePatch, flattenServoPose } from "../shared/locomotion.js";
+import {
+  createFullBodyPoseCommand,
+  createMotionStatePatch,
+  flattenServoPose,
+  mapHardwareServoAnglesToLeg,
+  mapLegServoAnglesToHardware,
+} from "../shared/locomotion.js";
 import { DEFAULT_SERVO_CHANNEL_MAP } from "../shared/robot-config.js";
 
 test("createMotionStatePatch produces four desired leg poses", () => {
@@ -47,7 +53,7 @@ test("createMotionStatePatch applies positive stance height as a taller body sta
   assert.ok(lower.legs.front_left.desired.foot.y > neutral.legs.front_left.desired.foot.y);
 });
 
-test("flattenServoPose mirrors right legs around 90 degrees", () => {
+test("flattenServoPose keeps per-leg servo commands in the firmware model space", () => {
   const flattened = flattenServoPose({
     front_left: { desired: { servoAnglesDeg: { hipYaw: 95, thigh: 80, calf: 100 } }, servoTrimDeg: { hipYaw: 0, thigh: 0, calf: 0 } },
     front_right: { desired: { servoAnglesDeg: { hipYaw: 95, thigh: 80, calf: 100 } }, servoTrimDeg: { hipYaw: 0, thigh: 0, calf: 0 } },
@@ -55,13 +61,41 @@ test("flattenServoPose mirrors right legs around 90 degrees", () => {
     rear_right: { desired: { servoAnglesDeg: { hipYaw: 95, thigh: 80, calf: 100 } }, servoTrimDeg: { hipYaw: 0, thigh: 0, calf: 0 } },
   });
 
+  assert.equal(flattened.FLHipYawDeg, 95);
   assert.equal(flattened.FLThighDeg, 80);
-  assert.equal(flattened.FRThighDeg, 100);
+  assert.equal(flattened.FRThighDeg, 80);
   assert.equal(flattened.RRHipYawDeg, 95);
-  assert.equal(flattened.RRCalfDeg, 80);
+  assert.equal(flattened.RRCalfDeg, 100);
 });
 
-test("flattenServoPose applies servo neutral trims after mirroring", () => {
+test("mapLegServoAnglesToHardware preserves model-space angles without trim", () => {
+  assert.deepEqual(
+    mapLegServoAnglesToHardware("front_left", { hipYaw: 95, thigh: 80, calf: 100 }),
+    { hipYaw: 95, thigh: 80, calf: 100 },
+  );
+  assert.deepEqual(
+    mapLegServoAnglesToHardware("front_right", { hipYaw: 95, thigh: 80, calf: 100 }),
+    { hipYaw: 95, thigh: 80, calf: 100 },
+  );
+  assert.deepEqual(
+    mapLegServoAnglesToHardware("rear_right", { hipYaw: 95, thigh: 80, calf: 100 }),
+    { hipYaw: 95, thigh: 80, calf: 100 },
+  );
+});
+
+test("mapHardwareServoAnglesToLeg inverts the trim-adjusted firmware transport space", () => {
+  const modelAngles = { hipYaw: 95, thigh: 80, calf: 100 };
+  const frontRightHardware = mapLegServoAnglesToHardware("front_right", modelAngles);
+  const rearRightHardware = mapLegServoAnglesToHardware("rear_right", modelAngles, { hipYaw: -2, thigh: 3, calf: -4 });
+
+  assert.deepEqual(mapHardwareServoAnglesToLeg("front_right", frontRightHardware), modelAngles);
+  assert.deepEqual(
+    mapHardwareServoAnglesToLeg("rear_right", rearRightHardware, { hipYaw: -2, thigh: 3, calf: -4 }),
+    modelAngles,
+  );
+});
+
+test("flattenServoPose applies servo neutral trims in firmware model space", () => {
   const flattened = flattenServoPose({
     front_left: { desired: { servoAnglesDeg: { hipYaw: 90, thigh: 90, calf: 90 } }, servoTrimDeg: { hipYaw: 2, thigh: -3, calf: 4 } },
     front_right: { desired: { servoAnglesDeg: { hipYaw: 90, thigh: 90, calf: 90 } }, servoTrimDeg: { hipYaw: -2, thigh: 3, calf: -4 } },
@@ -71,8 +105,8 @@ test("flattenServoPose applies servo neutral trims after mirroring", () => {
 
   assert.equal(flattened.FLHipYawDeg, 92);
   assert.equal(flattened.FLThighDeg, 87);
-  assert.equal(flattened.FRThighDeg, 93);
-  assert.equal(flattened.FRCalfDeg, 86);
+  assert.equal(flattened.FRThighDeg, 87);
+  assert.equal(flattened.FRCalfDeg, 94);
 });
 
 test("createFullBodyPoseCommand wraps flattened servo fields in a transport command", () => {
@@ -85,9 +119,9 @@ test("createFullBodyPoseCommand wraps flattened servo fields in a transport comm
 
   assert.equal(command.type, "apply_full_body_pose");
   assert.equal(command.FLHipYawDeg, 95);
-  assert.equal(command.FRThighDeg, 100);
-  assert.equal(command.RRHipYawDeg, 85);
-  assert.equal(command.RRCalfDeg, 74);
+  assert.equal(command.FRThighDeg, 80);
+  assert.equal(command.RRHipYawDeg, 91);
+  assert.equal(command.RRCalfDeg, 106);
 });
 
 test("default servo channel map keeps hip yaw on the dedicated hardware channels", () => {

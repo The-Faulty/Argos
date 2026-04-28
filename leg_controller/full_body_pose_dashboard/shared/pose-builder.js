@@ -9,6 +9,7 @@ import { createFullBodyPoseCommand } from "../../robot_dog_debug_dashboard/share
 import {
   DEFAULT_JOINT_LIMITS,
   DEFAULT_LEG_COMMAND,
+  DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
   DEFAULT_SERVO_TRIM_DEG,
   LEG_GEOMETRY,
   LEG_IDS,
@@ -16,6 +17,7 @@ import {
 
 export const POSE_SCHEMA_VERSION = 1;
 export const POSE_LIBRARY_STORAGE_KEY = "argos.poseBuilder.poses.v1";
+export const POSE_COMMAND_INTERVAL_MS = 25;
 
 export const LEG_PREFIXES = {
   front_left: "FL",
@@ -23,6 +25,21 @@ export const LEG_PREFIXES = {
   rear_left: "RL",
   rear_right: "RR",
 };
+
+const JOINT_COMMAND_SUFFIXES = {
+  hipYaw: "HipYawDeg",
+  thigh: "ThighDeg",
+  calf: "CalfDeg",
+};
+
+const FULL_BODY_COMMAND_FIELDS = LEG_IDS.flatMap((legId) => {
+  const prefix = LEG_PREFIXES[legId];
+  return Object.entries(JOINT_COMMAND_SUFFIXES).map(([jointId, suffix]) => ({
+    legId,
+    jointId,
+    key: `${prefix}${suffix}`,
+  }));
+});
 
 export const LEG_COXA_PIVOTS_MM = {
   front_left: { x: -16.983, y: -73.583, z: 14.583 },
@@ -103,6 +120,7 @@ const URDF_TIBIA_VISUAL_MAP_DEG = {
 };
 
 const VISUAL_IK_EXTENSION_EPSILON_MM = 0.001;
+const MIN_THIGH_CALF_ANGLE_DEG = 20;
 const URDF_FIT_BENT_MAX_CALF_DEG = -118;
 const URDF_FIT_EXTENDED_MIN_CALF_DEG = -96;
 const URDF_FIT_WEIGHTS_BENT = {
@@ -176,6 +194,10 @@ function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
 }
 
+function roundCommandAngle(value) {
+  return Math.round(numeric(value) * 100) / 100;
+}
+
 function inverseLerp(start, end, value) {
   if (start === end) {
     return 0;
@@ -193,6 +215,33 @@ function normalizeVector3(value, fallback = { x: 0, y: 0, z: 0 }) {
     y: numeric(value?.y, fallback.y),
     z: numeric(value?.z, fallback.z),
   };
+}
+
+function withPoseBuilderJointLimits(limits = DEFAULT_JOINT_LIMITS) {
+  const normalized = normalizeJointLimits(limits);
+  return {
+    ...normalized,
+    minThighCalfAngleDeg: Math.max(
+      numeric(normalized.minThighCalfAngleDeg, 0),
+      MIN_THIGH_CALF_ANGLE_DEG,
+    ),
+  };
+}
+
+function minimumReachForInteriorAngle(thighLength, calfLength, minAngleDeg) {
+  if (!(minAngleDeg > 0)) {
+    return Math.abs(thighLength - calfLength);
+  }
+
+  const clampedAngleDeg = clamp(minAngleDeg, 0, 180);
+  return Math.sqrt(
+    Math.max(
+      0,
+      (thighLength * thighLength)
+        + (calfLength * calfLength)
+        - (2 * thighLength * calfLength * Math.cos(degToRad(clampedAngleDeg))),
+    ),
+  );
 }
 
 function normalizeBody(body = {}, fallback = DEFAULT_BODY) {
@@ -375,16 +424,21 @@ export function worldToBodyPoint(pointWorldMm, body) {
 export function legPlaneFootToWorld(pose, legId, footCommand, hipYawDeg = 0) {
   const normalized = normalizeStaticPose(pose);
   const mountBodyMm = LEG_MOUNTS_MM[legId] ?? { x: 0, y: 0, z: 0 };
+  const footBodyMm = legCommandToBodyPoint(mountBodyMm, footCommand, hipYawDeg);
+
+  return bodyToWorldPoint(footBodyMm, normalized.body);
+}
+
+function legCommandToBodyPoint(mountBodyMm, footCommand, hipYawDeg = 0) {
   const verticalReachMm = numeric(footCommand?.y, 0) + LEG_GEOMETRY.footOriginOffset.y;
   const radialReachMm = Math.max(0, -verticalReachMm);
   const hipYawRad = degToRad(numeric(hipYawDeg, 0));
-  const footBodyMm = addVector3(mountBodyMm, {
+
+  return addVector3(mountBodyMm, {
     x: numeric(footCommand?.x, 0) + LEG_GEOMETRY.footOriginOffset.x,
     y: radialReachMm * Math.sin(hipYawRad),
     z: -radialReachMm * Math.cos(hipYawRad),
   });
-
-  return bodyToWorldPoint(footBodyMm, normalized.body);
 }
 
 export function updateBodyKeepingFeetLocked(pose, bodyPatch) {
@@ -429,9 +483,43 @@ export function getJointLimitsByLeg(robotState = {}) {
   return Object.fromEntries(
     LEG_IDS.map((legId) => [
       legId,
-      normalizeJointLimits(robotState.legs?.[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS),
+      withPoseBuilderJointLimits(robotState.legs?.[legId]?.jointLimits ?? DEFAULT_JOINT_LIMITS),
     ]),
   );
+}
+
+export function normalizeServoSpeedLimit(
+  candidate = {},
+  fallback = DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
+) {
+  return {
+    hipYaw: Math.max(1, numeric(candidate?.hipYaw, fallback.hipYaw)),
+    thigh: Math.max(1, numeric(candidate?.thigh, fallback.thigh)),
+    calf: Math.max(1, numeric(candidate?.calf, fallback.calf)),
+  };
+}
+
+export function getServoSpeedLimitsByLeg(robotState = {}) {
+  return Object.fromEntries(
+    LEG_IDS.map((legId) => [
+      legId,
+      normalizeServoSpeedLimit(
+        robotState.legs?.[legId]?.servoSpeedLimitDegPerSec,
+        DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
+      ),
+    ]),
+  );
+}
+
+export function createServoSpeedLimitCommand(legId, servoSpeedLimitDegPerSec) {
+  const normalized = normalizeServoSpeedLimit(servoSpeedLimitDegPerSec);
+  return {
+    type: "set_leg_servo_speed_limit",
+    legId,
+    hipYawDegPerSec: normalized.hipYaw,
+    thighDegPerSec: normalized.thigh,
+    calfDegPerSec: normalized.calf,
+  };
 }
 
 export function solveStaticPose(pose, options = {}) {
@@ -440,9 +528,10 @@ export function solveStaticPose(pose, options = {}) {
   const previousSolutions = options.previousSolutions?.legs ?? {};
   const legs = {};
   let allReachable = true;
+  let allCommandReady = true;
 
   for (const legId of LEG_IDS) {
-    const limits = normalizeJointLimits(jointLimitsByLeg[legId] ?? DEFAULT_JOINT_LIMITS);
+    const limits = withPoseBuilderJointLimits(jointLimitsByLeg[legId] ?? DEFAULT_JOINT_LIMITS);
     const mountBodyMm = LEG_MOUNTS_MM[legId];
     const footBodyMm = worldToBodyPoint(normalized.feetWorldMm[legId], normalized.body);
     const deltaBodyMm = subtractVector3(footBodyMm, mountBodyMm);
@@ -465,15 +554,28 @@ export function solveStaticPose(pose, options = {}) {
       desired,
       footCommand,
       targetHipYawDeg,
+      jointLimits: limits,
     });
     const withinTolerance = desired.withinTolerance ?? desired.reachable;
-    const reachable = Boolean(desired.reachable && withinTolerance && hipYawWithinLimits);
+    const commandReady = Boolean(desired.reachable);
+    const reachable = Boolean(commandReady && withinTolerance && hipYawWithinLimits);
+    const clamped = Boolean(commandReady && !reachable);
+    const commandedFootCommand = desired.foot ?? footCommand;
+    const commandFootBodyMm = legCommandToBodyPoint(mountBodyMm, commandedFootCommand, hipYawDeg);
+    const commandFootWorldMm = bodyToWorldPoint(commandFootBodyMm, normalized.body);
+    const displayFootWorldMm = reachable ? normalized.feetWorldMm[legId] : commandFootWorldMm;
     allReachable = allReachable && reachable;
+    allCommandReady = allCommandReady && commandReady;
 
     legs[legId] = {
       desired,
       preview,
+      commandReady,
+      clamped,
       footWorldMm: normalized.feetWorldMm[legId],
+      commandFootWorldMm,
+      commandFootBodyMm,
+      displayFootWorldMm,
       footBodyMm,
       deltaBodyMm,
       footCommand,
@@ -482,28 +584,136 @@ export function solveStaticPose(pose, options = {}) {
       reachable,
       footErrorMm: desired.footError ?? 0,
       jointLimits: limits,
-      status: reachable ? "reachable" : "limited",
+      status: !commandReady ? "unavailable" : (clamped ? "clamped" : "ready"),
     };
   }
 
   return {
     pose: normalized,
     legs,
+    commandReady: allCommandReady,
     reachable: allReachable,
   };
 }
 
-export function createPoseApplyCommand(solvedPose, robotState = {}) {
+function createFullBodyCommandLegMap(poseByLeg, robotState = {}) {
   const legs = {};
 
   for (const legId of LEG_IDS) {
     legs[legId] = {
-      desired: solvedPose.legs[legId].desired,
+      desired: poseByLeg[legId] ?? { servoAnglesDeg: { ...DEFAULT_LEG_COMMAND.servoAnglesDeg } },
       servoTrimDeg: robotState.legs?.[legId]?.servoTrimDeg ?? DEFAULT_SERVO_TRIM_DEG,
     };
   }
 
-  return createFullBodyPoseCommand(legs);
+  return legs;
+}
+
+export function createPoseApplyCommand(solvedPose, robotState = {}) {
+  return createFullBodyPoseCommand(
+    createFullBodyCommandLegMap(
+      Object.fromEntries(LEG_IDS.map((legId) => [legId, solvedPose.legs[legId].desired])),
+      robotState,
+    ),
+  );
+}
+
+export function createRobotStateFullBodyCommand(robotState = {}, poseSource = "current") {
+  let hasPose = false;
+  const poseByLeg = {};
+
+  for (const legId of LEG_IDS) {
+    const pose = robotState.legs?.[legId]?.[poseSource]
+      ?? robotState.legs?.[legId]?.desired
+      ?? null;
+    if (pose?.servoAnglesDeg) {
+      hasPose = true;
+    }
+    poseByLeg[legId] = pose;
+  }
+
+  if (!hasPose) {
+    return null;
+  }
+
+  return createFullBodyPoseCommand(createFullBodyCommandLegMap(poseByLeg, robotState));
+}
+
+export function estimateFullBodyCommandDurationMs(
+  fromCommand,
+  toCommand,
+  servoSpeedLimitsByLeg = {},
+) {
+  if (!toCommand) {
+    return 0;
+  }
+
+  let maxDurationSec = 0;
+
+  for (const { legId, jointId, key } of FULL_BODY_COMMAND_FIELDS) {
+    const targetValue = numeric(toCommand?.[key], 0);
+    const startValue = numeric(fromCommand?.[key], targetValue);
+    const limit = normalizeServoSpeedLimit(
+      servoSpeedLimitsByLeg?.[legId],
+      DEFAULT_SERVO_SPEED_LIMIT_DEG_PER_SEC,
+    )[jointId];
+    maxDurationSec = Math.max(maxDurationSec, Math.abs(targetValue - startValue) / limit);
+  }
+
+  return Math.ceil(maxDurationSec * 1000);
+}
+
+export function createInterpolatedFullBodyCommandSequence(
+  fromCommand,
+  toCommand,
+  servoSpeedLimitsByLeg = {},
+  options = {},
+) {
+  const frameIntervalMs = Math.max(
+    1,
+    Math.round(numeric(options.frameIntervalMs, POSE_COMMAND_INTERVAL_MS)),
+  );
+
+  if (!toCommand) {
+    return {
+      durationMs: 0,
+      frameIntervalMs,
+      commands: [],
+    };
+  }
+
+  const rawDurationMs = estimateFullBodyCommandDurationMs(
+    fromCommand,
+    toCommand,
+    servoSpeedLimitsByLeg,
+  );
+  if (!(rawDurationMs > 0)) {
+    return {
+      durationMs: 0,
+      frameIntervalMs,
+      commands: [clone(toCommand)],
+    };
+  }
+
+  const stepCount = Math.max(1, Math.ceil(rawDurationMs / frameIntervalMs));
+  const commands = Array.from({ length: stepCount }, (_, index) => {
+    const t = (index + 1) / stepCount;
+    const command = { type: "apply_full_body_pose" };
+
+    for (const { key } of FULL_BODY_COMMAND_FIELDS) {
+      const targetValue = numeric(toCommand?.[key], 0);
+      const startValue = numeric(fromCommand?.[key], targetValue);
+      command[key] = roundCommandAngle(startValue + ((targetValue - startValue) * t));
+    }
+
+    return command;
+  });
+
+  return {
+    durationMs: stepCount * frameIntervalMs,
+    frameIntervalMs,
+    commands,
+  };
 }
 
 function urdfVisualPoint(chain, jointValues) {
@@ -541,6 +751,7 @@ function solveVisualLegPlanePose(solvedLeg) {
   };
   const thighLength = LEG_GEOMETRY.thighLength;
   const calfLength = LEG_GEOMETRY.calfLength;
+  const minThighCalfAngleDeg = numeric(solvedLeg.jointLimits?.minThighCalfAngleDeg, 0);
   const dx = target.x - hip.x;
   const dy = target.y - hip.y;
   const distance = Math.hypot(dx, dy);
@@ -553,7 +764,10 @@ function solveVisualLegPlanePose(solvedLeg) {
     };
   }
 
-  const minReach = Math.abs(thighLength - calfLength) + VISUAL_IK_EXTENSION_EPSILON_MM;
+  const minReach = Math.max(
+    Math.abs(thighLength - calfLength),
+    minimumReachForInteriorAngle(thighLength, calfLength, minThighCalfAngleDeg),
+  ) + VISUAL_IK_EXTENSION_EPSILON_MM;
   const maxReach = thighLength + calfLength - VISUAL_IK_EXTENSION_EPSILON_MM;
   const clampedDistance = clamp(distance, minReach, maxReach);
   const scale = clampedDistance / distance;
@@ -723,9 +937,9 @@ function solveUrdfVisualJoints(legId, solvedLeg, initialValues) {
     };
   }
 
-  const target = solvedLeg.footBodyMm;
-  const previewCalfDeg = solvedLeg.preview?.jointAnglesDeg?.calf
-    ?? solvedLeg.desired.jointAnglesDeg.calf
+  const target = solvedLeg.commandFootBodyMm ?? solvedLeg.footBodyMm;
+  const previewCalfDeg = solvedLeg.desired.jointAnglesDeg.calf
+    ?? solvedLeg.preview?.jointAnglesDeg?.calf
     ?? -135;
   const bentCandidate = optimizeUrdfVisualJoints(
     chain,
@@ -813,7 +1027,8 @@ export function getUrdfJointValues(solvedPose) {
   for (const legId of LEG_IDS) {
     const prefix = LEG_PREFIXES[legId];
     const solvedLeg = solvedPose.legs[legId];
-    const angles = solvedLeg.preview?.jointAnglesDeg ?? solvedLeg.desired.jointAnglesDeg;
+    const angles = solvedLeg.desired.jointAnglesDeg
+      ?? solvedLeg.preview?.jointAnglesDeg;
     const coxaAxisSign = COXA_AXIS_SIGNS[legId] ?? 1;
     const femurAxisSign = FEMUR_AXIS_SIGNS[legId] ?? 1;
     const tibiaAxisSign = TIBIA_AXIS_SIGNS[legId] ?? 1;

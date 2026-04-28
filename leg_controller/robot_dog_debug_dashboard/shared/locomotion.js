@@ -2,6 +2,7 @@ import { buildLegPoseFromFoot, createNeutralCalibration } from "./kinematics.js"
 import {
   DEFAULT_DRIVE_COMMAND,
   DEFAULT_JOINT_LIMITS,
+  DEFAULT_SERVO_TRIM_DEG,
   DEFAULT_STANCE,
   LEG_IDS,
 } from "./robot-config.js";
@@ -21,7 +22,12 @@ const DRIVE_FOOT_LIFT_MM = 28 * DRIVE_GAIT_EXAGGERATION;
 const DRIVE_SUPPORT_DIP_MM = 5 * DRIVE_GAIT_EXAGGERATION;
 const DRIVE_YAW_HIP_BIAS_DEG = 12 * DRIVE_GAIT_EXAGGERATION;
 const DRIVE_STRAFE_HIP_YAW_DEG = 22 * DRIVE_GAIT_EXAGGERATION;
-const RIGHT_LEG_IDS = new Set(["front_right", "rear_right"]);
+const LEG_TRANSPORT_SIGNS = {
+  front_left: { hipYaw: 1, thigh: 1, calf: 1 },
+  front_right: { hipYaw: -1, thigh: -1, calf: -1 },
+  rear_left: { hipYaw: 1, thigh: 1, calf: 1 },
+  rear_right: { hipYaw: -1, thigh: -1, calf: -1 },
+};
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, value));
@@ -31,12 +37,65 @@ function roundServo(value) {
   return Math.round((value ?? 90) * 100) / 100;
 }
 
-function mirrorServoAroundNeutral(value) {
-  return 180 - (value ?? 90);
-}
-
 function clampServo(value) {
   return clamp(value, 0, 180);
+}
+
+function normalizeServoValue(value, fallback = 90) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeServoTrim(servoTrimDeg = DEFAULT_SERVO_TRIM_DEG) {
+  return {
+    hipYaw: normalizeServoValue(servoTrimDeg?.hipYaw, DEFAULT_SERVO_TRIM_DEG.hipYaw),
+    thigh: normalizeServoValue(servoTrimDeg?.thigh, DEFAULT_SERVO_TRIM_DEG.thigh),
+    calf: normalizeServoValue(servoTrimDeg?.calf, DEFAULT_SERVO_TRIM_DEG.calf),
+  };
+}
+
+function normalizeServoAngles(servoAnglesDeg = {}) {
+  return {
+    hipYaw: normalizeServoValue(servoAnglesDeg?.hipYaw ?? servoAnglesDeg?.hip, 90),
+    thigh: normalizeServoValue(servoAnglesDeg?.thigh, 90),
+    calf: normalizeServoValue(servoAnglesDeg?.calf, 90),
+  };
+}
+
+function getTransportSigns(legId) {
+  return LEG_TRANSPORT_SIGNS[legId] ?? LEG_TRANSPORT_SIGNS.front_left;
+}
+
+export function mapLegServoAnglesToHardware(
+  legId,
+  servoAnglesDeg = {},
+  servoTrimDeg = DEFAULT_SERVO_TRIM_DEG,
+) {
+  const angles = normalizeServoAngles(servoAnglesDeg);
+  const trim = normalizeServoTrim(servoTrimDeg);
+  const signs = getTransportSigns(legId);
+
+  return {
+    hipYaw: roundServo(clampServo(angles.hipYaw + (trim.hipYaw / signs.hipYaw))),
+    thigh: roundServo(clampServo(angles.thigh + (trim.thigh / signs.thigh))),
+    calf: roundServo(clampServo(angles.calf + (trim.calf / signs.calf))),
+  };
+}
+
+export function mapHardwareServoAnglesToLeg(
+  legId,
+  servoAnglesDeg = {},
+  servoTrimDeg = DEFAULT_SERVO_TRIM_DEG,
+) {
+  const angles = normalizeServoAngles(servoAnglesDeg);
+  const trim = normalizeServoTrim(servoTrimDeg);
+  const signs = getTransportSigns(legId);
+
+  return {
+    hipYaw: roundServo(clampServo(angles.hipYaw - (trim.hipYaw / signs.hipYaw))),
+    thigh: roundServo(clampServo(angles.thigh - (trim.thigh / signs.thigh))),
+    calf: roundServo(clampServo(angles.calf - (trim.calf / signs.calf))),
+  };
 }
 
 export function createMotionStatePatch({
@@ -112,15 +171,14 @@ export function flattenServoPose(legs) {
       .split("_")
       .map((part) => part[0].toUpperCase())
       .join("");
-    const servoAngles = legs[legId]?.desired?.servoAnglesDeg ?? {};
-    const servoTrimDeg = legs[legId]?.servoTrimDeg ?? {};
-    const mirror = RIGHT_LEG_IDS.has(legId);
-    const hipYawDeg = servoAngles.hipYaw;
-    const thighDeg = mirror ? mirrorServoAroundNeutral(servoAngles.thigh) : servoAngles.thigh;
-    const calfDeg = mirror ? mirrorServoAroundNeutral(servoAngles.calf) : servoAngles.calf;
-    flattened[`${prefix}HipYawDeg`] = roundServo(clampServo(hipYawDeg + (servoTrimDeg.hipYaw ?? 0)));
-    flattened[`${prefix}ThighDeg`] = roundServo(clampServo(thighDeg + (servoTrimDeg.thigh ?? 0)));
-    flattened[`${prefix}CalfDeg`] = roundServo(clampServo(calfDeg + (servoTrimDeg.calf ?? 0)));
+    const hardwareAngles = mapLegServoAnglesToHardware(
+      legId,
+      legs[legId]?.desired?.servoAnglesDeg ?? {},
+      legs[legId]?.servoTrimDeg ?? {},
+    );
+    flattened[`${prefix}HipYawDeg`] = hardwareAngles.hipYaw;
+    flattened[`${prefix}ThighDeg`] = hardwareAngles.thigh;
+    flattened[`${prefix}CalfDeg`] = hardwareAngles.calf;
   }
   return flattened;
 }

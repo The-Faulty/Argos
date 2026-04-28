@@ -50,8 +50,8 @@ static const float PCA9685_FREQUENCY_HZ = 150.0f;
 static const char MICROCONTROLLER_BOARD_NAME[] = "Adafruit ESP32 Feather";
 static const uint8_t I2C_SDA_PIN = 23;
 static const uint8_t I2C_SCL_PIN = 22;
-static const float SERVO_MIN_PULSE_US = 1000.0f;
-static const float SERVO_MAX_PULSE_US = 2000.0f;
+static const float SERVO_MIN_PULSE_US = 500.0f;
+static const float SERVO_MAX_PULSE_US = 2500.0f;
 
 typedef struct {
     float min;

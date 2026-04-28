@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, buildLegPoseFromServoAngles, createNeutralCalibration, geometryWithinJointLimits, normalizeJointLimits, robotOverviewGeometry } from "../shared/kinematics.js";
+import { buildLegPoseFromFoot, buildLegPoseFromJointAngles, buildLegPoseFromServoAngles, createNeutralCalibration, geometryWithinJointLimits, getThighCalfAngleDeg, normalizeJointLimits, robotOverviewGeometry } from "../shared/kinematics.js";
 import { DEFAULT_JOINT_LIMITS } from "../shared/robot-config.js";
 
 const calibration = createNeutralCalibration();
@@ -52,6 +52,27 @@ test("buildLegPoseFromFoot returns a valid limited geometry for reachable target
   assert.equal(pose.reachable, true);
   assert.equal(pose.geometry.valid, true);
   assert.equal(geometryWithinJointLimits(pose.geometry, limits), true);
+});
+
+test("buildLegPoseFromFoot respects a minimum thigh-calf angle", () => {
+  const limits = {
+    thighDeg: { min: -145, max: 15 },
+    calfDeg: { min: -165, max: -25 },
+    minThighCalfAngleDeg: 20,
+  };
+  const pose = buildLegPoseFromFoot(
+    { x: -40, y: 140 },
+    calibration,
+    {
+      startThetaThigh: calibration.thetaThigh,
+      startThetaServo: calibration.thetaServo,
+      jointLimits: limits,
+    },
+  );
+
+  assert.equal(pose.geometry.valid, true);
+  assert.equal(geometryWithinJointLimits(pose.geometry, limits), true);
+  assert.ok(getThighCalfAngleDeg(pose.geometry) >= 19.9);
 });
 
 test("thigh servo 90 degrees maps to a ground-parallel thigh", () => {

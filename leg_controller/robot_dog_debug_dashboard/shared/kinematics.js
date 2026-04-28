@@ -11,7 +11,10 @@ export function normalizeJointLimits(limits = DEFAULT_JOINT_LIMITS) {
   const thighMax = Number.isFinite(limits?.thighDeg?.max) ? limits.thighDeg.max : DEFAULT_JOINT_LIMITS.thighDeg.max;
   const calfMin = Number.isFinite(limits?.calfDeg?.min) ? limits.calfDeg.min : DEFAULT_JOINT_LIMITS.calfDeg.min;
   const calfMax = Number.isFinite(limits?.calfDeg?.max) ? limits.calfDeg.max : DEFAULT_JOINT_LIMITS.calfDeg.max;
-  return {
+  const minThighCalfAngleDeg = Number.isFinite(limits?.minThighCalfAngleDeg)
+    ? clampValue(limits.minThighCalfAngleDeg, 0, 180)
+    : null;
+  const normalized = {
     hipYawDeg: {
       min: Math.min(hipYawMin, hipYawMax),
       max: Math.max(hipYawMin, hipYawMax)
@@ -25,15 +28,33 @@ export function normalizeJointLimits(limits = DEFAULT_JOINT_LIMITS) {
       max: Math.max(calfMin, calfMax)
     }
   };
+  if (minThighCalfAngleDeg != null) {
+    normalized.minThighCalfAngleDeg = minThighCalfAngleDeg;
+  }
+  return normalized;
 }
 
 export function clampJointAnglesToLimits(jointAnglesDeg, limits = DEFAULT_JOINT_LIMITS) {
   const normalized = normalizeJointLimits(limits);
-  return {
+  const clamped = {
     hipYaw: clampValue(jointAnglesDeg.hipYaw ?? 0, normalized.hipYawDeg.min, normalized.hipYawDeg.max),
     thigh: clampValue(jointAnglesDeg.thigh, normalized.thighDeg.min, normalized.thighDeg.max),
     calf: clampValue(jointAnglesDeg.calf, normalized.calfDeg.min, normalized.calfDeg.max)
   };
+
+  if (!(normalized.minThighCalfAngleDeg > 0)) {
+    return clamped;
+  }
+
+  const maxSegmentDeltaDeg = 180 - normalized.minThighCalfAngleDeg;
+  const calfMinFromThigh = Math.max(normalized.calfDeg.min, clamped.thigh - maxSegmentDeltaDeg);
+  const calfMaxFromThigh = Math.min(normalized.calfDeg.max, clamped.thigh + maxSegmentDeltaDeg);
+
+  if (calfMinFromThigh <= calfMaxFromThigh) {
+    clamped.calf = clampValue(clamped.calf, calfMinFromThigh, calfMaxFromThigh);
+  }
+
+  return clamped;
 }
 
 export function geometryWithinJointLimits(geometry, limits = DEFAULT_JOINT_LIMITS) {
@@ -43,12 +64,42 @@ export function geometryWithinJointLimits(geometry, limits = DEFAULT_JOINT_LIMIT
   const normalized = normalizeJointLimits(limits);
   const thighDeg = radToDeg(geometry.thetaThigh);
   const calfDeg = radToDeg(geometry.thetaCalf);
+  const thighCalfAngleDeg = getThighCalfAngleDeg(geometry);
   return (
     thighDeg >= normalized.thighDeg.min &&
     thighDeg <= normalized.thighDeg.max &&
     calfDeg >= normalized.calfDeg.min &&
-    calfDeg <= normalized.calfDeg.max
+    calfDeg <= normalized.calfDeg.max &&
+    thighCalfAngleDeg >= (normalized.minThighCalfAngleDeg ?? 0)
   );
+}
+
+export function getThighCalfAngleDeg(geometry) {
+  if (!geometry?.knee || !geometry?.hip || !geometry?.foot) {
+    return 0;
+  }
+
+  const thighVector = {
+    x: geometry.hip.x - geometry.knee.x,
+    y: geometry.hip.y - geometry.knee.y,
+  };
+  const calfVector = {
+    x: geometry.foot.x - geometry.knee.x,
+    y: geometry.foot.y - geometry.knee.y,
+  };
+  const thighLength = Math.hypot(thighVector.x, thighVector.y);
+  const calfLength = Math.hypot(calfVector.x, calfVector.y);
+
+  if (thighLength < 1e-9 || calfLength < 1e-9) {
+    return 0;
+  }
+
+  const cosine = clampValue(
+    ((thighVector.x * calfVector.x) + (thighVector.y * calfVector.y)) / (thighLength * calfLength),
+    -1,
+    1,
+  );
+  return radToDeg(Math.acos(cosine));
 }
 
 export function clampAngle(angle) {

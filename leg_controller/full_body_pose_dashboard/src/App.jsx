@@ -2,14 +2,21 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
+import URDFLoader from "urdf-loader";
 import {
+  createInterpolatedFullBodyCommandSequence,
   createNeutralStaticPose,
   createPoseApplyCommand,
+  createRobotStateFullBodyCommand,
+  createServoSpeedLimitCommand,
   getJointLimitsByLeg,
+  getServoSpeedLimitsByLeg,
+  getUrdfJointValues,
   LEG_MOUNTS_MM,
   legPlaneFootToWorld,
   parseStaticPose,
   POSE_LIBRARY_STORAGE_KEY,
+  POSE_COMMAND_INTERVAL_MS,
   serializeStaticPose,
   solveStaticPose,
   updateBodyKeepingFeetLocked,
@@ -27,13 +34,23 @@ const BODY_TOOL = {
   MOVE: "translate",
   ROTATE: "rotate",
 };
+const LEG_PREFIXES = {
+  front_left: "FL",
+  front_right: "FR",
+  rear_left: "RL",
+  rear_right: "RR",
+};
+const URDF_OVERLAY_OPACITY = 0.32;
 const LEG_SCENE_COLORS = {
   front_left: 0x1d8cff,
   front_right: 0x21a264,
   rear_left: 0xff8a21,
   rear_right: 0x8256ff,
 };
+const CLAMPED_SCENE_COLOR = 0xffb156;
 const LIMITED_SCENE_COLOR = 0xd83a2e;
+const LIVE_UPDATE_INTERVAL_MS = POSE_COMMAND_INTERVAL_MS;
+const POSE_HISTORY_LIMIT = 100;
 const BODY_FRAME = (() => {
   const mounts = Object.values(LEG_MOUNTS_MM);
   const minX = Math.min(...mounts.map((mount) => mount.x));
@@ -105,6 +122,97 @@ function numberValue(value, fallback = 0) {
 
 function formatNumber(value, digits = 1) {
   return numberValue(value).toFixed(digits);
+}
+
+function formatDurationMs(value) {
+  return `${(Math.max(0, numberValue(value)) / 1000).toFixed(2)} s`;
+}
+
+function sameSpeedLimit(a, b) {
+  return (
+    numberValue(a?.hipYaw) === numberValue(b?.hipYaw)
+    && numberValue(a?.thigh) === numberValue(b?.thigh)
+    && numberValue(a?.calf) === numberValue(b?.calf)
+  );
+}
+
+function cloneSpeedLimitsByLeg(speedLimitsByLeg) {
+  return Object.fromEntries(
+    LEG_IDS.map((legId) => [
+      legId,
+      {
+        hipYaw: numberValue(speedLimitsByLeg?.[legId]?.hipYaw),
+        thigh: numberValue(speedLimitsByLeg?.[legId]?.thigh),
+        calf: numberValue(speedLimitsByLeg?.[legId]?.calf),
+      },
+    ]),
+  );
+}
+
+function speedLimitFromCommand(command) {
+  return {
+    hipYaw: command.hipYawDegPerSec,
+    thigh: command.thighDegPerSec,
+    calf: command.calfDegPerSec,
+  };
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    window.setTimeout(resolve, ms);
+  });
+}
+
+function isEditableKeyboardTarget(target) {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  return target.isContentEditable || ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName);
+}
+
+function getLegIndicatorState(leg) {
+  if (!leg?.commandReady) {
+    return {
+      pillClass: "count-bad",
+      buttonClass: "limited",
+      label: "Unavailable",
+    };
+  }
+
+  if (leg.clamped) {
+    return {
+      pillClass: "count-warn",
+      buttonClass: "clamped",
+      label: "Clamped",
+    };
+  }
+
+  return {
+    pillClass: "count-good",
+    buttonClass: "",
+    label: "Ready",
+  };
+}
+
+function getDisplayLegGeometry(leg) {
+  if (!leg) {
+    return null;
+  }
+
+  return leg.desired?.geometry ?? leg.preview?.geometry ?? null;
+}
+
+function getDisplayJointAngles(leg) {
+  if (!leg) {
+    return null;
+  }
+
+  return leg.desired?.jointAnglesDeg ?? leg.preview?.jointAnglesDeg ?? null;
+}
+
+function getDisplayFootWorldMm(leg) {
+  return leg?.displayFootWorldMm ?? leg?.commandFootWorldMm ?? leg?.footWorldMm ?? null;
 }
 
 function downloadJson(filename, data) {
@@ -260,7 +368,32 @@ function createLegVisual(legId) {
   };
 }
 
-function applyScenePose(robot, solvedPose, selectedLegId) {
+function applyUrdfOverlayPose(robot, solvedPose, showUrdfOverlay) {
+  if (!robot?.urdf || !solvedPose) {
+    return;
+  }
+
+  robot.urdf.visible = showUrdfOverlay;
+  if (!showUrdfOverlay) {
+    return;
+  }
+
+  const { positionMm, rotationDeg } = solvedPose.pose.body;
+  robot.urdf.position.set(positionMm.x, positionMm.y, positionMm.z);
+  robot.urdf.rotation.set(
+    THREE.MathUtils.degToRad(rotationDeg.roll),
+    THREE.MathUtils.degToRad(rotationDeg.pitch),
+    THREE.MathUtils.degToRad(rotationDeg.yaw),
+    "XYZ",
+  );
+
+  const jointValues = getUrdfJointValues(solvedPose);
+  for (const [jointName, jointValue] of Object.entries(jointValues)) {
+    robot.urdf.joints?.[jointName]?.setJointValue(jointValue);
+  }
+}
+
+function applyScenePose(robot, solvedPose, selectedLegId, showPlanarRig, showUrdfOverlay) {
   if (!robot || !solvedPose) {
     return;
   }
@@ -273,11 +406,13 @@ function applyScenePose(robot, solvedPose, selectedLegId) {
     THREE.MathUtils.degToRad(rotationDeg.yaw),
     "XYZ",
   );
+  robot.bodyShell.visible = showPlanarRig;
+  robot.bodyOutline.visible = showPlanarRig;
 
   for (const legId of LEG_IDS) {
     const leg = solvedPose.legs[legId];
     const visual = robot.legs?.[legId];
-    const geometry = leg.preview?.geometry ?? leg.desired?.geometry;
+    const geometry = getDisplayLegGeometry(leg);
     if (!visual || !geometry) {
       if (visual) {
         visual.root.visible = false;
@@ -285,7 +420,7 @@ function applyScenePose(robot, solvedPose, selectedLegId) {
       continue;
     }
 
-    visual.root.visible = true;
+    visual.root.visible = showPlanarRig;
     visual.root.rotation.set(
       THREE.MathUtils.degToRad(leg.targetHipYawDeg ?? 0) - (Math.PI / 2),
       0,
@@ -297,8 +432,10 @@ function applyScenePose(robot, solvedPose, selectedLegId) {
     const kneeLocal = planePointToLegLocal(geometry.knee ?? geometry.hip ?? LEG_GEOMETRY.hipPivot, geometry.hip ?? LEG_GEOMETRY.hipPivot);
     const footLocal = planePointToLegLocal(geometry.foot ?? geometry.hip ?? LEG_GEOMETRY.hipPivot, geometry.hip ?? LEG_GEOMETRY.hipPivot);
     const isSelected = legId === selectedLegId;
-    const baseColor = leg.reachable ? LEG_SCENE_COLORS[legId] : LIMITED_SCENE_COLOR;
-    const accentColor = isSelected && leg.reachable ? 0xff9f43 : baseColor;
+    const baseColor = !leg.commandReady
+      ? LIMITED_SCENE_COLOR
+      : (leg.clamped ? CLAMPED_SCENE_COLOR : LEG_SCENE_COLORS[legId]);
+    const accentColor = isSelected ? CLAMPED_SCENE_COLOR : baseColor;
 
     setSegmentBetween(visual.thighBone, hipLocal, kneeLocal, isSelected ? 4.6 : 4);
     setSegmentBetween(visual.calfBone, kneeLocal, footLocal, isSelected ? 4.2 : 3.6);
@@ -320,12 +457,14 @@ function applyScenePose(robot, solvedPose, selectedLegId) {
     const maxY = Math.max(...localPoints.map((point) => point.y));
     const planeWidth = Math.max(72, (maxX - minX) + 52);
     const planeHeight = Math.max(118, (maxY - minY) + 56);
-    visual.plane.visible = isSelected;
+    visual.plane.visible = showPlanarRig && isSelected;
     visual.plane.position.set((minX + maxX) / 2, (minY + maxY) / 2, -0.5);
     visual.plane.scale.set(planeWidth, planeHeight, 1);
     visual.plane.material.color.set(baseColor);
     visual.plane.material.opacity = isSelected ? 0.14 : 0.08;
   }
+
+  applyUrdfOverlayPose(robot, solvedPose, showUrdfOverlay);
 }
 
 function RobotScene({
@@ -335,8 +474,12 @@ function RobotScene({
   setEditTarget,
   bodyTool,
   setSelectedLegId,
+  showPlanarRig,
+  showUrdfOverlay,
   onFootWorldChange,
   onBodyChange,
+  onEditStart,
+  onEditEnd,
   onStatus,
 }) {
   const mountRef = useRef(null);
@@ -348,11 +491,33 @@ function RobotScene({
   const syncingSceneRef = useRef(false);
   const pendingSceneUpdateRef = useRef(null);
   const sceneCommitFrameRef = useRef(0);
-  const latestRef = useRef({ solvedPose, selectedLegId, editTarget, bodyTool, onFootWorldChange, onBodyChange });
+  const latestRef = useRef({
+    solvedPose,
+    selectedLegId,
+    editTarget,
+    bodyTool,
+    showPlanarRig,
+    showUrdfOverlay,
+    onFootWorldChange,
+    onBodyChange,
+    onEditStart,
+    onEditEnd,
+  });
 
   useEffect(() => {
-    latestRef.current = { solvedPose, selectedLegId, editTarget, bodyTool, onFootWorldChange, onBodyChange };
-  }, [solvedPose, selectedLegId, editTarget, bodyTool, onFootWorldChange, onBodyChange]);
+    latestRef.current = {
+      solvedPose,
+      selectedLegId,
+      editTarget,
+      bodyTool,
+      showPlanarRig,
+      showUrdfOverlay,
+      onFootWorldChange,
+      onBodyChange,
+      onEditStart,
+      onEditEnd,
+    };
+  }, [solvedPose, selectedLegId, editTarget, bodyTool, showPlanarRig, showUrdfOverlay, onFootWorldChange, onBodyChange, onEditStart, onEditEnd]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -470,6 +635,7 @@ function RobotScene({
       bodyShell,
       bodyOutline,
       legs: legVisuals,
+      urdf: null,
     };
     scene.add(robotRoot);
 
@@ -503,8 +669,12 @@ function RobotScene({
     transformControls.addEventListener("dragging-changed", (event) => {
       draggingTransformRef.current = event.value;
       controls.enabled = !event.value;
+      if (event.value) {
+        latestRef.current.onEditStart?.();
+      }
       if (!event.value) {
         flushSceneUpdate();
+        latestRef.current.onEditEnd?.();
       }
     });
     transformControls.addEventListener("objectChange", () => {
@@ -538,8 +708,48 @@ function RobotScene({
     });
     transformControlsRef.current = transformControls;
     scene.add(transformControls.getHelper());
-    applyScenePose(robotRef.current, latestRef.current.solvedPose, latestRef.current.selectedLegId);
-    onStatus?.("Planar rig ready");
+    applyScenePose(
+      robotRef.current,
+      latestRef.current.solvedPose,
+      latestRef.current.selectedLegId,
+      latestRef.current.showPlanarRig,
+      latestRef.current.showUrdfOverlay,
+    );
+    onStatus?.("Planar rig ready / loading URDF overlay");
+
+    const loader = new URDFLoader(new THREE.LoadingManager());
+    loader.packages = {
+      Argos_description: "/argos_description",
+    };
+    loader.load(
+      "/argos_description/urdf/Argos.urdf",
+      (urdfRobot) => {
+        urdfRobot.scale.setScalar(1000);
+        urdfRobot.traverse((child) => {
+          if (child.isMesh) {
+            child.castShadow = false;
+            child.receiveShadow = false;
+            child.renderOrder = 18;
+            child.material = child.material.clone();
+            child.material.transparent = true;
+            child.material.opacity = URDF_OVERLAY_OPACITY;
+            child.material.depthWrite = false;
+            child.material.depthTest = false;
+            child.material.roughness = 0.74;
+            child.material.metalness = 0.02;
+            child.material.color.set(0x1f2730);
+          }
+        });
+        robotRef.current.urdf = urdfRobot;
+        scene.add(urdfRobot);
+        applyUrdfOverlayPose(robotRef.current, latestRef.current.solvedPose, latestRef.current.showUrdfOverlay);
+        onStatus?.("Planar rig + URDF overlay ready");
+      },
+      undefined,
+      (error) => {
+        onStatus?.(`Planar rig ready / URDF overlay error: ${error.message}`);
+      },
+    );
 
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
@@ -610,7 +820,7 @@ function RobotScene({
 
   useEffect(() => {
     syncingSceneRef.current = true;
-    applyScenePose(robotRef.current, solvedPose, selectedLegId);
+    applyScenePose(robotRef.current, solvedPose, selectedLegId, showPlanarRig, showUrdfOverlay);
 
     const robot = robotRef.current;
     if (robot?.bodyShell && robot?.bodyOutline) {
@@ -635,13 +845,23 @@ function RobotScene({
       const leg = solvedPose.legs[legId];
       const marker = footMarkersRef.current[legId];
       const selected = legId === selectedLegId;
+      const displayFootWorldMm = getDisplayFootWorldMm(leg);
+      const markerColor = !leg.commandReady
+        ? LIMITED_SCENE_COLOR
+        : (leg.clamped ? CLAMPED_SCENE_COLOR : (selected ? 0x005ee8 : 0x1d8cff));
 
       if (marker) {
-        if (!draggingTransformRef.current || editTarget !== EDIT_TARGET.FOOT || !selected) {
-          marker.position.copy(vectorToThree(leg.footWorldMm));
+        if (
+          !draggingTransformRef.current
+          || editTarget !== EDIT_TARGET.FOOT
+          || !selected
+          || leg.clamped
+          || !leg.commandReady
+        ) {
+          marker.position.copy(vectorToThree(displayFootWorldMm ?? leg.footWorldMm));
         }
         marker.scale.setScalar(selected ? 1.45 : 1);
-        marker.material.color.set(leg.reachable ? (selected ? 0x005ee8 : 0x1d8cff) : 0xd83a2e);
+        marker.material.color.set(markerColor);
       }
     }
 
@@ -666,7 +886,7 @@ function RobotScene({
       }
     }
     syncingSceneRef.current = false;
-  }, [solvedPose, selectedLegId, editTarget, bodyTool]);
+  }, [solvedPose, selectedLegId, editTarget, bodyTool, showPlanarRig, showUrdfOverlay]);
 
   return <div ref={mountRef} className="scene-viewport" />;
 }
@@ -785,31 +1005,51 @@ function PoseLibraryPanel({ pose, poseName, setPoseName, savedPoses, savePose, l
 }
 
 function LegSelector({ selectedLegId, setSelectedLegId, solvedPose }) {
+  const overallPillClass = !solvedPose.commandReady
+    ? "count-bad"
+    : (solvedPose.reachable ? "count-good" : "count-warn");
+  const overallLabel = !solvedPose.commandReady
+    ? "fault"
+    : (solvedPose.reachable ? "clear" : "clamped");
+
   return (
     <section className="panel">
       <div className="panel-heading">
         <h2>Legs</h2>
-        <span className={`count-pill ${solvedPose.reachable ? "count-good" : "count-bad"}`}>
-          {solvedPose.reachable ? "clear" : "limited"}
+        <span className={`count-pill ${overallPillClass}`}>
+          {overallLabel}
         </span>
       </div>
       <div className="leg-selector">
-        {LEG_IDS.map((legId) => (
-          <button
-            key={legId}
-            className={`leg-button ${legId === selectedLegId ? "selected" : ""} ${solvedPose.legs[legId].reachable ? "" : "limited"}`}
-            onClick={() => setSelectedLegId(legId)}
-          >
-            <span>{LEG_LABELS[legId]}</span>
-            <strong>{solvedPose.legs[legId].reachable ? "Reachable" : "Limited"}</strong>
-          </button>
-        ))}
+        {LEG_IDS.map((legId) => {
+          const indicator = getLegIndicatorState(solvedPose.legs[legId]);
+          return (
+            <button
+              key={legId}
+              className={`leg-button ${legId === selectedLegId ? "selected" : ""} ${indicator.buttonClass}`}
+              onClick={() => setSelectedLegId(legId)}
+            >
+              <span>{LEG_LABELS[legId]}</span>
+              <strong>{indicator.label}</strong>
+            </button>
+          );
+        })}
       </div>
     </section>
   );
 }
 
-function SceneHandlePanel({ selectedLegId, editTarget, setEditTarget, bodyTool, setBodyTool }) {
+function SceneHandlePanel({
+  selectedLegId,
+  editTarget,
+  setEditTarget,
+  bodyTool,
+  setBodyTool,
+  showPlanarRig,
+  setShowPlanarRig,
+  showUrdfOverlay,
+  setShowUrdfOverlay,
+}) {
   return (
     <section className="panel handle-panel">
       <div className="panel-heading">
@@ -830,6 +1070,22 @@ function SceneHandlePanel({ selectedLegId, editTarget, setEditTarget, bodyTool, 
           Body Node
         </button>
       </div>
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={showPlanarRig}
+          onChange={(event) => setShowPlanarRig(event.target.checked)}
+        />
+        <span>Simplified 3D Rig</span>
+      </label>
+      <label className="toggle-row">
+        <input
+          type="checkbox"
+          checked={showUrdfOverlay}
+          onChange={(event) => setShowUrdfOverlay(event.target.checked)}
+        />
+        <span>URDF Overlay</span>
+      </label>
       {editTarget === EDIT_TARGET.BODY ? (
         <div className="segmented-control">
           <button
@@ -850,11 +1106,18 @@ function SceneHandlePanel({ selectedLegId, editTarget, setEditTarget, bodyTool, 
   );
 }
 
-function LimbKinematicsPanel({ selectedLegId, selectedLeg, onPlaneFootChange }) {
+function LimbKinematicsPanel({
+  selectedLegId,
+  selectedLeg,
+  onPlaneFootChange,
+  onEditStart,
+  onEditEnd,
+}) {
   const svgRef = useRef(null);
   const dragStateRef = useRef({ active: false, pointerId: null });
-  const geometry = selectedLeg?.preview?.geometry ?? selectedLeg?.desired?.geometry;
-  const linkageGeometry = selectedLeg?.reachable ? selectedLeg?.desired?.geometry : null;
+  const geometry = getDisplayLegGeometry(selectedLeg);
+  const linkageGeometry = selectedLeg?.commandReady ? selectedLeg?.desired?.geometry : null;
+  const indicator = getLegIndicatorState(selectedLeg);
 
   if (!geometry) {
     return (
@@ -901,6 +1164,7 @@ function LimbKinematicsPanel({ selectedLegId, selectedLeg, onPlaneFootChange }) 
   }
 
   function startDrag(event) {
+    onEditStart?.();
     dragStateRef.current = { active: true, pointerId: event.pointerId };
     svgRef.current?.setPointerCapture(event.pointerId);
     const nextFoot = pointerToFootCommand(event);
@@ -923,6 +1187,7 @@ function LimbKinematicsPanel({ selectedLegId, selectedLeg, onPlaneFootChange }) 
   function endDrag(event) {
     if (dragStateRef.current.active && dragStateRef.current.pointerId === event.pointerId) {
       dragStateRef.current = { active: false, pointerId: null };
+      onEditEnd?.();
     }
   }
 
@@ -930,7 +1195,7 @@ function LimbKinematicsPanel({ selectedLegId, selectedLeg, onPlaneFootChange }) 
     <section className="panel kinematics-panel">
       <div className="panel-heading">
         <h2>2D Kinematics</h2>
-        <span className={`count-pill ${selectedLeg.reachable ? "count-good" : "count-bad"}`}>
+        <span className={`count-pill ${indicator.pillClass}`}>
           {LEG_LABELS[selectedLegId]}
         </span>
       </div>
@@ -983,8 +1248,9 @@ function LimbKinematicsPanel({ selectedLegId, selectedLeg, onPlaneFootChange }) 
 }
 
 function PoseControls({ pose, setPose, selectedLegId, solvedPose }) {
-  const selectedFoot = pose.feetWorldMm[selectedLegId];
+  const selectedFoot = getDisplayFootWorldMm(solvedPose.legs[selectedLegId]) ?? pose.feetWorldMm[selectedLegId];
   const selectedLeg = solvedPose.legs[selectedLegId];
+  const indicator = getLegIndicatorState(selectedLeg);
 
   function updateBodyVector(group, key, value) {
     setPose((current) => updateBodyKeepingFeetLocked(current, { [group]: { [key]: value } }));
@@ -998,7 +1264,7 @@ function PoseControls({ pose, setPose, selectedLegId, solvedPose }) {
     <section className="panel controls-panel">
       <div className="panel-heading">
         <h2>Pose Controls</h2>
-        <span className={`count-pill ${selectedLeg.reachable ? "count-good" : "count-bad"}`}>
+        <span className={`count-pill ${indicator.pillClass}`}>
           {LEG_LABELS[selectedLegId]}
         </span>
       </div>
@@ -1032,17 +1298,93 @@ function PoseControls({ pose, setPose, selectedLegId, solvedPose }) {
   );
 }
 
-function ReadoutPanel({ solvedPose, selectedLegId, lastCommand }) {
+function CommandMotionPanel({
+  selectedLegId,
+  speedLimitDraft,
+  activeSpeedLimit,
+  estimatedApplyDurationMs,
+  estimatedApplyFrames,
+  applyInFlight,
+  onSpeedLimitChange,
+  onUpdateSelectedSpeedLimit,
+  onCopySpeedLimitToAll,
+}) {
+  const draft = speedLimitDraft ?? activeSpeedLimit;
+  const active = activeSpeedLimit ?? draft;
+
+  return (
+    <section className="panel controls-panel">
+      <div className="panel-heading">
+        <h2>Command Motion</h2>
+        <span className="count-pill">
+          {estimatedApplyFrames}f
+        </span>
+      </div>
+      <section className="tool-block">
+        <h3>{LEG_LABELS[selectedLegId]} Speed Limit</h3>
+        <div className="axis-grid">
+          <NumberField
+            label="Hip yaw deg/s"
+            value={draft.hipYaw}
+            min={1}
+            onChange={(value) => onSpeedLimitChange(selectedLegId, "hipYaw", value)}
+          />
+          <NumberField
+            label="Thigh deg/s"
+            value={draft.thigh}
+            min={1}
+            onChange={(value) => onSpeedLimitChange(selectedLegId, "thigh", value)}
+          />
+          <NumberField
+            label="Calf deg/s"
+            value={draft.calf}
+            min={1}
+            onChange={(value) => onSpeedLimitChange(selectedLegId, "calf", value)}
+          />
+        </div>
+        <div className="motion-readout-grid">
+          <div>
+            <span>Active</span>
+            <strong>{formatNumber(active.hipYaw, 0)} / {formatNumber(active.thigh, 0)} / {formatNumber(active.calf, 0)}</strong>
+          </div>
+          <div>
+            <span>Apply Time</span>
+            <strong>{formatDurationMs(estimatedApplyDurationMs)}</strong>
+          </div>
+          <div>
+            <span>Frame Cadence</span>
+            <strong>{POSE_COMMAND_INTERVAL_MS} ms</strong>
+          </div>
+        </div>
+        <div className="button-row">
+          <button className="secondary-button" onClick={onUpdateSelectedSpeedLimit} disabled={applyInFlight}>Update Speed</button>
+          <button className="secondary-button" onClick={onCopySpeedLimitToAll} disabled={applyInFlight}>Copy To All</button>
+        </div>
+      </section>
+    </section>
+  );
+}
+
+function ReadoutPanel({ solvedPose, selectedLegId, lastCommand, commandPreview }) {
   const leg = solvedPose.legs[selectedLegId];
-  const servoAngles = leg.desired.servoAnglesDeg;
   const commandJointAngles = leg.desired.jointAnglesDeg;
-  const previewJointAngles = leg.preview?.jointAnglesDeg ?? commandJointAngles;
+  const displayJointAngles = getDisplayJointAngles(leg) ?? commandJointAngles;
+  const displayFootWorldMm = getDisplayFootWorldMm(leg) ?? leg.footWorldMm;
+  const indicator = getLegIndicatorState(leg);
+  const prefix = LEG_PREFIXES[selectedLegId];
+  const servoAngles = commandPreview && prefix
+    ? {
+        hipYaw: commandPreview[`${prefix}HipYawDeg`],
+        thigh: commandPreview[`${prefix}ThighDeg`],
+        calf: commandPreview[`${prefix}CalfDeg`],
+      }
+    : leg.desired.servoAnglesDeg;
 
   return (
     <section className="panel readout-panel">
       <div className="panel-heading">
         <h2>Readout</h2>
-        <span className={`count-pill ${leg.reachable ? "count-good" : "count-bad"}`}>
+        <span className={`count-pill ${indicator.pillClass}`}>
           {leg.status}
         </span>
       </div>
@@ -1052,12 +1394,16 @@ function ReadoutPanel({ solvedPose, selectedLegId, lastCommand }) {
           <strong>{formatNumber(leg.footWorldMm.x)} / {formatNumber(leg.footWorldMm.y)} / {formatNumber(leg.footWorldMm.z)}</strong>
         </div>
         <div>
+          <span>Displayed foot</span>
+          <strong>{formatNumber(displayFootWorldMm.x)} / {formatNumber(displayFootWorldMm.y)} / {formatNumber(displayFootWorldMm.z)}</strong>
+        </div>
+        <div>
           <span>Body-local delta</span>
           <strong>{formatNumber(leg.deltaBodyMm.x)} / {formatNumber(leg.deltaBodyMm.y)} / {formatNumber(leg.deltaBodyMm.z)}</strong>
         </div>
         <div>
-          <span>Preview joints deg</span>
-          <strong>{formatNumber(previewJointAngles.hipYaw)} / {formatNumber(previewJointAngles.thigh)} / {formatNumber(previewJointAngles.calf)}</strong>
+          <span>Displayed joints deg</span>
+          <strong>{formatNumber(displayJointAngles.hipYaw)} / {formatNumber(displayJointAngles.thigh)} / {formatNumber(displayJointAngles.calf)}</strong>
         </div>
         <div>
           <span>Command joints deg</span>
@@ -1081,15 +1427,120 @@ export default function App() {
   const [selectedLegId, setSelectedLegId] = useState("front_left");
   const [editTarget, setEditTarget] = useState(EDIT_TARGET.FOOT);
   const [bodyTool, setBodyTool] = useState(BODY_TOOL.ROTATE);
+  const [showPlanarRig, setShowPlanarRig] = useState(true);
+  const [showUrdfOverlay, setShowUrdfOverlay] = useState(true);
+  const [liveUpdateEnabled, setLiveUpdateEnabled] = useState(false);
+  const [applyInFlight, setApplyInFlight] = useState(false);
   const [pose, setPose] = useState(() => createNeutralStaticPose());
   const [poseName, setPoseName] = useState("neutral-stand");
   const [savedPoses, setSavedPoses] = useState(() => loadPoseLibrary());
   const [sceneStatus, setSceneStatus] = useState("Building planar rig");
   const [lastCommand, setLastCommand] = useState(null);
   const [notice, setNotice] = useState("");
+  const [speedLimitDrafts, setSpeedLimitDrafts] = useState(() => getServoSpeedLimitsByLeg(DEFAULT_ROBOT_STATE));
+  const poseRef = useRef(pose);
+  const poseUndoStackRef = useRef([]);
+  const poseEditSessionRef = useRef(null);
+  const latestLiveCommandRef = useRef(null);
+  const lastSentLiveCommandKeyRef = useRef("");
+  const liveCommandInFlightRef = useRef(false);
+  const applySequenceInFlightRef = useRef(false);
+  const cancelApplySequenceRef = useRef(false);
+  const syncedSpeedLimitsRef = useRef(getServoSpeedLimitsByLeg(DEFAULT_ROBOT_STATE));
 
   const jointLimitsByLeg = useMemo(() => getJointLimitsByLeg(robotState), [robotState]);
+  const servoSpeedLimitsByLeg = useMemo(() => getServoSpeedLimitsByLeg(robotState), [robotState]);
   const solvedPose = useMemo(() => solveStaticPose(pose, { jointLimitsByLeg }), [pose, jointLimitsByLeg]);
+  const connectedToRobot = Boolean(robotState.esp32Connected ?? robotState.connected);
+  const liveCommand = useMemo(
+    () => (solvedPose.commandReady ? createPoseApplyCommand(solvedPose, robotState) : null),
+    [robotState, solvedPose],
+  );
+  const currentRobotCommand = useMemo(() => (
+    createRobotStateFullBodyCommand(robotState, "current")
+    ?? createRobotStateFullBodyCommand(robotState, "desired")
+    ?? (lastCommand?.type === "apply_full_body_pose" ? lastCommand : null)
+  ), [lastCommand, robotState]);
+  const applySequence = useMemo(
+    () => createInterpolatedFullBodyCommandSequence(
+      currentRobotCommand,
+      liveCommand,
+      servoSpeedLimitsByLeg,
+      { frameIntervalMs: POSE_COMMAND_INTERVAL_MS },
+    ),
+    [currentRobotCommand, liveCommand, servoSpeedLimitsByLeg],
+  );
+  const liveCommandKey = useMemo(
+    () => (liveCommand ? JSON.stringify(liveCommand) : ""),
+    [liveCommand],
+  );
+
+  useEffect(() => {
+    poseRef.current = pose;
+  }, [pose]);
+
+  const clearPoseHistory = useCallback(() => {
+    poseUndoStackRef.current = [];
+    poseEditSessionRef.current = null;
+  }, []);
+
+  const endPoseEditSession = useCallback(() => {
+    poseEditSessionRef.current = null;
+  }, []);
+
+  const beginPoseEditSession = useCallback(() => {
+    if (poseEditSessionRef.current) {
+      return;
+    }
+
+    poseEditSessionRef.current = {
+      before: clone(poseRef.current),
+      recorded: false,
+    };
+  }, []);
+
+  const applyPoseEdit = useCallback((updater) => {
+    setPose((current) => {
+      const next = typeof updater === "function" ? updater(current) : updater;
+      const currentSnapshot = serializeStaticPose(current);
+      const nextSnapshot = serializeStaticPose(next);
+
+      if (currentSnapshot === nextSnapshot) {
+        return current;
+      }
+
+      const activeSession = poseEditSessionRef.current;
+      if (activeSession) {
+        if (!activeSession.recorded) {
+          poseUndoStackRef.current.push(activeSession.before);
+          activeSession.recorded = true;
+        }
+      } else {
+        poseUndoStackRef.current.push(clone(current));
+      }
+
+      if (poseUndoStackRef.current.length > POSE_HISTORY_LIMIT) {
+        poseUndoStackRef.current.splice(0, poseUndoStackRef.current.length - POSE_HISTORY_LIMIT);
+      }
+
+      return next;
+    });
+  }, []);
+
+  const undoLastPoseEdit = useCallback(() => {
+    if (applyInFlight) {
+      return false;
+    }
+
+    endPoseEditSession();
+    const previousPose = poseUndoStackRef.current.pop();
+    if (!previousPose) {
+      return false;
+    }
+
+    setPose(previousPose);
+    return true;
+  }, [applyInFlight, endPoseEditSession]);
 
   const selectLeg = useCallback((legId) => {
     setSelectedLegId(legId);
@@ -1097,20 +1548,20 @@ export default function App() {
   }, []);
 
   const updateFootWorldFromScene = useCallback((legId, footWorldMm) => {
-    setPose((current) => updateFootWorld(current, legId, footWorldMm));
-  }, []);
+    applyPoseEdit((current) => updateFootWorld(current, legId, footWorldMm));
+  }, [applyPoseEdit]);
 
   const updateBodyFromScene = useCallback((bodyPatch) => {
-    setPose((current) => updateBodyKeepingFeetLocked(current, bodyPatch));
-  }, []);
+    applyPoseEdit((current) => updateBodyKeepingFeetLocked(current, bodyPatch));
+  }, [applyPoseEdit]);
 
   const updateLegPlaneFoot = useCallback((legId, footCommand) => {
-    setPose((current) => {
+    applyPoseEdit((current) => {
       const currentSolved = solveStaticPose(current, { jointLimitsByLeg });
       const hipYawDeg = currentSolved.legs[legId]?.targetHipYawDeg ?? 0;
       return updateFootWorld(current, legId, legPlaneFootToWorld(current, legId, footCommand, hipYawDeg));
     });
-  }, [jointLimitsByLeg]);
+  }, [applyPoseEdit, jointLimitsByLeg]);
 
   async function postJson(path, payload) {
     const response = await fetch(`${getBackendHttpBaseUrl()}${path}`, {
@@ -1130,6 +1581,65 @@ export default function App() {
     const payload = await response.json();
     setRobotState((current) => ({ ...current, ...payload }));
     setSelectedPort((current) => current || payload.connectedPort || "");
+  }
+
+  function updateSpeedLimitDraft(legId, jointId, value) {
+    setSpeedLimitDrafts((current) => ({
+      ...current,
+      [legId]: {
+        ...current[legId],
+        [jointId]: Math.max(1, numberValue(value, current[legId]?.[jointId] ?? 1)),
+      },
+    }));
+  }
+
+  async function sendServoSpeedLimit(legId, speedLimitDraft) {
+    const command = createServoSpeedLimitCommand(legId, speedLimitDraft);
+    const normalized = speedLimitFromCommand(command);
+
+    setRobotState((current) => ({
+      ...current,
+      legs: {
+        ...current.legs,
+        [legId]: {
+          ...current.legs?.[legId],
+          servoSpeedLimitDegPerSec: normalized,
+        },
+      },
+    }));
+    setSpeedLimitDrafts((current) => ({
+      ...current,
+      [legId]: normalized,
+    }));
+
+    await postJson("/api/command", { command });
+    setNotice(`Updated ${LEG_LABELS[legId]} speed limit`);
+  }
+
+  async function copySpeedLimitToAll() {
+    const source = speedLimitDrafts[selectedLegId] ?? servoSpeedLimitsByLeg[selectedLegId];
+    const commands = LEG_IDS.map((legId) => createServoSpeedLimitCommand(legId, source));
+    const normalized = speedLimitFromCommand(commands[0]);
+
+    setRobotState((current) => ({
+      ...current,
+      legs: Object.fromEntries(
+        LEG_IDS.map((legId) => [
+          legId,
+          {
+            ...current.legs?.[legId],
+            servoSpeedLimitDegPerSec: normalized,
+          },
+        ]),
+      ),
+    }));
+    setSpeedLimitDrafts((current) => ({
+      ...current,
+      ...Object.fromEntries(LEG_IDS.map((legId) => [legId, normalized])),
+    }));
+
+    await Promise.all(commands.map((command) => postJson("/api/command", { command })));
+    setNotice(`Copied ${LEG_LABELS[selectedLegId]} speed limit to all legs`);
   }
 
   useEffect(() => {
@@ -1162,12 +1672,105 @@ export default function App() {
     savePoseLibrary(savedPoses);
   }, [savedPoses]);
 
+  useEffect(() => {
+    setSpeedLimitDrafts((current) => {
+      let changed = false;
+      const next = { ...current };
+
+      for (const legId of LEG_IDS) {
+        const synced = syncedSpeedLimitsRef.current[legId];
+        const incoming = servoSpeedLimitsByLeg[legId];
+        const draft = current[legId];
+        const shouldSync = !draft || sameSpeedLimit(draft, synced);
+        if (shouldSync && !sameSpeedLimit(draft, incoming)) {
+          next[legId] = { ...incoming };
+          changed = true;
+        }
+      }
+
+      syncedSpeedLimitsRef.current = cloneSpeedLimitsByLeg(servoSpeedLimitsByLeg);
+      return changed ? next : current;
+    });
+  }, [servoSpeedLimitsByLeg]);
+
+  useEffect(() => {
+    function handleKeyDown(event) {
+      if (
+        !(event.ctrlKey || event.metaKey)
+        || event.shiftKey
+        || event.altKey
+        || event.key.toLowerCase() !== "z"
+        || isEditableKeyboardTarget(event.target)
+      ) {
+        return;
+      }
+
+      if (undoLastPoseEdit()) {
+        event.preventDefault();
+        setNotice("Undid pose change");
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [undoLastPoseEdit]);
+
+  useEffect(() => {
+    latestLiveCommandRef.current = {
+      command: liveCommand,
+      key: liveCommandKey,
+      commandReady: solvedPose.commandReady,
+      connected: connectedToRobot,
+    };
+  }, [connectedToRobot, liveCommand, liveCommandKey, solvedPose.commandReady]);
+
+  useEffect(() => {
+    if (!liveUpdateEnabled) {
+      liveCommandInFlightRef.current = false;
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      const latest = latestLiveCommandRef.current;
+      if (!latest?.connected || !latest.commandReady || !latest.command) {
+        return;
+      }
+      if (
+        applySequenceInFlightRef.current
+        || liveCommandInFlightRef.current
+        || latest.key === lastSentLiveCommandKeyRef.current
+      ) {
+        return;
+      }
+
+      liveCommandInFlightRef.current = true;
+      postJson("/api/command", { command: latest.command })
+        .then(() => {
+          setLastCommand(latest.command);
+          lastSentLiveCommandKeyRef.current = latest.key;
+        })
+        .catch((error) => {
+          setLiveUpdateEnabled(false);
+          setNotice(`Live update stopped: ${error.message}`);
+        })
+        .finally(() => {
+          liveCommandInFlightRef.current = false;
+        });
+    }, LIVE_UPDATE_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [liveUpdateEnabled]);
+
   async function connect() {
     if (!selectedPort) {
       setNotice("Select a serial port first.");
       return;
     }
-    await postJson("/api/connect", { path: selectedPort, baudRate: 460800 });
+    await postJson("/api/connect", { path: selectedPort, baudRate: 921600 });
     await fetchStatus();
   }
 
@@ -1177,13 +1780,56 @@ export default function App() {
   }
 
   async function applyPose() {
-    const command = createPoseApplyCommand(solvedPose, robotState);
-    setLastCommand(command);
-    await postJson("/api/command", { command });
-    setNotice(`Applied ${pose.name}`);
+    if (!liveCommand) {
+      throw new Error("Pose is outside the available joint range.");
+    }
+
+    const commandPlan = createInterpolatedFullBodyCommandSequence(
+      currentRobotCommand,
+      liveCommand,
+      servoSpeedLimitsByLeg,
+      { frameIntervalMs: POSE_COMMAND_INTERVAL_MS },
+    );
+
+    cancelApplySequenceRef.current = false;
+    applySequenceInFlightRef.current = true;
+    setApplyInFlight(true);
+
+    try {
+      for (let index = 0; index < commandPlan.commands.length; index += 1) {
+        if (cancelApplySequenceRef.current) {
+          break;
+        }
+
+        await postJson("/api/command", { command: commandPlan.commands[index] });
+
+        if (index < commandPlan.commands.length - 1) {
+          await sleep(commandPlan.frameIntervalMs);
+        }
+      }
+
+      if (cancelApplySequenceRef.current) {
+        return;
+      }
+
+      setLastCommand(liveCommand);
+      lastSentLiveCommandKeyRef.current = liveCommandKey;
+      setNotice(
+        commandPlan.commands.length > 1
+          ? `Applied ${pose.name} over ${formatDurationMs(commandPlan.durationMs)}`
+          : `Applied ${pose.name}`,
+      );
+    } finally {
+      applySequenceInFlightRef.current = false;
+      cancelApplySequenceRef.current = false;
+      setApplyInFlight(false);
+    }
   }
 
   async function panicRelease() {
+    cancelApplySequenceRef.current = true;
+    setLiveUpdateEnabled(false);
+    lastSentLiveCommandKeyRef.current = "";
     await postJson("/api/command", { command: { type: "panic_release" } });
     setNotice("Servos released");
   }
@@ -1196,6 +1842,7 @@ export default function App() {
 
   function resetPose() {
     const neutral = createNeutralStaticPose();
+    clearPoseHistory();
     setPose(neutral);
     setPoseName(neutral.name);
     setLastCommand(null);
@@ -1215,6 +1862,7 @@ export default function App() {
 
   function loadPose(savedPose) {
     const nextPose = parseStaticPose(serializeStaticPose(savedPose), pose);
+    clearPoseHistory();
     setPose(nextPose);
     setPoseName(nextPose.name);
     setLastCommand(null);
@@ -1240,6 +1888,7 @@ export default function App() {
       return [...imported, ...withoutImported];
     });
     if (imported[0]) {
+      clearPoseHistory();
       setPose(imported[0]);
       setPoseName(imported[0].name);
     }
@@ -1274,16 +1923,43 @@ export default function App() {
           setEditTarget={setEditTarget}
           bodyTool={bodyTool}
           setSelectedLegId={selectLeg}
+          showPlanarRig={showPlanarRig}
+          showUrdfOverlay={showUrdfOverlay}
           onFootWorldChange={updateFootWorldFromScene}
           onBodyChange={updateBodyFromScene}
+          onEditStart={beginPoseEditSession}
+          onEditEnd={endPoseEditSession}
           onStatus={setSceneStatus}
         />
 
         <aside className="side-panel-stack">
           <div className="action-bar">
-            <button className="primary-button" onClick={withNotice(applyPose)} disabled={!solvedPose.reachable}>Apply Pose</button>
+            <button
+              className="primary-button"
+              onClick={withNotice(applyPose)}
+              disabled={!solvedPose.commandReady || applyInFlight}
+            >
+              {applyInFlight ? "Applying..." : "Apply Pose"}
+            </button>
             <button className="secondary-button" onClick={resetPose}>Neutral</button>
             <button className="danger-button" onClick={withNotice(panicRelease)}>Panic Release</button>
+            <label className="action-toggle">
+              <input
+                type="checkbox"
+                checked={liveUpdateEnabled}
+                disabled={applyInFlight}
+                onChange={(event) => {
+                  lastSentLiveCommandKeyRef.current = "";
+                  setLiveUpdateEnabled(event.target.checked);
+                  setNotice(
+                    event.target.checked
+                      ? (connectedToRobot ? "Live update enabled" : "Live update armed; connect the robot to stream poses")
+                      : "Live update disabled",
+                  );
+                }}
+              />
+              <span>Live Update</span>
+            </label>
           </div>
           {notice ? <div className="notice">{notice}</div> : null}
           <LegSelector selectedLegId={selectedLegId} setSelectedLegId={selectLeg} solvedPose={solvedPose} />
@@ -1293,16 +1969,41 @@ export default function App() {
             setEditTarget={setEditTarget}
             bodyTool={bodyTool}
             setBodyTool={setBodyTool}
+            showPlanarRig={showPlanarRig}
+            setShowPlanarRig={setShowPlanarRig}
+            showUrdfOverlay={showUrdfOverlay}
+            setShowUrdfOverlay={setShowUrdfOverlay}
           />
           {editTarget === EDIT_TARGET.FOOT ? (
             <LimbKinematicsPanel
               selectedLegId={selectedLegId}
               selectedLeg={solvedPose.legs[selectedLegId]}
               onPlaneFootChange={updateLegPlaneFoot}
+              onEditStart={beginPoseEditSession}
+              onEditEnd={endPoseEditSession}
             />
           ) : null}
-          <PoseControls pose={pose} setPose={setPose} selectedLegId={selectedLegId} solvedPose={solvedPose} />
-          <ReadoutPanel solvedPose={solvedPose} selectedLegId={selectedLegId} lastCommand={lastCommand} />
+          <PoseControls pose={pose} setPose={applyPoseEdit} selectedLegId={selectedLegId} solvedPose={solvedPose} />
+          <CommandMotionPanel
+            selectedLegId={selectedLegId}
+            speedLimitDraft={speedLimitDrafts[selectedLegId]}
+            activeSpeedLimit={servoSpeedLimitsByLeg[selectedLegId]}
+            estimatedApplyDurationMs={applySequence.durationMs}
+            estimatedApplyFrames={applySequence.commands.length}
+            applyInFlight={applyInFlight}
+            onSpeedLimitChange={updateSpeedLimitDraft}
+            onUpdateSelectedSpeedLimit={withNotice(() => sendServoSpeedLimit(
+              selectedLegId,
+              speedLimitDrafts[selectedLegId] ?? servoSpeedLimitsByLeg[selectedLegId],
+            ))}
+            onCopySpeedLimitToAll={withNotice(copySpeedLimitToAll)}
+          />
+          <ReadoutPanel
+            solvedPose={solvedPose}
+            selectedLegId={selectedLegId}
+            lastCommand={lastCommand}
+            commandPreview={liveCommand}
+          />
           <PoseLibraryPanel
             pose={pose}
             poseName={poseName}

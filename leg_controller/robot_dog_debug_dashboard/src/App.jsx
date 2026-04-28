@@ -1778,7 +1778,7 @@ export default function App() {
       throw new Error("Select a serial port before connecting.");
     }
 
-    await postJson("/api/connect", { path: selectedPort, baudRate: 460800 });
+    await postJson("/api/connect", { path: selectedPort, baudRate: 921600 });
     await fetchStatus();
   }
 

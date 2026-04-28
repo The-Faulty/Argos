@@ -1,13 +1,13 @@
 # Argos Leg Controller
 
-Argos is a quadruped robot dog control stack for a 4-leg, 12-servo platform. This repository contains the browser dashboard, shared kinematics and gait logic, desktop serial bridge code, and the microcontroller firmware that drives a PCA9685 servo controller from an Adafruit ESP32 Feather.
+Argos is a quadruped robot dog control stack for a 4-leg, 12-servo platform. This repository contains the browser dashboards, shared kinematics and gait logic, desktop serial bridge code, and the active microcontroller firmware in [`../firmware/argos_servo`](../firmware/argos_servo) that drives the PCA9685 servo controller.
 
 The project is built around a custom leg linkage: each leg has hip yaw, thigh, and calf motion, with the calf driven through a servo horn, short link, bell crank, and long link. The dashboard and desktop bridge calculate foot targets, joint targets, gait poses, and animation keyframes into servo angles before anything is sent to the ESP32.
 
 ## Capabilities
 
 - Browser dashboard for teleoperation, calibration, servo tuning, and animation preview/playback.
-- Serial control of an Adafruit ESP32 Feather at `460800` baud.
+- Serial control of the active `firmware/argos_servo` target at `921600` baud.
 - PCA9685 servo output at I2C address `0x40` and `150 Hz` servo refresh.
 - Four legs, three servo channels per leg: hip yaw, thigh, calf.
 - Per-leg servo channel mapping, joint limits, speed limits, and neutral trim.
@@ -24,13 +24,15 @@ The project is built around a custom leg linkage: each leg has hip yaw, thigh, a
 leg_controller/
   README.md
   launch_robot_dog_debug_dashboard.ps1/.cmd
+  ../firmware/
+    argos_servo/
+      argos_servo.ino
   robot_dog_leg_kinematics_visualization.jsx
   robot_dog_debug_dashboard/
     src/                         React dashboard
     shared/                      Kinematics, gait, protocol, animation helpers
     bridge/server.js             Desktop serial bridge
-    robot_dog_leg_smooth_interpolated/
-      robot_dog_leg_smooth_interpolated.ino
+    robot_dog_leg_smooth_interpolated/  Legacy sketch retained for reference
     tests/                       Node test suite
 ```
 
@@ -48,11 +50,11 @@ There are three main layers:
    - Lists serial ports, connects to the Feather, forwards commands, mirrors local dashboard state, and streams telemetry.
    - Provides animation upload/play/stop endpoints for the dashboard.
 
-3. ESP32 Feather firmware
+3. ESP32 firmware
    - Receives newline-delimited JSON commands over USB serial.
-   - Applies servo-angle commands only.
+   - Supports direct servo-angle, direct foot XY, direct joint-angle, builtin, and animation playback modes.
    - Smoothly interpolates servo moves.
-   - Drives the PCA9685 over explicit I2C pins: `SDA = GPIO 23`, `SCL = GPIO 22`.
+   - The active board/pin mapping lives with the firmware in [`../firmware/argos_servo/README.md`](../firmware/argos_servo/README.md).
 
 The Feather is the real-time servo controller. Kinematics, gait generation, and animation-to-servo conversion run on the host; the firmware remains responsible for servo smoothing, safety release, telemetry, and low-level PWM writes.
 
@@ -60,7 +62,7 @@ The Feather is the real-time servo controller. Kinematics, gait generation, and 
 
 Core electronics:
 
-- Adafruit ESP32 Feather / HUZZAH32 using the original `SDA = GPIO 23`, `SCL = GPIO 22` I2C pinout.
+- ESP32 board and wiring matched to [`../firmware/argos_servo`](../firmware/argos_servo).
 - Adafruit-compatible PCA9685 16-channel PWM servo driver.
 - 12 hobby servos: 3 per leg.
 - Separate servo supply, assumed `7.4 V` in the firmware model.
@@ -79,16 +81,7 @@ Servo/PCA9685 assumptions:
 - Firmware hardware speed estimate at 7.4 V: about `545 deg/sec`, reduced by a `0.80` safety factor to about `436 deg/sec`.
 - Servo outputs are released by writing full-off to each PCA9685 channel.
 
-Feather wiring:
-
-- Feather `GPIO 23` / `SDA` to PCA9685 `SDA`.
-- Feather `GPIO 22` / `SCL` to PCA9685 `SCL`.
-- Feather `3V` to PCA9685 logic `VCC`.
-- Feather `GND` to PCA9685 `GND`.
-- External servo battery/regulator to PCA9685 `V+`.
-- Servo supply ground must be tied to Feather/PCA9685 logic ground.
-
-The firmware first configures Arduino `Wire` with `Wire.setPins(23, 22)` before starting I2C on ESP32 builds. If it cannot find the PCA9685 at `0x40`, it retries on the selected board's default `SDA`/`SCL` pins and prints the active pins on serial startup. If the selected board exposes `NEOPIXEL_I2C_POWER`, the firmware enables it before starting I2C. Note that Adafruit ESP32 Feather V2 uses different GPIO numbers for its labeled I2C pins, so the `23`/`22` setting is for hardware wired to those GPIOs, not just to the V2 silkscreen labels.
+Active firmware wiring and board notes are documented in [`../firmware/argos_servo/README.md`](../firmware/argos_servo/README.md). The legacy `robot_dog_leg_smooth_interpolated` sketch remains in-tree for comparison, but it is no longer the primary dashboard target.
 
 ## Servo Channel Map
 
@@ -156,7 +149,7 @@ Linkage sequence:
 6. The long link attaches to the calf `30 mm` from the knee.
 7. The foot is `127 mm` from the knee along the solved calf angle.
 
-The shared JS kinematics module is the source of truth for linkage geometry. The browser and desktop bridge use it to convert foot and joint targets into servo angles before serial transport. The ESP32 firmware does not solve foot IK or joint-angle linkage geometry at runtime.
+The shared JS kinematics module is still the source of truth for the current dashboards. The browser and desktop bridge convert foot and joint targets into servo angles before serial transport so the debug and full-body dashboards stay aligned with their previews, even though the active firmware also supports direct foot and joint commands.
 
 ## Joint Limits
 
@@ -263,7 +256,7 @@ Legacy single-leg clips can be imported and mapped to one selected leg or mirror
 
 ## Serial Protocol
 
-The Feather protocol is newline-delimited JSON over USB serial at `460800` baud. Commands include a `type` field and may include a `seq` number. Responses include `ack`, `error`, `state`, `hello_ack`, and animation progress messages.
+The firmware wire protocol is newline-delimited JSON over USB serial at `921600` baud. Commands include a `type` field and may include a `seq` number. Responses include `ack`, `error`, `state`, `hello_ack`, and animation progress messages.
 
 Common commands:
 
@@ -274,19 +267,19 @@ Common commands:
 { "type": "set_mode", "mode": "direct_servo_angles", "seq": 4 }
 ```
 
-Per-leg servo command:
+Per-leg firmware servo command:
 
 ```json
 {
   "type": "set_leg_servo_angles",
   "legId": "front_left",
-  "hipYawServoDeg": 90,
+  "hipServoDeg": 90,
   "thighServoDeg": 90,
   "calfServoDeg": 90
 }
 ```
 
-Full-body streaming command:
+Dashboard-side full-body pose command:
 
 ```json
 {
@@ -315,7 +308,7 @@ Configuration commands:
 - `upload_animation` with `begin`, servo-angle `frame`, `commit`
 - `play_animation`, `pause_animation`, `stop_animation`
 
-The serial bridge may accept dashboard-facing `set_leg_foot_xy` and `set_leg_joint_angles` requests, but it converts them to `set_leg_servo_angles` before writing to serial. The firmware rejects foot, joint, and built-in gait commands that reach it directly.
+The serial bridge preserves the current dashboard command schema, including `apply_full_body_pose`, `set_stance`, `set_motion_mode`, and `set_drive_command`, then translates those requests into the active firmware wire format. The bridge still prefers servo-angle streaming for these dashboards so host-side previews, trims, gait helpers, and saved poses stay consistent.
 
 ## Backend API
 
@@ -403,22 +396,18 @@ Required Arduino libraries:
 - Adafruit PWM Servo Driver Library.
 - Adafruit BusIO.
 
-Known board targets:
-
-- Original Adafruit ESP32 Feather: `esp32:esp32:featheresp32`
-- Adafruit Feather ESP32 V2: `esp32:esp32:adafruit_feather_esp32_v2`
+The canonical sketch now lives in [`../firmware/argos_servo`](../firmware/argos_servo). Follow that folder's README for board-specific wiring notes. Example compile/upload commands are shown below for the common ESP32-S3 target used with this refactor firmware.
 
 Compile examples:
 
 ```bash
-arduino-cli compile --fqbn esp32:esp32:featheresp32 robot_dog_debug_dashboard/robot_dog_leg_smooth_interpolated
-arduino-cli compile --fqbn esp32:esp32:adafruit_feather_esp32_v2 robot_dog_debug_dashboard/robot_dog_leg_smooth_interpolated
+arduino-cli compile --fqbn <your-esp32-s3-fqbn> ../firmware/argos_servo
 ```
 
 Upload example:
 
 ```bash
-arduino-cli upload -p COM5 --fqbn esp32:esp32:featheresp32 robot_dog_debug_dashboard/robot_dog_leg_smooth_interpolated
+arduino-cli upload -p COM5 --fqbn <your-esp32-s3-fqbn> ../firmware/argos_servo
 ```
 
 Use the correct serial port for your machine.
@@ -427,13 +416,11 @@ Use the correct serial port for your machine.
 
 Important firmware timing constants:
 
-- Serial baud: `460800`.
-- Telemetry interval: `250 ms`.
+- Serial baud: `921600`.
+- Telemetry interval: `200 ms`.
 - Animation status interval: `250 ms`.
-- Streaming full-body ack interval: `500 ms`.
-- Minimum interpolated move duration: `0.075 s`.
-- Short streaming moves use linear interpolation under `120000 us`.
-- Duplicate servo targets within `0.05 deg` are ignored while moving.
+- Builtin status interval: `400 ms`.
+- Duplicate servo targets within `0.05 deg` are ignored while moving in the serial bridge queue before they hit the wire.
 
 The firmware estimates current servo position from commanded motion. There is no physical servo feedback. Telemetry `current` values are therefore estimates, not encoder measurements.
 

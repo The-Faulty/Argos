@@ -1,19 +1,25 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
+  createInterpolatedFullBodyCommandSequence,
   bodyToWorldPoint,
   createNeutralStaticPose,
   createPoseApplyCommand,
+  createRobotStateFullBodyCommand,
+  createServoSpeedLimitCommand,
+  estimateFullBodyCommandDurationMs,
   getUrdfJointValues,
   LEG_THIGH_PIVOTS_MM,
   legPlaneFootToWorld,
   parseStaticPose,
+  POSE_COMMAND_INTERVAL_MS,
   serializeStaticPose,
   solveStaticPose,
   updateBodyKeepingFeetLocked,
   updateFootWorld,
   worldToBodyPoint,
 } from "../shared/pose-builder.js";
+import { getThighCalfAngleDeg } from "../../robot_dog_debug_dashboard/shared/kinematics.js";
 
 const TEST_LEG_PREFIXES = {
   front_left: "FL",
@@ -122,7 +128,7 @@ function urdfFootErrorMm(solvedPose, legId) {
     femur: values[`${prefix}_femur_joint`],
     tibia: values[`${prefix}_tibia_joint`],
   });
-  const target = solvedPose.legs[legId].footBodyMm;
+  const target = solvedPose.legs[legId].commandFootBodyMm ?? solvedPose.legs[legId].footBodyMm;
   return Math.hypot(point.x - target.x, point.y - target.y, point.z - target.z);
 }
 
@@ -232,6 +238,109 @@ test("solved pose produces a flattened full-body servo command", () => {
   }
 });
 
+test("robot state pose can be flattened into the current full-body command", () => {
+  const solved = solveStaticPose(createNeutralStaticPose());
+  const robotState = {
+    legs: Object.fromEntries(
+      Object.keys(TEST_LEG_PREFIXES).map((legId) => [
+        legId,
+        {
+          current: solved.legs[legId].desired,
+        },
+      ]),
+    ),
+  };
+
+  const command = createRobotStateFullBodyCommand(robotState, "current");
+
+  assert.equal(command.type, "apply_full_body_pose");
+  assert.ok(typeof command.FLHipYawDeg === "number");
+  assert.ok(typeof command.RRCalfDeg === "number");
+});
+
+test("servo speed limit commands normalize to positive per-joint rates", () => {
+  const command = createServoSpeedLimitCommand("rear_left", {
+    hipYaw: 0,
+    thigh: 72.4,
+    calf: -12,
+  });
+
+  assert.deepEqual(command, {
+    type: "set_leg_servo_speed_limit",
+    legId: "rear_left",
+    hipYawDegPerSec: 1,
+    thighDegPerSec: 72.4,
+    calfDegPerSec: 1,
+  });
+});
+
+test("interpolated full-body commands honor speed-limited timing", () => {
+  const fromCommand = {
+    type: "apply_full_body_pose",
+    FLHipYawDeg: 90,
+    FLThighDeg: 50,
+    FLCalfDeg: 70,
+    FRHipYawDeg: 90,
+    FRThighDeg: 50,
+    FRCalfDeg: 70,
+    RLHipYawDeg: 90,
+    RLThighDeg: 50,
+    RLCalfDeg: 70,
+    RRHipYawDeg: 90,
+    RRThighDeg: 50,
+    RRCalfDeg: 70,
+  };
+  const toCommand = {
+    ...fromCommand,
+    FLHipYawDeg: 150,
+    FRThighDeg: 20,
+  };
+  const servoSpeedLimitsByLeg = {
+    front_left: { hipYaw: 60, thigh: 180, calf: 180 },
+    front_right: { hipYaw: 180, thigh: 45, calf: 180 },
+    rear_left: { hipYaw: 180, thigh: 180, calf: 180 },
+    rear_right: { hipYaw: 180, thigh: 180, calf: 180 },
+  };
+
+  const durationMs = estimateFullBodyCommandDurationMs(
+    fromCommand,
+    toCommand,
+    servoSpeedLimitsByLeg,
+  );
+  const sequence = createInterpolatedFullBodyCommandSequence(
+    fromCommand,
+    toCommand,
+    servoSpeedLimitsByLeg,
+    { frameIntervalMs: POSE_COMMAND_INTERVAL_MS },
+  );
+
+  assert.equal(durationMs, 1000);
+  assert.equal(sequence.durationMs, 1000);
+  assert.equal(sequence.frameIntervalMs, POSE_COMMAND_INTERVAL_MS);
+  assert.equal(sequence.commands.length, 1000 / POSE_COMMAND_INTERVAL_MS);
+  assert.equal(sequence.commands.at(-1).FLHipYawDeg, 150);
+  assert.equal(sequence.commands.at(-1).FRThighDeg, 20);
+  assert.equal(sequence.commands[0].FLHipYawDeg, 91.5);
+  assert.equal(sequence.commands[0].FRThighDeg, 49.25);
+});
+
+test("full-body command keeps hip yaw values aligned with the solved pose", () => {
+  const neutral = createNeutralStaticPose();
+  const shifted = updateFootWorld(neutral, "front_left", {
+    y: neutral.feetWorldMm.front_left.y + 40,
+  });
+  const shiftedRear = updateFootWorld(shifted, "rear_right", {
+    y: shifted.feetWorldMm.rear_right.y + 40,
+  });
+  const solved = solveStaticPose(shiftedRear);
+  const command = createPoseApplyCommand(solved);
+
+  assert.ok(solved.legs.front_left.desired.servoAnglesDeg.hipYaw > 90);
+  assert.ok(solved.legs.rear_right.desired.servoAnglesDeg.hipYaw > 90);
+  assert.ok(command.FLHipYawDeg > 90);
+  assert.ok(command.RRHipYawDeg > 90);
+});
+
 test("URDF joint values use calibrated visual deltas from the CAD pose", () => {
   const solved = solveStaticPose(createNeutralStaticPose());
   const values = getUrdfJointValues(solved);
@@ -267,7 +376,7 @@ test("URDF tibia keeps bending when the 2D calf angle opens past -138 degrees", 
   );
 });
 
-test("URDF visual calf keeps opening beyond the servo-limited 2D solution", () => {
+test("clamped URDF pose stays on the commanded foot after calf saturation", () => {
   const neutral = createNeutralStaticPose();
   const low = updateFootWorld(neutral, "front_left", {
     z: neutral.feetWorldMm.front_left.z - 60,
@@ -281,11 +390,19 @@ test("URDF visual calf keeps opening beyond the servo-limited 2D solution", () =
   const lowerValues = getUrdfJointValues(lowerSolved);
 
   assert.ok(lowSolved.legs.front_left.desired.servoAnglesDeg.calf >= 179.9);
+  assert.equal(lowerSolved.legs.front_left.commandReady, true);
+  assert.equal(lowerSolved.legs.front_left.clamped, true);
   assert.equal(lowerSolved.legs.front_left.reachable, false);
   assert.ok(Math.abs(lowerSolved.legs.front_left.desired.jointAnglesDeg.calf + 114) < 1);
   assert.ok(
-    lowerValues.FL_tibia_joint < lowValues.FL_tibia_joint - 0.4,
-    "visual tibia should keep opening after the 2D command solver reaches its calf limit",
+    Math.abs(
+      lowerSolved.legs.front_left.displayFootWorldMm.z - lowerSolved.legs.front_left.footWorldMm.z,
+    ) > 20,
+  );
+  assert.ok(urdfFootErrorMm(lowerSolved, "front_left") < 3.5);
+  assert.ok(
+    Math.abs(lowerValues.FL_tibia_joint - lowValues.FL_tibia_joint) < 0.08,
+    "visual tibia should stop with the commanded pose once the 2D solver reaches its calf limit",
   );
 });
 
@@ -303,27 +420,47 @@ test("preview joints keep opening after the hardware calf solver saturates", () 
   assert.ok(previewAngles.thigh < commandAngles.thigh - 20);
 });
 
-test("all four legs share the same bent and extended visual-fit regimes", () => {
+test("desired and preview leg geometry keep at least a 20 degree thigh-calf angle", () => {
+  const neutral = createNeutralStaticPose();
+  const folded = updateFootWorld(neutral, "front_left", {
+    x: LEG_THIGH_PIVOTS_MM.front_left.x,
+    y: LEG_THIGH_PIVOTS_MM.front_left.y,
+    z: LEG_THIGH_PIVOTS_MM.front_left.z,
+  });
+  const solved = solveStaticPose(folded);
+
+  assert.ok(getThighCalfAngleDeg(solved.legs.front_left.desired.geometry) >= 19.9);
+  assert.ok(getThighCalfAngleDeg(solved.legs.front_left.preview.geometry) >= 19.9);
+});
+
+test("all four legs share the same bent and clamped visual-fit behavior", () => {
   const neutral = createNeutralStaticPose();
   const bentPatch = (legId) => ({ x: neutral.feetWorldMm[legId].x + 40 });
-  const extendedPatch = (legId) => ({ z: neutral.feetWorldMm[legId].z - 90 });
+  const clampedPatch = (legId) => ({ z: neutral.feetWorldMm[legId].z - 90 });
 
   for (const legId of Object.keys(TEST_LEG_PREFIXES)) {
     const bentPose = solveLegPose(neutral, legId, bentPatch(legId));
-    const extendedPose = solveLegPose(neutral, legId, extendedPatch(legId));
+    const clampedPose = solveLegPose(neutral, legId, clampedPatch(legId));
     const bentError = urdfFootErrorMm(bentPose, legId);
-    const extendedError = urdfFootErrorMm(extendedPose, legId);
+    const clampedError = urdfFootErrorMm(clampedPose, legId);
 
     assert.equal(bentPose.legs[legId].visualFitMode, "bent");
-    assert.equal(extendedPose.legs[legId].visualFitMode, "extended");
+    assert.equal(clampedPose.legs[legId].visualFitMode, "blended");
+    assert.equal(clampedPose.legs[legId].clamped, true);
     assert.ok(bentError < 2.5, `${legId} bent-range fit drifted to ${bentError.toFixed(2)} mm`);
     assert.ok(
-      extendedError < 1.5,
-      `${legId} straight-range fit drifted to ${extendedError.toFixed(2)} mm`,
+      clampedError < 3.5,
+      `${legId} clamped-range fit drifted to ${clampedError.toFixed(2)} mm`,
     );
     assert.ok(
       bentPose.legs[legId].visualFitErrorMm.extended > bentPose.legs[legId].visualFitErrorMm.final,
       `${legId} bent candidate did not beat the extended candidate in the bent range`,
+    );
+    assert.ok(
+      Math.abs(
+        clampedPose.legs[legId].displayFootWorldMm.z - clampedPose.legs[legId].footWorldMm.z,
+      ) > 20,
+      `${legId} should show a visible clamp gap after the target pushes past its limit`,
     );
   }
 });
@@ -339,10 +476,10 @@ test("mirrored leg pairs stay aligned through both visual-fit regimes", () => {
       maxJointDeltaRad: 0.08,
     },
     {
-      name: "extended",
+      name: "clamped",
       buildPatch: (legId) => ({ z: neutral.feetWorldMm[legId].z - 90 }),
-      expectedMode: "extended",
-      maxErrorDeltaMm: 0.2,
+      expectedMode: "blended",
+      maxErrorDeltaMm: 0.3,
       maxJointDeltaRad: 0.12,
     },
   ];
@@ -374,7 +511,7 @@ test("mirrored leg pairs stay aligned through both visual-fit regimes", () => {
   }
 });
 
-test("all four legs keep a tight URDF fit through the blended transition band", () => {
+test("all four legs keep a tight URDF fit through the clamp transition band", () => {
   const neutral = createNeutralStaticPose();
 
   for (const legId of Object.keys(TEST_LEG_PREFIXES)) {
@@ -408,8 +545,10 @@ test("all four legs keep a tight URDF fit through the blended transition band", 
     assert.equal(bentEdge.legs[legId].visualFitMode, "bent");
     assert.equal(bentToBlend.legs[legId].visualFitMode, "blended");
     assert.equal(blendToExtended.legs[legId].visualFitMode, "blended");
-    assert.equal(extendedEdge.legs[legId].visualFitMode, "extended");
+    assert.equal(extendedEdge.legs[legId].visualFitMode, "blended");
+    assert.equal(blendToExtended.legs[legId].clamped, true);
+    assert.equal(extendedEdge.legs[legId].clamped, true);
     assert.ok(bentToBlendJump < 0.03, `${legId} snapped entering the blended range`);
-    assert.ok(blendToExtendedJump < 0.21, `${legId} snapped entering the extended range`);
+    assert.ok(blendToExtendedJump < 0.03, `${legId} snapped entering the clamped range`);
   }
 });
