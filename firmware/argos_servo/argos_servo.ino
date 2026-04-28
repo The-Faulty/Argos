@@ -361,8 +361,11 @@ static void mq131ReadO3(int *rawOut, float *ppmOut, float *ppbOut, float *mgM3Ou
 // come from accel directly; yaw is gyro-z integrated with a long-stall
 // dt clamp, so it drifts (no magnetometer fusion yet — swap in a
 // Madgwick/Mahony filter if drift becomes a problem).
-static const uint8_t  LSM303D_ADDR        = 0x1D;
-static const uint8_t  L3GD20H_ADDR        = 0x6B;
+// Default to SDO-HIGH addresses, but imuInit() probes both pairs at boot
+// and updates these to whichever pair the chip actually responds at.
+// Mutable on purpose — the hardware's SDO state isn't always known.
+static uint8_t  LSM303D_ADDR              = 0x1D;     // SDO_XM HIGH; falls back to 0x1E if LOW
+static uint8_t  L3GD20H_ADDR              = 0x6B;     // SDO_G  HIGH; falls back to 0x6A if LOW
 static const uint8_t  LSM303D_WHO_AM_I_OK = 0x49;
 static const uint8_t  L3GD20H_WHO_AM_I_OK = 0xD7;
 // Sensitivities at the configured full-scale ranges (datasheet typical).
@@ -410,11 +413,41 @@ static bool imuReadByte(uint8_t addr, uint8_t reg, uint8_t *out) {
     return true;
 }
 
+// Scan the I2C bus and print every address that ACKs. Diagnostic-only —
+// pulled in once at boot so the host log shows what's actually on the
+// bus when imuInit fails. Skips the reserved 0x00..0x07 and 0x78..0x7F
+// ranges per the I2C spec.
+static void scanI2cBus(void) {
+    Serial.print("[i2c-scan] devices on bus:");
+    int found = 0;
+    for (uint8_t addr = 0x08; addr <= 0x77; ++addr) {
+        Wire.beginTransmission(addr);
+        if (Wire.endTransmission() == 0) {
+            Serial.print(" 0x");
+            if (addr < 0x10) Serial.print("0");
+            Serial.print(addr, HEX);
+            ++found;
+        }
+    }
+    if (found == 0) Serial.print(" (none)");
+    Serial.println();
+}
+
 static bool imuInit(void) {
     uint8_t who = 0;
 
     // ── LSM303D (accel + magnetometer) ──
-    if (!imuReadByte(LSM303D_ADDR, 0x0F, &who) || who != LSM303D_WHO_AM_I_OK) return false;
+    // Try SDO HIGH (0x1D) first, fall back to SDO LOW (0x1E). The two
+    // hardware variants are identical except for which address responds,
+    // so we just rebind the global and proceed.
+    if (!imuReadByte(0x1D, 0x0F, &who) || who != LSM303D_WHO_AM_I_OK) {
+        if (!imuReadByte(0x1E, 0x0F, &who) || who != LSM303D_WHO_AM_I_OK) return false;
+        LSM303D_ADDR = 0x1E;
+    } else {
+        LSM303D_ADDR = 0x1D;
+    }
+    Serial.print("[imu] LSM303D found at 0x");
+    Serial.println(LSM303D_ADDR, HEX);
     // CTRL1 = 0x57: ODR=50 Hz, BDU=0, all axes enabled (0101 0111)
     if (!imuI2cWrite(LSM303D_ADDR, 0x20, 0x57)) return false;
     // CTRL2 = 0x00: ±2g, no anti-alias filter override
@@ -427,7 +460,16 @@ static bool imuInit(void) {
     if (!imuI2cWrite(LSM303D_ADDR, 0x26, 0x00)) return false;
 
     // ── L3GD20H (gyroscope) ──
-    if (!imuReadByte(L3GD20H_ADDR, 0x0F, &who) || who != L3GD20H_WHO_AM_I_OK) return false;
+    // Same SDO-HIGH-vs-LOW probe as the LSM303D above.
+    if (!imuReadByte(0x6B, 0x0F, &who) || who != L3GD20H_WHO_AM_I_OK) {
+        if (!imuReadByte(0x6A, 0x0F, &who) || who != L3GD20H_WHO_AM_I_OK) return false;
+        L3GD20H_ADDR = 0x6A;
+    } else {
+        L3GD20H_ADDR = 0x6B;
+    }
+    Serial.print("[imu] L3GD20H found at 0x");
+    Serial.println(L3GD20H_ADDR, HEX);
+
     // CTRL1 = 0x0F: power up (Normal mode), all axes, 100 Hz ODR (0000 1111)
     if (!imuI2cWrite(L3GD20H_ADDR, 0x20, 0x0F)) return false;
     // CTRL4 = 0x00: ±245 dps, BDU=0, little-endian
@@ -2367,6 +2409,10 @@ void setup() {
 #endif
     Wire.begin();
 
+    // Boot-time scan: print every I2C address that ACKs so a missing
+    // chip is instantly diagnosable from the host log without unwiring.
+    scanI2cBus();
+
     if (!i2cDevicePresent(PCA9685_ADDRESS)) {
         Serial.print("PCA9685 not found on I2C at 0x");
         Serial.println(PCA9685_ADDRESS, HEX);
@@ -2380,6 +2426,8 @@ void setup() {
     g_imuPresent = imuInit();
     if (!g_imuPresent) {
         Serial.println("LSM9DS0 not detected (skipping IMU; gait stabilizer will run un-fused)");
+        Serial.println("  expected addresses: 0x1D + 0x6B (SDO HIGH) or 0x1E + 0x6A (SDO LOW)");
+        Serial.println("  see [i2c-scan] line above for what's actually on the bus");
     }
 
     g_pwm.begin();
