@@ -20,8 +20,8 @@
 
 // IMU I2C pin setup for ESP32C6
 #define I2C_BUS 0
-#define I2C_SCL_PIN 22
-#define I2C_SDA_PIN 23
+#define I2C_SCL_PIN 7
+#define I2C_SDA_PIN 6
 #define I2C_FREQ I2C_FREQ_100K
 
 #define GRAVITY_MS2 9.80665f
@@ -156,6 +156,10 @@ void timer_callback(rcl_timer_t *timer, int64_t last_call_time)
 		ESP_LOGI("IMU", "a: x=%+.3f y=%+.3f z=%+.3f | g: x=%+.3f y=%+.3f z=%+.3f",
 				 msg.linear_acceleration.x, msg.linear_acceleration.y, msg.linear_acceleration.z,
 				 msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z);
+		ESP_LOGI("MAG", "m: x=%+.6f y=%+.6f z=%+.6f",
+				 mag_msg.magnetic_field.x,
+				 mag_msg.magnetic_field.y,
+				 mag_msg.magnetic_field.z);
 	}
 }
 
