@@ -3192,8 +3192,30 @@ void setup()
     g_lastAnimationStatusMs = millis();
     sendStateMessage("state");
 
-    // Initialise LED strip — all off until first updateLedStrip() call.
+    // Initialise LED strip and run a boot self-test — flashes every
+    // pixel R, G, B, W in turn at full brightness so an operator can
+    // confirm the strip is wired and powered correctly. If this
+    // sequence shows nothing on the strip, the issue is hardware
+    // (wiring, 3V3-vs-5V data level, wrong strip type, brown-out, dead
+    // strip) and not firmware logic. If this shows colors but the
+    // normal updateLedStrip() pattern doesn't, the issue is downstream
+    // in the per-mode LED logic.
     g_ledStrip.begin();
+    g_ledStrip.setBrightness(255);  // full brightness for self-test
+    Serial.println("[led] self-test: R -> G -> B -> W (2 s)");
+    const uint32_t selfTestColors[4] = {
+        g_ledStrip.Color(255, 0, 0),  // red
+        g_ledStrip.Color(0, 255, 0),  // green
+        g_ledStrip.Color(0, 0, 255),  // blue
+        g_ledStrip.Color(255, 255, 255), // white
+    };
+    for (int phase = 0; phase < 4; ++phase) {
+        for (uint16_t i = 0; i < NEOPIXEL_COUNT; ++i) {
+            g_ledStrip.setPixelColor(i, selfTestColors[phase]);
+        }
+        g_ledStrip.show();
+        delay(500);
+    }
     g_ledStrip.setBrightness(NEOPIXEL_BRIGHTNESS);
     g_ledStrip.clear();
     g_ledStrip.show();
