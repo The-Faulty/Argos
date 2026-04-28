@@ -146,10 +146,12 @@ serial.on("firmware_imu", (msg) => {
 
 // Synthetic IMU. Runs at 50 Hz and only emits when no firmware IMU has
 // arrived in the last 500 ms — i.e., the LSM9DS0 isn't wired up. Output
-// is zero-baseline + small periodic wobble keyed off the active gait
-// mode so the dashboard panel shows believable motion instead of a
-// flat-line. Does NOT call mode.setImu() — synthetic data must not feed
-// the gait stabilizer (would create a fake feedback loop).
+// is zero-baseline + small wobble that ONLY appears when the operator
+// is actively pressing arrow keys / WASD / rotate buttons (state.twist
+// or state.rotate is active). With no input the bot isn't physically
+// moving even if a gait mode is selected, so the panel shows pure
+// zero. Does NOT call mode.setImu() — synthetic data must not feed the
+// gait stabilizer (would create a fake feedback loop).
 const SYNTHETIC_IMU_INTERVAL_MS = 20;
 const SYNTHETIC_IMU_TIMEOUT_MS = 500;
 let _syntheticImuTick = 0;
@@ -157,42 +159,47 @@ setInterval(() => {
   if (Date.now() - _lastFirmwareImuMs < SYNTHETIC_IMU_TIMEOUT_MS) return;
   _syntheticImuTick++;
   const t = _syntheticImuTick * (SYNTHETIC_IMU_INTERVAL_MS / 1000);
-  const m = mode?.planner?.mode ?? "idle";
 
   let roll = 0;
   let pitch = 0;
   let yaw = 0;
-  switch (m) {
-    case "trot": {
-      // ~1 Hz gait period → small forward bob in pitch + counter-phase roll.
-      const w = 2 * Math.PI * 1.0;
-      pitch = Math.sin(t * w) * 0.020;             // ±1.1°
-      roll  = Math.sin(t * w + Math.PI / 2) * 0.012; // ±0.7°
-      break;
-    }
-    case "crawl": {
-      // Slower 4-beat — a bit more roll variance because legs lift one at a time.
-      const w = 2 * Math.PI * 0.6;
-      pitch = Math.sin(t * w) * 0.015;             // ±0.9°
-      roll  = Math.sin(t * w * 1.7 + 0.5) * 0.014; // ±0.8°, slightly different freq
-      break;
-    }
-    case "stand":
-    case "extend":
-    case "crouch": {
-      // Slow breathing/idle drift.
-      pitch = Math.sin(t * 0.4) * 0.005;           // ±0.3°
-      roll  = Math.cos(t * 0.6) * 0.004;
-      break;
-    }
-    case "idle":
-    default:
-      // Hold zeros for idle so it's visually obvious nothing is moving.
-      break;
-  }
 
-  // Tiny noise on everything but idle so the panel doesn't look frozen.
-  if (m !== "idle") {
+  // Only wobble while the operator is actively commanding motion.
+  const twist = state.twist;
+  const movingForward = twist?.active && Math.abs(twist.x ?? 0) > 1e-6;
+  const movingLateral = twist?.active && Math.abs(twist.y ?? 0) > 1e-6;
+  const yawingTwist   = twist?.active && Math.abs(twist.wz ?? 0) > 1e-6;
+  const rotating      = state.rotate?.active === true;
+  const anyInput = movingForward || movingLateral || yawingTwist || rotating;
+
+  if (anyInput) {
+    // Frequency keyed off the gait mode — trot bobs faster than crawl.
+    const m = mode?.planner?.mode ?? "idle";
+    const gaitFreq = m === "trot" ? 1.0 : m === "crawl" ? 0.6 : 0.5;
+    const w = 2 * Math.PI * gaitFreq;
+
+    // Forward/back arrow → pitch bob; sign of twist.x flips phase so
+    // backward feels like a counter-bob.
+    if (movingForward) {
+      pitch += Math.sin(t * w) * 0.018 * Math.sign(twist.x);
+    }
+    // Strafe → roll wobble.
+    if (movingLateral) {
+      roll += Math.sin(t * w + Math.PI / 2) * 0.012 * Math.sign(twist.y);
+    }
+    // Joystick yaw twist → small yaw drift in the commanded direction.
+    if (yawingTwist) {
+      yaw += Math.sin(t * w * 0.7) * 0.008 * Math.sign(twist.wz);
+    }
+    // Rotate-by-N-degrees button → drift in the chosen direction at a
+    // slightly different rhythm so it visually distinguishes from the
+    // joystick yaw above.
+    if (rotating) {
+      const dir = state.rotate.direction === "right" ? 1 : state.rotate.direction === "left" ? -1 : 1;
+      yaw += Math.sin(t * 1.4) * 0.010 * dir;
+    }
+
+    // Sensor-noise sprinkle so the panel doesn't look mechanical.
     pitch += (Math.random() - 0.5) * 0.002;
     roll  += (Math.random() - 0.5) * 0.002;
     yaw   += (Math.random() - 0.5) * 0.001;
