@@ -85,10 +85,13 @@ static const float MAX_PCA9685_FREQUENCY_HZ = 200.0f;
 static const uint8_t I2C_SDA_PIN = 6;
 static const uint8_t I2C_SCL_PIN = 7;
 // ESP32-C6 has no input-only pins; ADC1 channels live on GPIO 0..6.
-// GPIO 6/7 are I2C here, so the gas/battery analog input goes on GPIO 4
-// (ADC1_CH4). If no analog sensor is wired, leave the pin floating —
-// analogRead() will just return noise that's reported as `gasRaw` in
-// telemetry and the dashboard ignores it.
+// GPIO 6/7 are I2C here, so the MQ-131 ozone sensor's A0 line goes on
+// GPIO 4 (ADC1_CH4) via a 10k/20k voltage divider (A0 swings 0–5V; ESP
+// ADC max is 3.3V — direct connection will damage the chip).
+// Telemetry reports ozone as `o3Ppb` (mq131GetO3Ppb()); R0 calibration
+// constants are in the MQ-131 block below. If no analog sensor is
+// wired, leave the pin floating — readings degenerate to 0 ppb and the
+// dashboard treats that as "no event."
 static const int GAS_ADC_PIN = 4;
 static const float SERVO_MIN_PULSE_US = 500.0f;
 static const float SERVO_MAX_PULSE_US = 2500.0f;
@@ -353,6 +356,44 @@ static float radToDeg(float radians)
 static float degToRad(float degrees)
 {
     return degrees * (float)M_PI / 180.0f;
+}
+
+// ─── MQ-131 ozone sensor (analog) ────────────────────────────────────────
+// Converts the GAS_ADC_PIN reading to ozone PPB using the datasheet
+// power-law curve. The wiring assumes a 10k/20k voltage divider on A0
+// (the module outputs 0–5V; ESP32 ADC tops out at 3.3V), so the analog
+// reading is back-scaled by MQ131_DIVIDER_RATIO before computing Rs.
+//
+// Calibration: R0 must be measured in clean air. Power the sensor for
+// ~24 h to stabilize, then set MQ131_R0_KOHMS so that
+// `mq131GetO3Ppb()` reads ≈10 ppb in clean indoor air. The defaults
+// below are datasheet-typical and will be order-of-magnitude correct
+// out of the box but not lab-accurate. Tune in your environment.
+//
+// Curve: Rs/R0 = 1.0 → ~10 ppb, 0.4 → ~100 ppb, 0.3 → ~300 ppb
+// (low-concentration variant). Solved as ppb = A · (Rs/R0)^B with
+// A = 10, B ≈ -2.51 from a two-point log-log fit.
+static const float MQ131_VCC_V             = 5.0f;
+static const float MQ131_DIVIDER_RATIO     = 5.0f / 3.3f; // A0 → ESP-pin scale-back
+static const float MQ131_RL_KOHMS          = 10.0f;       // module load resistor
+static const float MQ131_R0_KOHMS          = 240.0f;      // CALIBRATE in clean air
+static const float MQ131_CURVE_A           = 10.0f;       // ppb at Rs/R0 = 1
+static const float MQ131_CURVE_B           = -2.51f;      // log-log slope
+static const float MQ131_ADC_VREF_V        = 3.3f;        // ESP32-C6 default
+static const int   MQ131_ADC_MAX_COUNTS    = 4095;        // 12-bit ADC
+
+static float mq131GetO3Ppb(void) {
+    int raw = analogRead(GAS_ADC_PIN);
+    if (raw <= 0) return 0.0f;
+    float vPin = ((float)raw / (float)MQ131_ADC_MAX_COUNTS) * MQ131_ADC_VREF_V;
+    float vA0  = vPin * MQ131_DIVIDER_RATIO;
+    if (vA0 < 0.01f || vA0 >= MQ131_VCC_V) return 0.0f;
+    float rsKOhms = MQ131_RL_KOHMS * (MQ131_VCC_V - vA0) / vA0;
+    float ratio   = rsKOhms / MQ131_R0_KOHMS;
+    if (ratio <= 0.0f) return 0.0f;
+    float ppb = MQ131_CURVE_A * powf(ratio, MQ131_CURVE_B);
+    if (!isfinite(ppb) || ppb < 0.0f) return 0.0f;
+    return ppb;
 }
 
 // ─── LSM9DS0 IMU (LSM303D accel+mag + L3GD20H gyro) ──────────────────────
@@ -2177,7 +2218,7 @@ static void sendStateMessage(const char *typeName)
                typeName, modeToString(g_mode));
     pos = jsonAppendEscaped(buf, cap, pos, g_activeAnimationName);
     BUF_PRINTF(buf, cap, pos,
-               "\",\"servosReleased\":%s,\"servoUpdateRateHz\":%.3f,\"gasRaw\":%d,"
+               "\",\"servosReleased\":%s,\"servoUpdateRateHz\":%.3f,\"o3Ppb\":%.2f,"
                "\"imu\":{\"present\":%s,\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,"
                "\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f,"
                "\"mx\":%.4f,\"my\":%.4f,\"mz\":%.4f,"
@@ -2185,7 +2226,7 @@ static void sendStateMessage(const char *typeName)
                "\"firmwareMs\":%lu,\"legs\":{",
                g_servosReleased ? "true" : "false",
                g_pwmFrequencyHz,
-               analogRead(GAS_ADC_PIN),
+               mq131GetO3Ppb(),
                g_imuPresent ? "true" : "false",
                g_imuAccelMs2[0], g_imuAccelMs2[1], g_imuAccelMs2[2],
                g_imuGyroRads[0], g_imuGyroRads[1], g_imuGyroRads[2],

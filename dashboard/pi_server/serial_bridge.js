@@ -303,8 +303,10 @@ export class SerialBridge extends EventEmitter {
       position_servo_deg: positionDeg,
     });
 
-    if (Number.isFinite(dashState.gasRaw)) {
-      this.emit("gas", { data: dashState.gasRaw });
+    if (Number.isFinite(dashState.o3Ppb)) {
+      // The "gas" event payload retains shape `{data: number}` for back-compat
+      // with GasPanel; the units are now ppb of O3 rather than raw ADC counts.
+      this.emit("gas", { data: dashState.o3Ppb, units: "ppb", species: "o3" });
     }
 
     // ESP-side LSM9DS0 IMU. The firmware emits this every state frame
@@ -468,7 +470,7 @@ function translateState(fw) {
     activeAnimation: fw.activeAnimation,
     servosReleased: fw.servosReleased,
     servoUpdateRateHz: fw.servoUpdateRateHz ?? DEFAULT_SERVO_UPDATE_RATE_HZ,
-    gasRaw: fw.gasRaw,
+    o3Ppb: fw.o3Ppb,
     imu: fw.imu ?? null,
     firmwareMs: fw.firmwareMs,
     legs,

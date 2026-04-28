@@ -1,13 +1,18 @@
 // Gas sensor panel.
 //
-// ESP32 publishes a Float32 on /gas. We show the live value + a user-set
-// alert threshold. When the value exceeds the threshold we flip the panel
-// into a red-warning state AND play a short audio beep (if the user has
-// clicked the page at least once — browsers block autoplay otherwise).
+// ESP32 publishes a Float32 on /gas. The firmware converts the MQ-131
+// analog reading to ozone PPB via mq131GetO3Ppb() (datasheet curve fit,
+// R0 calibrated in clean air). We show the live PPB value + a user-set
+// alert threshold. When the value exceeds the threshold we flip the
+// panel into a red-warning state AND play a short audio beep (if the
+// user has clicked the page at least once — browsers block autoplay
+// otherwise).
 
 import { useEffect, useRef, useState } from "react";
 
-const DEFAULT_THRESHOLD = 500;
+// O3 PPB threshold. EPA NAAQS 8-h average is 70 ppb; 100 ppb is a
+// reasonable "noticeable" alert threshold for a workshop bot.
+const DEFAULT_THRESHOLD = 100;
 const STORAGE_KEY = "argos.gasThreshold";
 
 export default function GasPanel({ gas }) {
@@ -44,25 +49,26 @@ export default function GasPanel({ gas }) {
     <section className={`gas-panel${isAlerting ? " is-alert" : ""}`}
              onPointerDown={() => setAudioUnlocked(true)}>
       <header>
-        <h3>Gas</h3>
-        <span className="muted">/gas (raw ADC, 0–4095)</span>
+        <h3>Ozone</h3>
+        <span className="muted">MQ-131 (ppb O₃)</span>
       </header>
       <div className="gas-panel__value">
-        {Number.isFinite(value) ? value.toFixed(0) : "—"}
+        {Number.isFinite(value) ? value.toFixed(1) : "—"}
+        <span className="gas-panel__unit"> ppb</span>
       </div>
 
       <label className="slider">
-        <span>Alert threshold</span>
+        <span>Alert threshold (ppb)</span>
         <input
           type="range"
-          min={0} max={4095} step={10}
+          min={0} max={1000} step={5}
           value={threshold}
           onChange={(e) => setThreshold(Number(e.target.value))}
         />
         <span className="slider__value">{threshold}</span>
       </label>
 
-      {isAlerting && <p className="gas-panel__alert">⚠ Gas threshold exceeded</p>}
+      {isAlerting && <p className="gas-panel__alert">⚠ O₃ threshold exceeded</p>}
     </section>
   );
 }
