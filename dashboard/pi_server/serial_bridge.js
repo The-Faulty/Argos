@@ -249,6 +249,9 @@ export class SerialBridge extends EventEmitter {
       case "state":
         this._handleState(msg.payload || {});
         break;
+      case "imu":
+        this._handleImu(msg.payload || {});
+        break;
       case "hello_ack":
         this._resolveAck(msg.seq);
         this.emit("hello_ack", msg);
@@ -309,22 +312,25 @@ export class SerialBridge extends EventEmitter {
       this.emit("gas", { data: dashState.o3Ppb, units: "ppb", species: "o3" });
     }
 
-    // ESP-side LSM9DS0 IMU. The firmware emits this every state frame
-    // (~5 Hz) when an LSM9DS0 is wired to the same I2C bus as the
-    // PCA9685; absent chip → imu.present is false and we don't forward.
-    // Higher-rate consumers (gait stabilizer) still get whichever IMU
-    // source server.js prefers — the RealSense path keeps working too.
-    const fwImu = dashState.imu;
-    if (fwImu && fwImu.present === true) {
-      this.emit("firmware_imu", {
-        accel: [fwImu.ax, fwImu.ay, fwImu.az],
-        gyro: [fwImu.gx, fwImu.gy, fwImu.gz],
-        mag: [fwImu.mx, fwImu.my, fwImu.mz],
-        roll: fwImu.roll,
-        pitch: fwImu.pitch,
-        yaw: fwImu.yaw,
-      });
-    }
+    // IMU now arrives on its own {"type":"imu",...} channel at ~50 Hz —
+    // see _handleImu below. The state frame only carries imuPresent as a
+    // one-bit availability hint (already exposed via dashState.imuPresent
+    // for the dashboard panel's "no IMU wired" indicator).
+  }
+
+  _handleImu(payload) {
+    if (!payload || payload.present !== true) return;
+    if (!Number.isFinite(payload.roll) || !Number.isFinite(payload.pitch) ||
+        !Number.isFinite(payload.yaw)) return;
+    this.emit("firmware_imu", {
+      accel: [payload.ax, payload.ay, payload.az],
+      gyro:  [payload.gx, payload.gy, payload.gz],
+      mag:   [payload.mx, payload.my, payload.mz],
+      roll:  payload.roll,
+      pitch: payload.pitch,
+      yaw:   payload.yaw,
+      firmwareMs: payload.firmwareMs,
+    });
   }
 
   _send(obj) {
@@ -471,7 +477,7 @@ function translateState(fw) {
     servosReleased: fw.servosReleased,
     servoUpdateRateHz: fw.servoUpdateRateHz ?? DEFAULT_SERVO_UPDATE_RATE_HZ,
     o3Ppb: fw.o3Ppb,
-    imu: fw.imu ?? null,
+    imuPresent: fw.imuPresent === true,
     firmwareMs: fw.firmwareMs,
     legs,
   };

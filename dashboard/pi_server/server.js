@@ -25,7 +25,6 @@ import {
 } from "../shared/robot-config.js";
 import { validateCommand } from "../shared/protocol.js";
 import { setOverrides as setServoCalOverrides } from "../shared/servo_cal.js";
-import { euler_from_quaternion } from "./quaternion.js";
 
 import {
   loadServoOverrides,
@@ -182,19 +181,13 @@ sensors.on("close", () => {
 sensors.on("error", (err) => {
   console.warn("[sensors]", err.message || err);
 });
-sensors.on("imu", (msg) => {
-  // Expected shape from sidecar: {type:"imu", quaternion:[x,y,z,w], accel, gyro, ts}.
-  let enriched = msg;
-  if (Array.isArray(msg.quaternion) && msg.quaternion.length === 4) {
-    const [x, y, z, w] = msg.quaternion;
-    const [roll, pitch, yaw] = euler_from_quaternion({ x, y, z, w });
-    enriched = { ...msg, orientation: { x, y, z, w }, _euler_rad: { roll, pitch, yaw } };
-    mode.setImu({ roll, pitch, yaw });
-  }
-  state.telemetry.imu = enriched;
-  broadcast({ type: "imu", msg: enriched });
-  appendRecorderSample();
-});
+// RealSense IMU is intentionally NOT forwarded to the gait stabilizer
+// or the dashboard IMU panel any more — the body-frame LSM9DS0 on the
+// ESP is canonical (firmware_imu handler above). The sidecar still
+// publishes the RealSense IMU stream and we leave the WS subscription
+// alive so the recorder + diagnostics can consume it later, but it
+// does not call mode.setImu() and does not overwrite state.telemetry.imu.
+sensors.on("imu", () => { /* RealSense IMU decommissioned for stabilizer use; see firmware_imu handler. */ });
 sensors.on("depth", (msg) => {
   state.telemetry.depth = msg;
   broadcast({ type: "depth", msg });

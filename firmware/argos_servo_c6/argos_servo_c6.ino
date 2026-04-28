@@ -49,6 +49,11 @@
 #define TELEMETRY_INTERVAL_MS 200
 #define BUILTIN_STATUS_INTERVAL_MS 400
 #define ANIMATION_STATUS_INTERVAL_MS 250
+// IMU broadcast cadence. The chip is polled at IMU_POLL_INTERVAL_MS (50 Hz)
+// regardless; this is just how often we emit a separate {"type":"imu",...}
+// JSON line to the host. 20 ms gives the dashboard's gait stabilizer the
+// same rate it had with the RealSense IMU but from the body-frame LSM9DS0.
+#define IMU_TELEMETRY_INTERVAL_MS 20
 
 static const float SERVO_SUPPLY_VOLTS = 7.4f;
 static const float SERVO_SPEED_SAFETY_FACTOR = 0.80f;
@@ -416,15 +421,16 @@ static const float L3GD20H_GYRO_LSB_TO_DPS = 0.00875f;  // ±245 dps
 static const float GRAVITY_MS2_F = 9.80665f;
 static const uint32_t IMU_POLL_INTERVAL_MS = 20; // 50 Hz
 
-static bool g_imuPresent = false;
-static float g_imuAccelMs2[3] = {0.0f, 0.0f, 0.0f}; // ax, ay, az (m/s²)
-static float g_imuGyroRads[3] = {0.0f, 0.0f, 0.0f}; // gx, gy, gz (rad/s)
-static float g_imuMagGauss[3] = {0.0f, 0.0f, 0.0f}; // mx, my, mz (gauss)
-static float g_imuRollRad = 0.0f;
-static float g_imuPitchRad = 0.0f;
-static float g_imuYawRad = 0.0f;
-static uint32_t g_imuLastSampleMs = 0;
-static uint32_t g_lastImuPollMs = 0;
+static bool     g_imuPresent           = false;
+static float    g_imuAccelMs2[3]       = {0.0f, 0.0f, 0.0f};   // ax, ay, az (m/s²)
+static float    g_imuGyroRads[3]       = {0.0f, 0.0f, 0.0f};   // gx, gy, gz (rad/s)
+static float    g_imuMagGauss[3]       = {0.0f, 0.0f, 0.0f};   // mx, my, mz (gauss)
+static float    g_imuRollRad           = 0.0f;
+static float    g_imuPitchRad          = 0.0f;
+static float    g_imuYawRad            = 0.0f;
+static uint32_t g_imuLastSampleMs      = 0;
+static uint32_t g_lastImuPollMs        = 0;
+static uint32_t g_lastImuTelemetryMs   = 0;
 
 static const float MADGWICK_BETA = 0.1f;
 
@@ -2109,6 +2115,34 @@ static void sendBuiltinStatus(void)
     Serial.println("\"}");
 }
 
+// Standalone IMU JSON message — separate from sendStateMessage so the
+// dashboard's gait stabilizer can consume IMU at a higher rate
+// (IMU_TELEMETRY_INTERVAL_MS = 20 ms) without dragging along the full
+// 2.3 KB state payload. Skipped silently when imu.present is false so the
+// host never sees zeroed accel/gyro readings that the gait stabilizer
+// would mistake for the bot lying perfectly level. Now that the Madgwick
+// filter populates g_imuRollRad/g_imuPitchRad/g_imuYawRad as fused euler
+// angles, this channel is what the dashboard's gait stabilizer reads.
+static void sendImuMessage(void)
+{
+    if (!g_imuPresent) return;
+    char buf[384];
+    int n = snprintf(buf, sizeof(buf),
+        "{\"type\":\"imu\",\"payload\":{"
+        "\"present\":true,"
+        "\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,"
+        "\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f,"
+        "\"mx\":%.4f,\"my\":%.4f,\"mz\":%.4f,"
+        "\"roll\":%.4f,\"pitch\":%.4f,\"yaw\":%.4f,"
+        "\"firmwareMs\":%lu}}\n",
+        g_imuAccelMs2[0], g_imuAccelMs2[1], g_imuAccelMs2[2],
+        g_imuGyroRads[0], g_imuGyroRads[1], g_imuGyroRads[2],
+        g_imuMagGauss[0], g_imuMagGauss[1], g_imuMagGauss[2],
+        g_imuRollRad, g_imuPitchRad, g_imuYawRad,
+        (unsigned long)millis());
+    if (n > 0) Serial.write((const uint8_t *)buf, (size_t)n);
+}
+
 static void sendAnimationProgress(void)
 {
     float elapsedSec = 0.0f;
@@ -2217,21 +2251,19 @@ static void sendStateMessage(const char *typeName)
                "{\"type\":\"%s\",\"payload\":{\"mode\":\"%s\",\"activeAnimation\":\"",
                typeName, modeToString(g_mode));
     pos = jsonAppendEscaped(buf, cap, pos, g_activeAnimationName);
+    // IMU fields used to ride along here, but they're now emitted on their
+    // own {"type":"imu",...} channel at 50 Hz (sendImuMessage()) so the gait
+    // stabilizer doesn't have to wait for the 5 Hz state frame. We still
+    // include "imuPresent" as a one-bit availability hint for the dashboard
+    // panel.
     BUF_PRINTF(buf, cap, pos,
                "\",\"servosReleased\":%s,\"servoUpdateRateHz\":%.3f,\"o3Ppb\":%.2f,"
-               "\"imu\":{\"present\":%s,\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,"
-               "\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f,"
-               "\"mx\":%.4f,\"my\":%.4f,\"mz\":%.4f,"
-               "\"roll\":%.4f,\"pitch\":%.4f,\"yaw\":%.4f},"
+               "\"imuPresent\":%s,"
                "\"firmwareMs\":%lu,\"legs\":{",
                g_servosReleased ? "true" : "false",
                g_pwmFrequencyHz,
                mq131GetO3Ppb(),
                g_imuPresent ? "true" : "false",
-               g_imuAccelMs2[0], g_imuAccelMs2[1], g_imuAccelMs2[2],
-               g_imuGyroRads[0], g_imuGyroRads[1], g_imuGyroRads[2],
-               g_imuMagGauss[0], g_imuMagGauss[1], g_imuMagGauss[2],
-               g_imuRollRad, g_imuPitchRad, g_imuYawRad,
                (unsigned long)millis());
 
     for (int i = 0; i < NUM_LEGS; ++i)
@@ -2369,6 +2401,11 @@ static void maybeSendPeriodicEvents(void)
     {
         g_lastImuPollMs = nowMs;
         imuPoll();
+    }
+    if (g_imuPresent && (nowMs - g_lastImuTelemetryMs) >= IMU_TELEMETRY_INTERVAL_MS)
+    {
+        g_lastImuTelemetryMs = nowMs;
+        sendImuMessage();
     }
     if ((nowMs - g_lastTelemetryMs) >= TELEMETRY_INTERVAL_MS)
     {
