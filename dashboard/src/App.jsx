@@ -306,7 +306,7 @@ function AppBody() {
           <GasPanel gas={data.gas} />
         </div>
         <div className="app__footer-col">
-          <CameraPanel />
+          <CameraPanel depth={data.depth} />
           <ThermalPanel thermal={data.thermal} />
         </div>
         <div className="app__footer-col">

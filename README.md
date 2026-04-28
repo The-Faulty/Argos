@@ -16,7 +16,7 @@ The stack is intentionally small:
 - **React dashboard** renders 14 panels for joint/leg/foot control, IMU,
   gas, thermal, RealSense camera, stance presets, animations, and recording.
   It opens one WebSocket to the Pi server.
-- **Python sidecar** reads the Intel RealSense (color stream + IMU) and the
+- **Python sidecar** reads the Intel RealSense (color stream, depth stream + IMU) and the
   MLX90640 thermal grid, exposes them over MJPEG + WebSocket on `:8788`.
 
 ```
@@ -148,8 +148,13 @@ npm test
   `systemctl status argos-sensors` (or check the foreground console). Most
   failures are a missing RealSense (`pyrealsense2` import), or the MLX90640
   not on I²C — both cases will show in `/health` at `:8788`.
-- **No camera image but `sensors ✓`.** D435 (no `i`) has no IMU; the camera
-  still works. If the IMU pill is missing too, you have the wrong model.
+- **No camera image but `sensors ✓`.** D435 (no `i`) has no IMU; the color and
+  depth streams still work. If the IMU pill is missing too, you have the wrong
+  model.
+- **Depth looks washed out.** Tune the visualization range with
+  `ARGOS_DEPTH_VIS_MAX_M` before starting `pi_sensors/sensor_server.py`
+  (default `4.0` meters). The center/ROI measurements still use raw depth in
+  meters.
 - **Joints jitter / move the wrong way.** Use the dashboard's settings drawer
   to adjust per-servo offsets, then the joint-limit fields. They persist to
   `~/.argos/`.

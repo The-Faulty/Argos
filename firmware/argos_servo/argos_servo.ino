@@ -299,6 +299,138 @@ static float degToRad(float degrees) {
     return degrees * (float)M_PI / 180.0f;
 }
 
+// ─── LSM9DS0 IMU (LSM303D accel+mag + L3GD20H gyro) ──────────────────────
+// Shares the I2C bus with the PCA9685 — addresses 0x1D (accel/mag) and
+// 0x6B (gyro), both with SDO pulled high. Init failure is non-fatal: the
+// imu.present field in telemetry goes false and the dashboard's gait
+// stabilizer just won't apply tilt correction. Polled at ~50 Hz from
+// loop() (see g_lastImuPollMs in maybeSendPeriodicEvents). Roll/pitch
+// come from accel directly; yaw is gyro-z integrated with a long-stall
+// dt clamp, so it drifts (no magnetometer fusion yet — swap in a
+// Madgwick/Mahony filter if drift becomes a problem).
+static const uint8_t  LSM303D_ADDR        = 0x1D;
+static const uint8_t  L3GD20H_ADDR        = 0x6B;
+static const uint8_t  LSM303D_WHO_AM_I_OK = 0x49;
+static const uint8_t  L3GD20H_WHO_AM_I_OK = 0xD7;
+// Sensitivities at the configured full-scale ranges (datasheet typical).
+static const float    LSM303D_ACCEL_LSB_TO_G   = 0.000061f;     // ±2g
+static const float    LSM303D_MAG_LSB_TO_GAUSS = 0.00008f;      // ±2 gauss high-res
+static const float    L3GD20H_GYRO_LSB_TO_DPS  = 0.00875f;      // ±245 dps
+static const float    GRAVITY_MS2_F            = 9.80665f;
+static const uint32_t IMU_POLL_INTERVAL_MS     = 20;            // 50 Hz
+
+static bool     g_imuPresent       = false;
+static float    g_imuAccelMs2[3]   = {0.0f, 0.0f, 0.0f};   // ax, ay, az (m/s²)
+static float    g_imuGyroRads[3]   = {0.0f, 0.0f, 0.0f};   // gx, gy, gz (rad/s)
+static float    g_imuMagGauss[3]   = {0.0f, 0.0f, 0.0f};   // mx, my, mz (gauss)
+static float    g_imuRollRad       = 0.0f;
+static float    g_imuPitchRad      = 0.0f;
+static float    g_imuYawRad        = 0.0f;
+static uint32_t g_imuLastSampleMs  = 0;
+static uint32_t g_lastImuPollMs    = 0;
+
+static bool imuI2cWrite(uint8_t addr, uint8_t reg, uint8_t val) {
+    Wire.beginTransmission(addr);
+    Wire.write(reg);
+    Wire.write(val);
+    return Wire.endTransmission() == 0;
+}
+
+static bool imuI2cRead(uint8_t addr, uint8_t reg, uint8_t *buf, size_t n) {
+    Wire.beginTransmission(addr);
+    // MSB of subaddress = auto-increment for multi-byte reads on both chips.
+    Wire.write((uint8_t)(reg | 0x80));
+    if (Wire.endTransmission(false) != 0) return false;
+    size_t got = Wire.requestFrom((int)addr, (int)n);
+    if (got != n) return false;
+    for (size_t i = 0; i < n; ++i) buf[i] = Wire.read();
+    return true;
+}
+
+static bool imuReadByte(uint8_t addr, uint8_t reg, uint8_t *out) {
+    Wire.beginTransmission(addr);
+    Wire.write(reg);
+    if (Wire.endTransmission(false) != 0) return false;
+    if (Wire.requestFrom((int)addr, 1) != 1) return false;
+    *out = Wire.read();
+    return true;
+}
+
+static bool imuInit(void) {
+    uint8_t who = 0;
+
+    // ── LSM303D (accel + magnetometer) ──
+    if (!imuReadByte(LSM303D_ADDR, 0x0F, &who) || who != LSM303D_WHO_AM_I_OK) return false;
+    // CTRL1 = 0x57: ODR=50 Hz, BDU=0, all axes enabled (0101 0111)
+    if (!imuI2cWrite(LSM303D_ADDR, 0x20, 0x57)) return false;
+    // CTRL2 = 0x00: ±2g, no anti-alias filter override
+    if (!imuI2cWrite(LSM303D_ADDR, 0x21, 0x00)) return false;
+    // CTRL5 = 0x70: temp off, mag high-res, mag ODR=50 Hz, no INT (0111 0000)
+    if (!imuI2cWrite(LSM303D_ADDR, 0x24, 0x70)) return false;
+    // CTRL6 = 0x00: mag ±2 gauss
+    if (!imuI2cWrite(LSM303D_ADDR, 0x25, 0x00)) return false;
+    // CTRL7 = 0x00: mag continuous-conversion mode
+    if (!imuI2cWrite(LSM303D_ADDR, 0x26, 0x00)) return false;
+
+    // ── L3GD20H (gyroscope) ──
+    if (!imuReadByte(L3GD20H_ADDR, 0x0F, &who) || who != L3GD20H_WHO_AM_I_OK) return false;
+    // CTRL1 = 0x0F: power up (Normal mode), all axes, 100 Hz ODR (0000 1111)
+    if (!imuI2cWrite(L3GD20H_ADDR, 0x20, 0x0F)) return false;
+    // CTRL4 = 0x00: ±245 dps, BDU=0, little-endian
+    if (!imuI2cWrite(L3GD20H_ADDR, 0x23, 0x00)) return false;
+
+    return true;
+}
+
+static void imuPoll(void) {
+    if (!g_imuPresent) return;
+    uint8_t buf[6];
+
+    if (imuI2cRead(LSM303D_ADDR, 0x28, buf, 6)) {
+        int16_t ax = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
+        int16_t ay = (int16_t)((uint16_t)buf[2] | ((uint16_t)buf[3] << 8));
+        int16_t az = (int16_t)((uint16_t)buf[4] | ((uint16_t)buf[5] << 8));
+        g_imuAccelMs2[0] = (float)ax * LSM303D_ACCEL_LSB_TO_G * GRAVITY_MS2_F;
+        g_imuAccelMs2[1] = (float)ay * LSM303D_ACCEL_LSB_TO_G * GRAVITY_MS2_F;
+        g_imuAccelMs2[2] = (float)az * LSM303D_ACCEL_LSB_TO_G * GRAVITY_MS2_F;
+    }
+
+    if (imuI2cRead(LSM303D_ADDR, 0x08, buf, 6)) {
+        int16_t mx = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
+        int16_t my = (int16_t)((uint16_t)buf[2] | ((uint16_t)buf[3] << 8));
+        int16_t mz = (int16_t)((uint16_t)buf[4] | ((uint16_t)buf[5] << 8));
+        g_imuMagGauss[0] = (float)mx * LSM303D_MAG_LSB_TO_GAUSS;
+        g_imuMagGauss[1] = (float)my * LSM303D_MAG_LSB_TO_GAUSS;
+        g_imuMagGauss[2] = (float)mz * LSM303D_MAG_LSB_TO_GAUSS;
+    }
+
+    if (imuI2cRead(L3GD20H_ADDR, 0x28, buf, 6)) {
+        int16_t gx = (int16_t)((uint16_t)buf[0] | ((uint16_t)buf[1] << 8));
+        int16_t gy = (int16_t)((uint16_t)buf[2] | ((uint16_t)buf[3] << 8));
+        int16_t gz = (int16_t)((uint16_t)buf[4] | ((uint16_t)buf[5] << 8));
+        g_imuGyroRads[0] = degToRad((float)gx * L3GD20H_GYRO_LSB_TO_DPS);
+        g_imuGyroRads[1] = degToRad((float)gy * L3GD20H_GYRO_LSB_TO_DPS);
+        g_imuGyroRads[2] = degToRad((float)gz * L3GD20H_GYRO_LSB_TO_DPS);
+    }
+
+    // Roll/pitch from accel; yaw integrated from gyro-z with a long-stall
+    // clamp so a USB hiccup doesn't lurch yaw by hundreds of degrees.
+    uint32_t now = millis();
+    float dt = (g_imuLastSampleMs > 0) ? (float)(now - g_imuLastSampleMs) * 0.001f : 0.0f;
+    g_imuLastSampleMs = now;
+    if (dt > 0.5f) dt = 0.0f;
+
+    float ax = g_imuAccelMs2[0];
+    float ay = g_imuAccelMs2[1];
+    float az = g_imuAccelMs2[2];
+    float anorm = sqrtf(ax * ax + ay * ay + az * az);
+    if (anorm > 1e-3f) {
+        g_imuRollRad  = atan2f(ay, az);
+        g_imuPitchRad = atan2f(-ax, sqrtf(ay * ay + az * az));
+    }
+    g_imuYawRad = clampAngle(g_imuYawRad + g_imuGyroRads[2] * dt);
+}
+
 static float thetaToModelServoDegInline(float theta, float neutralTheta) {
     return 90.0f + radToDeg(theta - neutralTheta);
 }
@@ -1596,10 +1728,19 @@ static void sendStateMessage(const char *typeName) {
     pos = jsonAppendEscaped(buf, cap, pos, g_activeAnimationName);
     BUF_PRINTF(buf, cap, pos,
                "\",\"servosReleased\":%s,\"servoUpdateRateHz\":%.3f,\"gasRaw\":%d,"
+               "\"imu\":{\"present\":%s,\"ax\":%.4f,\"ay\":%.4f,\"az\":%.4f,"
+               "\"gx\":%.4f,\"gy\":%.4f,\"gz\":%.4f,"
+               "\"mx\":%.4f,\"my\":%.4f,\"mz\":%.4f,"
+               "\"roll\":%.4f,\"pitch\":%.4f,\"yaw\":%.4f},"
                "\"firmwareMs\":%lu,\"legs\":{",
                g_servosReleased ? "true" : "false",
                g_pwmFrequencyHz,
                analogRead(GAS_ADC_PIN),
+               g_imuPresent ? "true" : "false",
+               g_imuAccelMs2[0], g_imuAccelMs2[1], g_imuAccelMs2[2],
+               g_imuGyroRads[0], g_imuGyroRads[1], g_imuGyroRads[2],
+               g_imuMagGauss[0], g_imuMagGauss[1], g_imuMagGauss[2],
+               g_imuRollRad, g_imuPitchRad, g_imuYawRad,
                (unsigned long)millis());
 
     for (int i = 0; i < NUM_LEGS; ++i) {
@@ -1712,6 +1853,10 @@ static void runBuiltinsAndAnimation(void) {
 
 static void maybeSendPeriodicEvents(void) {
     uint32_t nowMs = millis();
+    if (g_imuPresent && (nowMs - g_lastImuPollMs) >= IMU_POLL_INTERVAL_MS) {
+        g_lastImuPollMs = nowMs;
+        imuPoll();
+    }
     if ((nowMs - g_lastTelemetryMs) >= TELEMETRY_INTERVAL_MS) {
         g_lastTelemetryMs = nowMs;
         refreshCurrentState();
@@ -2139,6 +2284,12 @@ void setup() {
         while (true) {
             delay(1000);
         }
+    }
+
+    // LSM9DS0 IMU on the same I2C bus — non-fatal if missing.
+    g_imuPresent = imuInit();
+    if (!g_imuPresent) {
+        Serial.println("LSM9DS0 not detected (skipping IMU; gait stabilizer will run un-fused)");
     }
 
     g_pwm.begin();

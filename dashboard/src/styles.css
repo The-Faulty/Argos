@@ -312,6 +312,7 @@ button[disabled] {
   letter-spacing: 0.02em;
 }
 .camera-panel__viewport {
+  position: relative;
   width: 100%;
   aspect-ratio: 4 / 3;
   background: #000;
@@ -323,6 +324,77 @@ button[disabled] {
   width: 100%;
   height: 100%;
   object-fit: cover;
+}
+.camera-panel__tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.camera-panel__tabs button {
+  background: var(--bg);
+  color: var(--text);
+  border-color: var(--border-hard);
+}
+.camera-panel__tabs button.is-active {
+  background: var(--text);
+  color: var(--bg);
+  border-color: var(--text);
+}
+.camera-panel__crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 42px;
+  height: 42px;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+.camera-panel__crosshair::before,
+.camera-panel__crosshair::after {
+  content: "";
+  position: absolute;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
+}
+.camera-panel__crosshair::before {
+  left: 50%;
+  top: 0;
+  width: 1px;
+  height: 100%;
+}
+.camera-panel__crosshair::after {
+  left: 0;
+  top: 50%;
+  width: 100%;
+  height: 1px;
+}
+.camera-panel__measurements {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+  margin: 8px 0 0;
+}
+.camera-panel__measurements div {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+  min-width: 0;
+}
+.camera-panel__measurements dt {
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.64rem;
+  letter-spacing: 0.05em;
+}
+.camera-panel__measurements dd {
+  margin: 2px 0 0;
+  font-size: 0.86rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+@media (max-width: 700px) {
+  .camera-panel__measurements { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 .thermal-panel__viewport {
   position: relative;

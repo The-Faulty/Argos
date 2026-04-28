@@ -306,6 +306,23 @@ export class SerialBridge extends EventEmitter {
     if (Number.isFinite(dashState.gasRaw)) {
       this.emit("gas", { data: dashState.gasRaw });
     }
+
+    // ESP-side LSM9DS0 IMU. The firmware emits this every state frame
+    // (~5 Hz) when an LSM9DS0 is wired to the same I2C bus as the
+    // PCA9685; absent chip → imu.present is false and we don't forward.
+    // Higher-rate consumers (gait stabilizer) still get whichever IMU
+    // source server.js prefers — the RealSense path keeps working too.
+    const fwImu = dashState.imu;
+    if (fwImu && fwImu.present === true) {
+      this.emit("firmware_imu", {
+        accel: [fwImu.ax, fwImu.ay, fwImu.az],
+        gyro: [fwImu.gx, fwImu.gy, fwImu.gz],
+        mag: [fwImu.mx, fwImu.my, fwImu.mz],
+        roll: fwImu.roll,
+        pitch: fwImu.pitch,
+        yaw: fwImu.yaw,
+      });
+    }
   }
 
   _send(obj) {
@@ -452,6 +469,7 @@ function translateState(fw) {
     servosReleased: fw.servosReleased,
     servoUpdateRateHz: fw.servoUpdateRateHz ?? DEFAULT_SERVO_UPDATE_RATE_HZ,
     gasRaw: fw.gasRaw,
+    imu: fw.imu ?? null,
     firmwareMs: fw.firmwareMs,
     legs,
   };

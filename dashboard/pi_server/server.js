@@ -4,7 +4,7 @@
 //   - Serve the built React bundle (`dashboard/dist/`) over HTTP :8787.
 //   - Talk to the ESP32 over serial (firmware/argos_servo) via SerialBridge.
 //   - Run the gait planner + mode state machine via ModeController.
-//   - Forward IMU + thermal + MJPEG from the Python sensor sidecar via
+//   - Forward IMU + depth + thermal + MJPEG from the Python sensor sidecar via
 //     SensorProxy.
 //   - Fan telemetry out to every connected browser over WS `/telemetry`.
 //   - Accept HTTP JSON command bodies under `/api/*`, validate via the shared
@@ -66,6 +66,7 @@ const state = {
     connected: { serial: false, sensors: false, lastEvent: null },
     joint_states: null,
     imu: null,
+    depth: null,
     gas: null,
     thermal: null,
     gait_mode: null,
@@ -121,6 +122,27 @@ serial.on("gas", (msg) => {
   appendRecorderSample();
 });
 
+// ESP-side LSM9DS0 IMU. Forwarded to the gait stabilizer via setImu()
+// alongside (or in place of) the RealSense IMU. The serial bridge only
+// emits this when the firmware reports imu.present = true, so a
+// missing-chip boot just falls back to the RealSense path.
+serial.on("firmware_imu", (msg) => {
+  if (Number.isFinite(msg.roll) && Number.isFinite(msg.pitch) && Number.isFinite(msg.yaw)) {
+    mode.setImu({ roll: msg.roll, pitch: msg.pitch, yaw: msg.yaw });
+  }
+  state.telemetry.imu = {
+    type: "imu",
+    source: "firmware",
+    ts: Date.now() / 1000,
+    accel: msg.accel,
+    gyro: msg.gyro,
+    mag: msg.mag,
+    _euler_rad: { roll: msg.roll, pitch: msg.pitch, yaw: msg.yaw },
+  };
+  broadcast({ type: "imu", msg: state.telemetry.imu });
+  appendRecorderSample();
+});
+
 // Joint states the planner just commanded (radians, the canonical reading).
 mode.on("joint_states", (msg) => {
   const last = state.telemetry.joint_states || {};
@@ -173,6 +195,10 @@ sensors.on("imu", (msg) => {
   broadcast({ type: "imu", msg: enriched });
   appendRecorderSample();
 });
+sensors.on("depth", (msg) => {
+  state.telemetry.depth = msg;
+  broadcast({ type: "depth", msg });
+});
 sensors.on("thermal", (msg) => {
   state.telemetry.thermal = msg;
   broadcast({ type: "thermal", msg });
@@ -205,6 +231,7 @@ app.get("/api/health", (_req, res) => {
 
 // MJPEG proxy: <img src="/api/camera/stream" />
 app.get("/api/camera/stream", (req, res) => sensors.proxyCameraStream(req, res));
+app.get("/api/camera/depth-stream", (req, res) => sensors.proxyDepthStream(req, res));
 
 // Sidecar /health passthrough so the operator can diagnose silent sensors
 // (e.g. thermal panel showing "no data") without SSHing into the Pi.

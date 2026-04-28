@@ -12,6 +12,7 @@
 //     rotate_settings, servo_overrides, stances,
 //     joint_states: {name, position, ...} | null,
 //     imu: {_euler_rad: {roll,pitch,yaw}, ...} | null,
+//     depth: {center, roi, nearest_m, valid_pct, ...} | null,
 //     gas: {data: number} | null,
 //     gait_mode: {data: string} | null,
 //     control_mode: {data: string} | null,
@@ -48,6 +49,7 @@ export function useRosbridge({ url = DEFAULT_URL } = {}) {
     stances: {},
     joint_states: null,
     imu: null,
+    depth: null,
     gas: null,
     thermal: null,
     gait_mode: null,
@@ -147,6 +149,7 @@ function reduce(prev, msg) {
         stances: msg.stances ?? prev.stances,
         joint_states: msg.telemetry?.joint_states ?? prev.joint_states,
         imu: msg.telemetry?.imu ?? prev.imu,
+        depth: msg.telemetry?.depth ?? prev.depth,
         gas: msg.telemetry?.gas ?? prev.gas,
         thermal: msg.telemetry?.thermal ?? prev.thermal,
         gait_mode: msg.telemetry?.gait_mode ?? prev.gait_mode,
@@ -161,6 +164,8 @@ function reduce(prev, msg) {
       return { ...prev, joint_states: msg.msg };
     case "imu":
       return { ...prev, imu: msg.msg };
+    case "depth":
+      return { ...prev, depth: msg.msg };
     case "gas":
       return { ...prev, gas: msg.msg };
     case "thermal":

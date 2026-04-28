@@ -1,7 +1,8 @@
 // Sensor proxy — bridges the Python sidecar (pi_sensors/sensor_server.py) to
 // the dashboard's same-origin WS + HTTP API. The sidecar exposes:
-//   ws://localhost:8788/sensors  (IMU @100 Hz + thermal @8 Hz, JSON frames)
-//   http://localhost:8788/camera/stream  (multipart MJPEG)
+//   ws://localhost:8788/sensors  (IMU, depth, thermal JSON frames)
+//   http://localhost:8788/camera/stream  (color multipart MJPEG)
+//   http://localhost:8788/camera/depth-stream  (depth multipart MJPEG)
 //
 // We hold a long-lived WS to the sidecar and re-emit each frame as an event
 // for the server.js broadcaster. The MJPEG endpoint is proxied via a thin
@@ -22,6 +23,7 @@ export class SensorProxy extends EventEmitter {
     this.ws = null;
     this.connected = false;
     this.lastImu = null;
+    this.lastDepth = null;
     this.lastThermal = null;
     this._reconnectTimer = null;
   }
@@ -85,6 +87,9 @@ export class SensorProxy extends EventEmitter {
     if (msg.type === "imu") {
       this.lastImu = msg;
       this.emit("imu", msg);
+    } else if (msg.type === "depth") {
+      this.lastDepth = msg;
+      this.emit("depth", msg);
     } else if (msg.type === "thermal") {
       this.lastThermal = msg;
       this.emit("thermal", msg);
@@ -125,11 +130,19 @@ export class SensorProxy extends EventEmitter {
   // straight through to the browser. Fails open with 502 if the sidecar is
   // unreachable so the dashboard can show a placeholder instead of hanging.
   proxyCameraStream(req, res) {
+    this._proxyMjpeg(req, res, "/camera/stream");
+  }
+
+  proxyDepthStream(req, res) {
+    this._proxyMjpeg(req, res, "/camera/depth-stream");
+  }
+
+  _proxyMjpeg(req, res, path) {
     const upstream = http.request(
       {
         host: this.host,
         port: this.port,
-        path: "/camera/stream",
+        path,
         method: "GET",
       },
       (upstreamRes) => {
