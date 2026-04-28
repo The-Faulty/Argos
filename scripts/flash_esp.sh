@@ -71,6 +71,7 @@ if [[ "$DO_SETUP" -eq 1 ]]; then
   arduino-cli core update-index
   arduino-cli core install esp32:esp32
   arduino-cli lib install "Adafruit PWM Servo Driver Library"
+  arduino-cli lib install "Adafruit NeoPixel"
   echo "[setup] done. If this is your first flash, log out and back in"
   echo "        (or run: newgrp dialout) so the serial port is accessible."
   echo
